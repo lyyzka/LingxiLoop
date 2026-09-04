@@ -5,6 +5,7 @@ import { GlobalInteractionProvider } from '@/components/GlobalInteractionProvide
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { DesktopApp } from '@/desktop/DesktopApp'
 import { useSurface } from '@/stores/surface'
+import { useTheme } from '@/stores/theme'
 import '@/styles/globals.css'
 import { COURSES } from './courseData'
 import { applyCourse, initializeCourseRuntime } from './runtime'
@@ -12,6 +13,16 @@ import './course.css'
 
 function CourseApp() {
   const [course, setCourse] = useState(() => initializeCourseRuntime())
+  const { setTheme } = useTheme()
+
+  useEffect(() => {
+    const receiveTheme = (event: MessageEvent) => {
+      if (event.source !== window.parent || event.data?.type !== 'lingxiloop:set-theme') return
+      if (event.data.theme === 'dark' || event.data.theme === 'light') setTheme(event.data.theme)
+    }
+    window.addEventListener('message', receiveTheme)
+    return () => window.removeEventListener('message', receiveTheme)
+  }, [setTheme])
 
   useEffect(() => {
     const label = course.role === 'teacher' ? '切换到学生视角' : '切换到教师视角'
