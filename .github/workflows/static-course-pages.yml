@@ -32,13 +32,25 @@ jobs:
           node <<'NODE'
           const base = `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/pages/projects/lingxiloop-course-demo/domains`;
           const headers = { Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}`, 'Content-Type': 'application/json' };
-          const existing = await fetch(base, { headers });
-          const domains = await existing.json();
-          if (!existing.ok || !domains.success) throw new Error(`Could not read Pages domains (${existing.status})`);
-          if (!domains.result.some(({ name }) => name === 'demo.way2api.fun')) {
-            const added = await fetch(base, { method: 'POST', headers, body: JSON.stringify({ name: 'demo.way2api.fun' }) });
-            const result = await added.json();
-            if (!added.ok || !result.success) throw new Error(`Could not attach Pages domain (${added.status})`);
+          const request = async (url, options = {}) => {
+            const response = await fetch(url, { ...options, headers });
+            const body = await response.json();
+            if (!response.ok || !body.success) throw new Error(`Cloudflare request failed (${response.status})`);
+            return body.result;
+          };
+          const hostname = 'demo.way2api.fun';
+          const domains = await request(base);
+          if (!domains.some(({ name }) => name === hostname)) await request(base, { method: 'POST', body: JSON.stringify({ name: hostname }) });
+          const [zone] = await request('https://api.cloudflare.com/client/v4/zones?name=way2api.fun');
+          if (!zone) throw new Error('Cloudflare zone was not found');
+          const records = await request(`https://api.cloudflare.com/client/v4/zones/${zone.id}/dns_records?name=${hostname}`);
+          const desired = { type: 'CNAME', name: hostname, content: 'lingxiloop-course-demo.pages.dev', proxied: true, ttl: 1 };
+          if (records.length === 0) {
+            await request(`https://api.cloudflare.com/client/v4/zones/${zone.id}/dns_records`, { method: 'POST', body: JSON.stringify(desired) });
+          } else if (records.length !== 1 || records[0].type !== 'CNAME') {
+            throw new Error('A conflicting DNS record already exists');
+          } else if (records[0].content !== desired.content || !records[0].proxied) {
+            await request(`https://api.cloudflare.com/client/v4/zones/${zone.id}/dns_records/${records[0].id}`, { method: 'PUT', body: JSON.stringify(desired) });
           }
           NODE
       - name: Publish branch build
