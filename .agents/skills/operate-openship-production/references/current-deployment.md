@@ -121,7 +121,7 @@ Successful browser sign-ins were creating D1 session rows, but the Gateway route
 
 ## 2026-09-04 static course Pages deployment
 
-- **Current runtime:** Cloudflare Pages Direct Upload project `lingxiloop-course-demo` serves `https://lingxiloop-course-demo.pages.dev` and `https://demo.way2api.fun` from production branch `codex/static-course-demo`. Deployment `07d782b6-46b9-42e9-8a74-ce150256b7ef` was built from `1b2a435`; it is separate from the six OpenShip application projects.
+- **Current runtime:** Cloudflare Pages Direct Upload project `lingxiloop-course-demo` serves `https://lingxiloop-course-demo.pages.dev` and `https://demo.way2api.fun` from production branch `codex/static-course-demo`. Deployment `a997e929` was directly uploaded from commit `8fc9a29` on 2026-09-04; it is separate from the six OpenShip application projects.
 - **Desired manifest:** `.github/workflows/static-course-pages.yml` listens only to that branch and directly uploads `static-course/dist` after `npm ci --ignore-scripts` and `npm run course:build`; it has no lint, test, or main-release job. Only course source, synced `src`, dependency manifests, and this workflow trigger a rebuild.
 - **Current runtime:** the document response uses `Cache-Control: public, max-age=300, s-maxage=300, stale-while-revalidate=86400`; fingerprinted JS/CSS use one-year browser and edge immutable cache. Cloudflare serves Brotli, `Content-Security-Policy: frame-ancestors *`, and no `X-Frame-Options`, allowing external iframe embedding.
 - **Current runtime:** `demo.way2api.fun` resolves with active TLS and returns HTTP 200 with the documented document-cache policy. The domain is ready for external iframe embedding.
