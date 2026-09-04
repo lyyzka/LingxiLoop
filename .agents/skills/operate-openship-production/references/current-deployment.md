@@ -118,3 +118,10 @@ Successful browser sign-ins were creating D1 session rows, but the Gateway route
 - Uptime Kuma: project `proj_sYmlJeYfdwa4K2bQ`, `always_on`, public status `https://uptime.lingxilearn.cn/status/lingxiloop`.
 - WegoLibrary: project `proj_KQmC-0gtQ8DCgHD_`, management-host-local port `18081`, public `golib.christmas1314.xyz`.
 - OpenShip management host: SSH alias `aly`, public `ops.christmas1314.xyz`; OpenShip 0.6.9 runs as `openship.service` with its own managed Edge.
+
+## 2026-09-04 static course Pages deployment
+
+- **Current runtime:** Cloudflare Pages Direct Upload project `lingxiloop-course-demo` serves `https://lingxiloop-course-demo.pages.dev` from production branch `codex/static-course-demo`. Deployment `d306a82d-6dbf-40c9-b996-647847032477` was built from `aa54186`; it is separate from the six OpenShip application projects.
+- **Desired manifest:** `.github/workflows/static-course-pages.yml` listens only to that branch and directly uploads `static-course/dist` after `npm ci --ignore-scripts` and `npm run course:build`; it has no lint, test, or main-release job. Only course source, synced `src`, dependency manifests, and this workflow trigger a rebuild.
+- **Current runtime:** the document response uses `Cache-Control: public, max-age=300, s-maxage=300, stale-while-revalidate=86400`; fingerprinted JS/CSS use one-year browser and edge immutable cache. Cloudflare serves Brotli, `Content-Security-Policy: frame-ancestors *`, and no `X-Frame-Options`, allowing external iframe embedding.
+- **Unresolved:** the Pages custom-domain association for `demo.way2api.fun` succeeds, but authoritative DNS currently has no record. The available Wrangler OAuth and GitHub deployment credential lack Cloudflare Zone permissions, and OpenShip has no stored DNS credential. Add a proxied CNAME `demo.way2api.fun -> lingxiloop-course-demo.pages.dev` with a Zone DNS-capable credential, then verify TLS before treating that hostname as live.
