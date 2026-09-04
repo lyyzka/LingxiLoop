@@ -31,5 +31,11 @@ export default defineConfig({
     strictPort: true,
     fs: { allow: [repository] },
   },
-  build: { outDir: 'dist', emptyOutDir: true, target: 'es2020', sourcemap: false },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+    target: 'es2020',
+    sourcemap: false,
+    rollupOptions: { output: { manualChunks: (id) => (id.includes('node_modules') ? 'vendor' : undefined) } },
+  },
 })
