@@ -1,0 +1,48 @@
+name: Deploy static course
+
+on:
+  push:
+    branches: [codex/static-course-demo]
+
+concurrency:
+  group: static-course-pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run course:build
+      - name: Attach demo domain
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          node <<'NODE'
+          const base = `https://api.cloudflare.com/client/v4/accounts/${process.env.CLOUDFLARE_ACCOUNT_ID}/pages/projects/lingxiloop-course-demo/domains`;
+          const headers = { Authorization: `Bearer ${process.env.CLOUDFLARE_API_TOKEN}`, 'Content-Type': 'application/json' };
+          const existing = await fetch(base, { headers });
+          const domains = await existing.json();
+          if (!existing.ok || !domains.success) throw new Error(`Could not read Pages domains (${existing.status})`);
+          if (!domains.result.some(({ name }) => name === 'demo.way2api.fun')) {
+            const added = await fetch(base, { method: 'POST', headers, body: JSON.stringify({ name: 'demo.way2api.fun' }) });
+            const result = await added.json();
+            if (!added.ok || !result.success) throw new Error(`Could not attach Pages domain (${added.status})`);
+          }
+          NODE
+      - name: Publish branch build
+        run: npx wrangler pages deploy static-course/dist --project-name lingxiloop-course-demo --branch "$GITHUB_REF_NAME" --commit-hash "$GITHUB_SHA" --commit-message "$GITHUB_SHA" --commit-dirty false
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
