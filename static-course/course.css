@@ -1,0 +1,19 @@
+:root { color-scheme: light; }
+html, body, #root { min-width: 320px; height: 100%; margin: 0; overflow: hidden; }
+.course-app { display: flex; flex-direction: column; block-size: 100dvh; }
+.course-product-shell { min-block-size: 0; flex: 1; }
+.course-product-shell > .desktop-openmaus { block-size: 100%; }
+/* Product controls that create or mutate course state are not part of these completed course records. */
+.course-app [aria-label="新建课程"],
+.course-app [aria-label="添加资料"],
+.course-app [aria-label="消息操作"],
+.course-app [data-chat-agent-status] button,
+.course-app .canvas-frame-resize-handle { display: none !important; }
+.course-app .chat-composer { pointer-events: none; }
+.course-app [data-canvas-ui="root"] .canvas-frame-header,
+.course-app [data-canvas-ui="root"] .canvas-frame-body { pointer-events: none; user-select: text; }
+.course-app [data-canvas-ui="root"] input,
+.course-app [data-canvas-ui="root"] textarea,
+.course-app [data-canvas-ui="root"] [contenteditable="true"] { pointer-events: none; }
+.course-app [data-message-bubble] { -webkit-touch-callout: none; }
+@media (prefers-reduced-motion: reduce) { .course-app *, .course-app *::before, .course-app *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
