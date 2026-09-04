@@ -3,6 +3,12 @@ name: Deploy static course
 on:
   push:
     branches: [codex/static-course-demo]
+    paths:
+      - static-course/**
+      - src/**
+      - package.json
+      - package-lock.json
+      - .github/workflows/static-course-pages.yml
 
 concurrency:
   group: static-course-pages
