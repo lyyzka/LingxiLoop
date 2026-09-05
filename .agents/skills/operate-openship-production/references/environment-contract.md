@@ -136,6 +136,14 @@ EMAIL_DOMAIN=
 PRESENTATION_HTML_ENABLED=false
 ```
 
+Current SiliconFlow observability pricing and L0 limits:
+
+```json
+{"chat":{"Qwen/Qwen3.5-4B":{"promptPrice":0,"completionPrice":0}},"embeddings":{"BAAI/bge-m3":0},"limits":{"api.siliconflow.cn":{"Qwen/Qwen3.5-4B":{"rpm":1000,"tpm":80000},"BAAI/bge-m3":{"rpm":2000,"tpm":500000}}}}
+```
+
+`promptPrice`, `completionPrice`, and embedding prices are USD per 1,000 tokens for LingxiLit cost spans. The zero values reflect the provider's observed free online-inference price; update this JSON when that price or the account's rate-limit tier changes.
+
 State endpoint shapes, with credentials redacted:
 
 ```dotenv

@@ -2,6 +2,20 @@
 
 Snapshot: 2026-09-04 15:46 China Standard Time, checked through OpenShip MCP, GitHub Actions, HTTP probes, database queries, and targeted container inspection. Re-read live state before every operation.
 
+## 2026-09-05 LingxiLit observability-only UI release
+
+GitHub Actions workflow `33898942730` published immutable image `sha-63979d301666bc130cec7ee5a7e2fe765c97cc75` after the previous multi-architecture run failed only in the emulated ARM64 `npm install` step with a QEMU illegal-instruction error. The workflow now publishes the Server B production architecture (`linux/amd64`) only.
+
+OpenShip deployment `dep_88NWCTUeJ_Y3ZjUy` refreshed OpenLit service `svc_k2cnIeZumE4FK7AJ` to that image and reached `ready`. Container inspection confirmed the expected immutable image is running; its local HTTP health probe exited 0, and public `https://openlit.lingxilearn.cn/` and `/telemetry` returned HTTP 200 after redirects. ClickHouse remained healthy. The service row retains an advisory imported-compose image comparison against the previous pin; runtime is the authority and the new service-row image is explicit.
+
+The follow-up localization image `sha-f5ed81b38008d67372bb3f9e0ecc60a66a59d5f5` was published by workflow `33900184312` and applied through refresh deployment `dep_f7SeV9OaLdJGqEgP`, which reached `ready`. Container inspection and the public `/telemetry` probe both succeeded.
+
+## 2026-09-05 model-pricing refresh
+
+At 00:46 China Standard Time, `LINGXILIT_PRICING_JSON` was added to App A, App B, AgentOS A, and AgentOS B for the observed SiliconFlow models. `Qwen/Qwen3.5-4B` input/output and `BAAI/bge-m3` embedding prices are zero per 1,000 tokens; L0 limits are respectively 1,000 RPM / 80,000 TPM and 2,000 RPM / 500,000 TPM. Targeted refresh deployments `dep_Da7Bs9Vzu9OkK2iy`, `dep_jO2-my1a_fB0nAsk`, `dep_PbQnbD8dozbtRNC6`, and `dep_Gx_L9YNFkNLdQ_Su` reached `ready`.
+
+Container-local assertions confirmed the complete pricing table in API-A, API-B, Worker-B, AgentOS-A, and AgentOS-B. OpenShip reported 16/16 healthy with the watcher enabled, zero outage or action-required issues, and six advisory-only source comparisons. Both AgentOS heartbeats were 0 seconds old with no queued or leased work; public root and `/api/health` returned HTTP 200. The running Server image remains `91fd60c366fa10d0aee2321fe4846bbbff58e6b5`, Gateway and both AgentOS nodes remain `c41b20770cc91cc24dad27781f7fc98258ab5390`; this was an environment-only refresh.
+
 ## Scope and authority
 
 - OpenShip organization: `org_afbfbb11-78d7-41ee-b644-4b745b486069`.
