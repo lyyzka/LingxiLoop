@@ -68,19 +68,6 @@ beforeEach(async () => {
       source: 'learning_states', dataset: 'course-trust', release: '2026-08-30',
     })],
   )
-  await pool.query(
-    `INSERT INTO eval_runs
-       (id,suite_key,suite_name,version,status,score,pass_threshold,case_count,passed_cases,failed_cases,
-        source,created_by)
-     VALUES ('eval-trust','trust-suite','Trust Suite','v1','pass',0.9,0.8,1,1,0,'inline',$1)`,
-    [ADMIN],
-  )
-  await pool.query(
-    `INSERT INTO eval_cases
-       (id,eval_run_id,case_key,name,position,status,score,observation,expectations,failure_reasons)
-     VALUES ('eval-case-trust','eval-trust','case-1','Safe case',0,'pass',1,$1::jsonb,'{}'::jsonb,'[]'::jsonb)`,
-    [JSON.stringify({ prompt: 'must never leave the BFF', toolCalls: [{ args: { secret: true } }] })],
-  )
 })
 after(async () => { await teardownAll() })
 
@@ -90,12 +77,6 @@ test('[integration] Trust BFF enforces audience levels and creates retry-safe si
   const kpis = await trustApplication.kpis(TEACHER,COMPANY,PROJECT)
   assert.equal(kpis[0]?.evidenceId, 'evidence-trust-kpi')
   assert.equal(kpis[0]?.denominator, 10)
-  const cases = await trustApplication.evalCases(ADMIN,COMPANY,PROJECT,'eval-trust')
-  assert.deepEqual(cases, [{
-    id: 'eval-case-trust', caseId: 'case-1', name: 'Safe case', status: 'pass', score: 1, failureCount: 0,
-  }])
-  assert.equal(JSON.stringify(cases).includes('prompt'), false)
-
   const first = await trustApplication.createSnapshot(ADMIN,COMPANY,PROJECT,{ idempotencyKey: 'snapshot-once' })
   const replay = await trustApplication.createSnapshot(ADMIN,COMPANY,PROJECT,{ idempotencyKey: 'snapshot-once' })
   assert.deepEqual(replay, first)

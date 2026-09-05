@@ -59,26 +59,6 @@ export async function listTrustKpis(db: Queryable, companyId: string, projectId:
   })
 }
 
-export async function listTrustEvalTrend(db: Queryable) {
-  const { rows } = await db.query(
-    `SELECT id,suite_key AS "suiteKey",suite_name AS "suiteName",version AS release,
-            status,score,pass_threshold AS "passThreshold",case_count AS "caseCount",
-            passed_cases AS "passedCases",failed_cases AS "failedCases",finished_at AS "updatedAt"
-       FROM eval_runs ORDER BY finished_at DESC,id DESC LIMIT 50`,
-  )
-  return rows
-}
-
-export async function listTrustEvalCases(db: Queryable, runId: string) {
-  const { rows } = await db.query(
-    `SELECT id,case_key AS "caseId",name,status,score,
-            jsonb_array_length(failure_reasons) AS "failureCount"
-       FROM eval_cases WHERE eval_run_id=$1 ORDER BY position LIMIT 100`,
-    [runId],
-  )
-  return rows
-}
-
 export async function insertTrustSnapshot(db: Queryable, input: {
   id: string; companyId: string; projectId: string; audienceLevel: TrustAudienceLevel
   payload: Record<string, unknown>; payloadHash: string; signature: string; evidenceId: string; actorUserId: string

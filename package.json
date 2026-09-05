@@ -62,7 +62,9 @@
     "electron:build": "npm run build && npm run electron:prepare && electron-builder --publish never",
     "electron:build:mac": "npm run build && npm run electron:prepare && electron-builder --mac --publish never",
     "electron:build:win": "npm run build && npm run electron:prepare && electron-builder --win --publish never",
-    "electron:build:linux": "npm run build && npm run electron:prepare && electron-builder --linux --publish never"
+    "electron:build:linux": "npm run build && npm run electron:prepare && electron-builder --linux --publish never",
+    "eval:check": "npm --prefix eval run check && npm --prefix eval test",
+    "eval:run": "npm --prefix eval run eval --"
   },
   "dependencies": {
     "@assistant-ui/react": "^0.15.16",

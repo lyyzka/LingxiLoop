@@ -7,12 +7,10 @@ const application = readFileSync(new URL('../modules/trust/application.ts', impo
 const repository = readFileSync(new URL('../modules/trust/repository.ts', import.meta.url), 'utf8')
 const router = readFileSync(new URL('../modules/trust/router.ts', import.meta.url), 'utf8')
 
-test('Trust BFF exposes only the six bounded product surfaces', () => {
-  for (const path of ['context', 'kpis', 'eval-trend', 'eval-cases', 'evidence-chain', 'snapshots']) {
+test('Trust BFF exposes only the bounded product surfaces', () => {
+  for (const path of ['context', 'kpis', 'evidence-chain', 'snapshots']) {
     assert.match(router, new RegExp(`/trust/projects/:projectId/${path}`))
   }
-  assert.match(repository, /ORDER BY finished_at DESC,id DESC LIMIT 50/)
-  assert.match(repository, /ORDER BY position LIMIT 100/)
   assert.doesNotMatch(repository, /observation|expectations|prompt_version|model|token|latency|tool_calls|agent_host_actions/)
   assert.match(router, /DEMO_DATA[\s\S]*no explicitly versioned Trust demo dataset is registered/)
   assert.match(router, /SIGNED_SNAPSHOT data is available only through the snapshot endpoint/)

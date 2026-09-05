@@ -9,8 +9,6 @@ import {
   findTrustSnapshot,
   findTrustProject,
   insertTrustSnapshot,
-  listTrustEvalCases,
-  listTrustEvalTrend,
   listTrustKpis,
   type TrustAccessContext,
 } from './repository.js'
@@ -96,20 +94,6 @@ export class TrustApplication {
     })
   }
 
-  evalTrend(actorUserId: string, companyId: string, projectId: string) {
-    return this.infrastructure.transaction(async (db) => {
-      await this.access(db, actorUserId, companyId, projectId)
-      return listTrustEvalTrend(db)
-    })
-  }
-
-  evalCases(actorUserId: string, companyId: string, projectId: string, runId: string) {
-    return this.infrastructure.transaction(async (db) => {
-      await this.access(db, actorUserId, companyId, projectId)
-      return listTrustEvalCases(db, runId)
-    })
-  }
-
   evidenceChain(actorUserId: string, companyId: string, projectId: string) {
     return this.infrastructure.transaction(async (db) => {
       const context = await this.access(db, actorUserId, companyId, projectId)
@@ -128,9 +112,8 @@ export class TrustApplication {
       const context = await this.access(db, actorUserId, companyId, projectId)
       const replay = await findTrustSnapshot(db, { id, companyId, projectId })
       if (replay) return this.verifiedSnapshot(replay, context.audienceLevel)
-      const [kpis, evalTrend, evidenceChain] = await Promise.all([
+      const [kpis, evidenceChain] = await Promise.all([
         listTrustKpis(db, companyId, projectId),
-        listTrustEvalTrend(db),
         readProductEvidenceChain(db, {
           companyId,
           projectId,
@@ -138,7 +121,6 @@ export class TrustApplication {
           limit: 100,
         }),
       ])
-      const evalCases = evalTrend[0]?.id ? await listTrustEvalCases(db, String(evalTrend[0].id)) : []
       const snapshotEvidenceId = evidenceId(id)
       const payload = {
         mode: 'SIGNED_SNAPSHOT',
@@ -149,8 +131,6 @@ export class TrustApplication {
         capturedAt: this.infrastructure.now().toISOString(),
         context: this.contextPayload(context),
         kpis,
-        evalTrend,
-        evalCases,
         evidenceChain,
       }
       const canonical = canonicalJson(payload)

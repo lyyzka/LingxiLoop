@@ -41,22 +41,6 @@ trustRouter.get('/trust/projects/:projectId/kpis', safe(async (req, res) => {
   catch (error) { mapError(error) }
 }))
 
-trustRouter.get('/trust/projects/:projectId/eval-trend', safe(async (req, res) => {
-  assertLiveMode(req.query.mode)
-  const input = scope(req)
-  try { res.json(await trustApplication.evalTrend(input.actorUserId, input.companyId, input.projectId)) }
-  catch (error) { mapError(error) }
-}))
-
-trustRouter.get('/trust/projects/:projectId/eval-cases', safe(async (req, res) => {
-  assertLiveMode(req.query.mode)
-  const runId = String(req.query.runId ?? '').trim()
-  if (!runId || runId.length > 200) throw new HttpError(400, 'runId is required')
-  const input = scope(req)
-  try { res.json(await trustApplication.evalCases(input.actorUserId, input.companyId, input.projectId, runId)) }
-  catch (error) { mapError(error) }
-}))
-
 trustRouter.get('/trust/projects/:projectId/evidence-chain', safe(async (req, res) => {
   assertLiveMode(req.query.mode)
   const input = scope(req)
