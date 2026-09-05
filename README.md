@@ -48,10 +48,10 @@ Compose runs the one-shot `db-migrate` service before Web and Worker.
 
 ## Verification
 
-Run only the commands for the changed surface: Web uses the unprefixed lint/typecheck/test/build commands; Admin, Control, and Server use their matching prefixes; integration accepts owning files through `--file`.
+Run only the commands for the changed surface: Web uses the unprefixed lint/typecheck/test/build commands; Admin, Control, and Server use their matching prefixes; Agent Eval uses `eval:check`; integration accepts owning files through `--file`.
 
 CI classifies changed paths, runs only their checks, and publishes only affected images to `ghcr.io/<repository-owner-lowercase>/` with immutable commit-SHA tags. CI does not install or run a browser.
 
-Production deployment and migration requirements are in [`docs/RELEASE.md`](docs/RELEASE.md). The current domain model is in [`docs/DOMAIN_MODEL.md`](docs/DOMAIN_MODEL.md).
+Production deployment and migration requirements are in [`docs/RELEASE.md`](docs/RELEASE.md). The current domain model is in [`docs/DOMAIN_MODEL.md`](docs/DOMAIN_MODEL.md), and Agent Eval is documented in [`docs/agent-eval.md`](docs/agent-eval.md).
 
 Licensed under [MIT](LICENSE).

@@ -27,7 +27,7 @@ The Web app is the only supported release surface. Electron is local-development
 
 ## Verify
 
-Run only the lint, typecheck, test, and build commands for the changed Web, Admin, Control, Server, or vendored Open Notebook surface. Use `test:integration -- --file <owning-test>` for focused integration coverage.
+Run only the lint, typecheck, test, and build commands for the changed Web, Admin, Control, Server, or vendored Open Notebook surface. Use `test:integration -- --file <owning-test>` for focused integration coverage and `eval:check` for the independent Eval package.
 
 Migration changes require their migration and affected domain integration files. Agent behavior changes require the matching deterministic Eval gate. Browser verification is not part of repository validation or CI. CI classifies changed paths and skips unrelated checks, images, migrations, and deployments.
 
