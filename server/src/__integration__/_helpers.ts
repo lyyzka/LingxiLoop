@@ -16,7 +16,7 @@
 import { randomUUID } from 'node:crypto'
 import { Webhook } from 'svix'
 import { assertMigrationsCurrent } from '../db/migrate.js'
-import { pool } from '../db/pool.js'
+import { closeDatabasePools, pool } from '../db/pool.js'
 import { env } from '../env.js'
 import { ensurePersonalFreePlan } from '../modules/entitlements/public.js'
 import { _setWukongClientForTests, WukongClient } from '../im/wukong.js'
@@ -390,7 +390,7 @@ export async function teardownAll(server?: import('node:http').Server): Promise<
   // Pool + redis are module-level singletons; ending them is fine because
   // the process is about to exit anyway. Catch swallows reentrant-end
   // errors when multiple test files share the singleton.
-  try { await pool.end() } catch { /* ignore */ }
+  try { await closeDatabasePools() } catch { /* ignore */ }
   try {
     const { redis, sub } = await import('../redis.js')
     redis.disconnect()

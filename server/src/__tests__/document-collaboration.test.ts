@@ -162,3 +162,71 @@ test('project document lookup carries company and project tenant predicates', as
   assert.match(calls[0]!.text, /company_id=\$1 AND project_id=\$2/)
   assert.deepEqual(calls[0]!.params, ['company-1', 'project-1'])
 })
+
+test('failed persistence is retained, retries include dependent deltas, and durable replay heals missed fanout', async () => {
+  const stored: Uint8Array[] = []
+  let failSave = true
+  let snapshot: Uint8Array | null = null
+  let snapshotId = 0
+  let failCompaction = true
+  let publishes = 0
+  const db: Queryable = {
+    query: async (sql, params = []) => {
+      if (sql.includes('LEFT JOIN document_snapshots')) return { rows: [{ state_bytes: snapshot, snapshot_at_update_id: String(snapshotId) }] } as never
+      if (sql.includes('SELECT update_log.id,')) return { rows: stored.map((bytes, index) => ({ id: String(index + 1), update_bytes: bytes })).filter((row) => BigInt(row.id) > BigInt(String(params[2]))) } as never
+      if (sql.includes('INSERT INTO document_updates')) {
+        if (failSave) { failSave = false; throw new Error('database offline') }
+        stored.push(new Uint8Array(params[3] as Buffer))
+      }
+      if (sql.includes('SELECT MAX(')) return { rows: [{ max_id: String(stored.length) }] } as never
+      if (sql.includes('INSERT INTO document_snapshots')) {
+        if (failCompaction) { failCompaction = false; throw new Error('compaction failed') }
+        snapshot = new Uint8Array(params[2] as Buffer)
+        snapshotId = Number(params[3])
+      }
+      return { rows: [{ id: 'doc', document_id: 'doc' }], rowCount: 1 } as never
+    },
+  }
+  const makeApp = (instanceId: string) => createDocumentCollaborationApplication({
+    instanceId, transaction: (work) => work(db),
+    // Cover both a rejected publish and an indefinitely waiting Redis retry.
+    bus: { publish: async () => {
+      if (++publishes === 1) throw new Error('Redis offline')
+      await new Promise(() => {})
+    }, subscribe: async () => undefined },
+    imageStorage: { normalizeKey: () => null, keyFromPublicUrl: () => null, signedUrlExpiresSoon: () => false, publicUrl: async () => '' },
+  })
+  const writer = makeApp('writer')
+  const reader = makeApp('reader')
+  const peer = new Y.Doc()
+  await reader.subscribe('doc', 'tenant', {
+    originId: 'peer', onUpdate: (update) => Y.applyUpdate(peer, update), onAwareness: () => undefined,
+  })
+  const client = new Y.Doc()
+  let delta: Uint8Array = new Uint8Array()
+  client.on('update', (update: Uint8Array) => { delta = update })
+  client.getText('text').insert(0, 'first')
+  await assert.rejects(writer.applyLocalUpdate('doc', 'tenant', 'client', 'user', delta), /database offline/)
+  assert.equal(stored.length, 0)
+  client.getText('text').insert(5, ' second')
+  await writer.applyLocalUpdate('doc', 'tenant', 'client', 'user', delta)
+  assert.equal(stored.length, 2)
+  await reader.recover()
+  assert.equal(peer.getText('text').toString(), 'first second')
+  for (let index = 0; index < 198; index++) {
+    client.getText('text').insert(client.getText('text').length, '.')
+    await writer.applyLocalUpdate('doc', 'tenant', 'client', 'user', delta)
+  }
+  await writer.recover() // injected compaction failure must not affect confirmations
+  client.getText('text').insert(client.getText('text').length, '!')
+  await writer.applyLocalUpdate('doc', 'tenant', 'client', 'user', delta)
+  await writer.recover()
+  await reader.recover() // snapshot has overtaken the reader's cursor
+  assert.equal(peer.getText('text').toString(), client.getText('text').toString())
+  const restarted = new Y.Doc()
+  const initial = await makeApp('restart').subscribe('doc', 'tenant', {
+    originId: 'restart', onUpdate: () => undefined, onAwareness: () => undefined,
+  })
+  Y.applyUpdate(restarted, initial.initialState)
+  assert.equal(restarted.getText('text').toString(), client.getText('text').toString())
+})

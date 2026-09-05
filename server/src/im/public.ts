@@ -1,4 +1,4 @@
-import type { LingxiMessageV1 } from '../agent-os/types.js'
+import type { LingxiMessageV1 } from './message-types.js'
 import type { ImMessageEnvelope } from './messages-application.js'
 import { imMessagesApplication } from './messages-facade.js'
 

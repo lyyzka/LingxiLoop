@@ -1,8 +1,7 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import type { ZodType } from 'zod'
 import type { AuthedRequest } from '../auth.js'
-import { agentApprovalApplication, agentControlApplication } from '../agent-os/public.js'
-import type { LingxiMessageV1 } from '../agent-os/types.js'
+import type { LingxiMessageV1 } from './message-types.js'
 import { assertTeacherRoomAccessible } from '../modules/learning/public.js'
 import type { PermissionAction } from '../modules/access/public.js'
 import { permissionService } from '../modules/access/public.js'
@@ -11,10 +10,6 @@ import { imChannelsApplication } from './channels-facade.js'
 import { imMessagesApplication } from './messages-facade.js'
 import { imSessionApplication } from './session-facade.js'
 import {
-  agentRunControlRequestSchema,
-  agentRunSteerRequestSchema,
-  approvalResolutionRequestSchema,
-  approvalSupersedeRequestSchema,
   imHistoryQuerySchema,
   imReactionRequestSchema,
   imReadReceiptsQuerySchema,
@@ -167,70 +162,4 @@ imRouter.get('/channels/:id/read-receipts', safe(async (req, res) => {
   const { fromSeq, toSeq } = requestInput(imReadReceiptsQuerySchema, req.query)
   const receipts = await listReadReceiptAdvances({ companyId, channelId, fromSeq, toSeq })
   res.json({ channelId, fromSeq, toSeq, receipts })
-}))
-
-imRouter.get('/approvals', safe(async (req, res) => {
-  const { userId, companyId } = await identity(req)
-  res.json(await agentApprovalApplication.list({ companyId, userId }))
-}))
-
-imRouter.post('/approvals/:id/resolve', safe(async (req, res) => {
-  const { userId, companyId } = await identity(req)
-  const { approved } = requestInput(approvalResolutionRequestSchema, req.body)
-  const result = await agentApprovalApplication.resolve({
-    approvalId: String(req.params.id), companyId, userId, approved,
-  })
-  if (result.kind === 'not_found') { res.status(404).json({ error: 'approval not found' }); return }
-  if (result.kind === 'conflict') { res.status(409).json({ error: `approval already ${result.status}` }); return }
-  if (result.kind === 'cancelled') { res.status(409).json({ error: result.error, status: 'CANCELLED' }); return }
-  res.json({ ok: result.ok, approved: result.approved, result: result.result, error: result.error })
-}))
-
-imRouter.post('/approvals/:id/supersede', safe(async (req, res) => {
-  const { userId, companyId } = await identity(req)
-  const { args, summary } = requestInput(approvalSupersedeRequestSchema, req.body)
-  const result = await agentApprovalApplication.supersede({
-    approvalId: String(req.params.id), companyId, userId, args, ...(summary ? { summary } : {}),
-  })
-  if (result.kind === 'not_found') { res.status(404).json({ error: 'approval not found' }); return }
-  if (result.kind === 'conflict') { res.status(409).json({ error: `approval already ${result.status}` }); return }
-  res.status(201).json({ approvalId: result.approvalId, supersedesApprovalId: String(req.params.id) })
-}))
-
-imRouter.get('/routines', safe(async (req, res) => {
-  const { userId, companyId } = await identity(req)
-  await permissionService.assertCan({ actorUserId: userId, action: 'agent_run:control', companyId })
-  res.json(await agentControlApplication.listRoutines({ companyId, userId }))
-}))
-
-imRouter.post('/routines/:id/pause', safe(async (req, res) => {
-  const { userId, companyId } = await identity(req)
-  await permissionService.assertCan({
-    actorUserId: userId,
-    action: 'agent_run:control',
-    companyId,
-    resource: { type: 'routine', id: String(req.params.id) },
-  })
-  const routine = await agentControlApplication.pauseRoutine({ routineId: String(req.params.id), companyId, userId })
-  if (!routine) { res.status(404).json({ error: 'routine not found' }); return }
-  res.json(routine)
-}))
-
-imRouter.post('/runs/stop', safe(async (req, res) => {
-  const { userId, companyId } = await identity(req)
-  const { agentId, channelId } = requestInput(agentRunControlRequestSchema, req.body)
-  await assertChannelPermission(userId, companyId, channelId, 'agent_run:control')
-  const result = await agentControlApplication.stop({ companyId, userId, agentId, channelId })
-  if (!result) { res.status(404).json({ error: 'no active run' }); return }
-  res.json({ ok: true, workId: result.workId })
-}))
-
-imRouter.post('/runs/steer', safe(async (req, res) => {
-  const { userId, companyId } = await identity(req)
-  const { agentId, channelId, text, clientRequestId } = requestInput(agentRunSteerRequestSchema, req.body)
-  await assertChannelPermission(userId, companyId, channelId, 'agent_run:control')
-  const result = await agentControlApplication.steer({ companyId, userId, agentId, channelId, text, clientRequestId })
-  if (!result) { res.status(404).json({ error: 'no active run' }); return }
-  if (result.kind === 'conflict') { res.status(409).json({ error: 'clientRequestId was reused with different text' }); return }
-  res.json({ ok: true, workId: result.workId, steerId: result.steerId })
 }))

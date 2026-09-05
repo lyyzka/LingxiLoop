@@ -192,5 +192,5 @@ test('production enables authenticated WuKong callbacks without inheriting the l
   assert.match(compose, /WK_WEBHOOK_HTTP_ADDR: .*\/webhooks\/wukong\?token=\$\{WUKONG_WEBHOOK_SECRET:\?/)
   assert.doesNotMatch(compose, /NODE_USE_ENV_PROXY/)
   assert.match(manifest, /dev:preview.*NODE_USE_ENV_PROXY=1/)
-  assert.match(manifest, /dev:preview.*--restart-tries -1.*npm:agent-os:dev/)
+  assert.match(manifest, /dev:preview.*--restart-tries -1.*npm:worker:dev/)
 })

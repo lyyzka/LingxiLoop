@@ -143,38 +143,3 @@ test('[integration] human presence never updates the same participant id in anot
   ].sort((a, b) => a.company_id.localeCompare(b.company_id)))
   assert.deepEqual(events, [first.companyId])
 })
-
-test('[integration] Agent CLI directory is tenant scoped through the Agents public facade', async () => {
-  const { companyId, agentId } = await fixture()
-  const teammateId = 'directory-teammate'
-  await pool.query(
-    `INSERT INTO participants (id, company_id, kind, name, role, initial, avatar_bg, status)
-     VALUES ($1, $2, 'agent', 'Directory Teammate', 'designer', 'D', 'transparent', 'working')`,
-    [teammateId, companyId],
-  )
-  const foreign = await seedCompanyWithAgent({ agentId: 'foreign-directory-agent' })
-  await pool.query(
-    `INSERT INTO conversations (id, kind, title, members, company_id)
-     VALUES ('directory-room', 'group', 'Directory Room', $1::jsonb, $2)`,
-    [JSON.stringify([agentId, teammateId]), companyId],
-  )
-  const { runCli } = await import('../agents/cli.js')
-
-  const participants = await runCli(['participants', '--json', '--as', agentId])
-  assert.equal(participants.ok, true, participants.text)
-  const participantIds = (JSON.parse(participants.text) as Array<{ id: string }>).map((row) => row.id)
-  assert.ok(participantIds.includes(agentId))
-  assert.ok(participantIds.includes(teammateId))
-  assert.ok(!participantIds.includes(foreign.agentId))
-
-  const statuses = await runCli(['participants-status', '--json', '--as', agentId])
-  assert.equal(statuses.ok, true, statuses.text)
-  assert.ok(!(JSON.parse(statuses.text) as Array<{ id: string }>).some((row) => row.id === foreign.agentId))
-
-  const identity = await runCli(['whoami', '--json', '--as', agentId])
-  assert.equal(identity.ok, true, identity.text)
-  assert.equal((JSON.parse(identity.text) as { id: string }).id, agentId)
-  assert.equal('companyId' in (JSON.parse(identity.text) as Record<string, unknown>), false)
-  const textIdentity = await runCli(['whoami', '--as', agentId])
-  assert.match(textIdentity.text, /Directory Room/)
-})

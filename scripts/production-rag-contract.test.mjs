@@ -137,16 +137,10 @@ test('OpenShip knowledge services receive writable storage and the control plane
   assert.doesNotMatch(compose, /LINGXILOOP_INTERNAL_ORIGIN/)
 })
 
-test('OpenShip runs one private Agent OS per host and the Worker only on its selected app project', () => {
-  const agent = read('deploy/openship/agent-os.yml')
+test('OpenShip runs the Worker only on its selected app project', () => {
   const appA = read('deploy/openship/app-a.yml')
   const appB = read('deploy/openship/app-b.yml')
 
-  assert.match(agent, /AGENT_OS_WORKER_ID: \$\{AGENT_OS_WORKER_ID:\?AGENT_OS_WORKER_ID must be unique}/)
-  assert.match(agent, /AGENT_OS_MAX_CONCURRENT_RUNS: \$\{AGENT_OS_MAX_CONCURRENT_RUNS:-1}/)
-  assert.match(agent, /name: \$\{AGENT_OS_VOLUME_NAME:\?AGENT_OS_VOLUME_NAME is required}/)
-  assert.doesNotMatch(agent, /^ {4}ports:/m)
-  assert.match(appA, /AGENT_OS_NODE_TIMEOUT_SECONDS: \$\{AGENT_OS_NODE_TIMEOUT_SECONDS:-15}/)
   assert.match(appA, /10\.20\.0\.2:5181:5181/)
   assert.doesNotMatch(appA, /^ {2}(?:worker|gateway):/m)
   assert.doesNotMatch(appA, /COMPOSE_PROFILES|profiles:/)
@@ -179,8 +173,8 @@ test('the gateway uses the备案 ingress and the Worker uses its admin domain', 
   assert.match(worker, /"OPENSHIP_BASE_URL": "https:\/\/ops\.christmas1314\.xyz"/)
   assert.match(worker, /"AUTH_ALLOWED_HOSTS": "loop\.lingxilearn\.cn,admin\.lingxilearn\.cn"/)
   const imageTargets = worker.match(/"OPENSHIP_IMAGE_TARGETS": "([^"]+)"/)?.[1].split(',') ?? []
-  assert.equal(imageTargets.length, 10)
-  assert.deepEqual(new Set(imageTargets.map((target) => target.split(':')[0])), new Set(['server', 'agent-os', 'wukongim', 'open-notebook', 'gateway']))
+  assert.equal(imageTargets.length, 8)
+  assert.deepEqual(new Set(imageTargets.map((target) => target.split(':')[0])), new Set(['server', 'wukongim', 'open-notebook', 'gateway']))
 })
 
 test('main publishes changed images and rolls out a complete immutable release', () => {
@@ -200,7 +194,7 @@ test('main publishes changed images and rolls out a complete immutable release',
   assert.match(workflow, /RELEASE_COMMIT_SHA: \$\{\{ needs\.update-manifests\.outputs\.commit-sha \}\}/)
   assert.match(workflow, /VITE_TURNSTILE_SITE_KEY=0x4AAAAAAEk9EZhHYeS3szPO/)
   assert.match(serverImage, /ARG VITE_TURNSTILE_SITE_KEY=""[\s\S]*ENV VITE_TURNSTILE_SITE_KEY=\$\{VITE_TURNSTILE_SITE_KEY\}/)
-  const imageDigests = Object.fromEntries(['server', 'agent-os', 'wukongim', 'open-notebook', 'gateway']
+  const imageDigests = Object.fromEntries(['server', 'wukongim', 'open-notebook', 'gateway']
     .map((name, index) => [name, `accel.way2api.fun/ghcr.io/example/lingxiloop-${name}:${index ? 'a'.repeat(40) : 'c'.repeat(40)}`]))
   const release = buildReleaseRequest('secret', 'a'.repeat(40), 'b'.repeat(40), 'Example/LingxiLoop', imageDigests)
   assert.deepEqual(JSON.parse(release.body), {
@@ -220,14 +214,13 @@ test('main publishes changed images and rolls out a complete immutable release',
 
 test('all deployable LingxiLoop images use CI-managed unique tags', () => {
   const manifests = [
-    'deploy/openship/agent-os.yml',
     'deploy/openship/app-a.yml',
     'deploy/openship/app-b.yml',
     'deploy/openship/core-state.yml',
     'deploy/openship/knowledge-agent.yml',
   ].map(read).join('\n')
   const references = [...manifests.matchAll(/image:\s+\S*lingxiloop-[^:\s]+:([^\s]+)/g)]
-  assert.equal(references.length, 6)
+  assert.equal(references.length, 5)
   assert.ok(references.every((match) => /^[0-9a-f]{40}$/.test(match[1])))
   assert.equal(
     updateImageTags(`image: registry/lingxiloop-server:${'a'.repeat(40)}`, 'b'.repeat(40), ['server']),
@@ -235,11 +228,11 @@ test('all deployable LingxiLoop images use CI-managed unique tags', () => {
   )
   assert.equal(
     updateImageTags(
-      `image: registry/lingxiloop-server:${'a'.repeat(40)}\nimage: registry/lingxiloop-agent-os:${'a'.repeat(40)}`,
+      `image: registry/lingxiloop-server:${'a'.repeat(40)}\nimage: registry/lingxiloop-wukongim:${'a'.repeat(40)}`,
       'b'.repeat(40),
       ['server'],
     ),
-    `image: registry/lingxiloop-server:${'b'.repeat(40)}\nimage: registry/lingxiloop-agent-os:${'a'.repeat(40)}`,
+    `image: registry/lingxiloop-server:${'b'.repeat(40)}\nimage: registry/lingxiloop-wukongim:${'a'.repeat(40)}`,
   )
 })
 
@@ -250,11 +243,10 @@ test('CI selects checks and image publishing by component', () => {
   assert.equal(web.server, false)
 
   const server = computeScope({ server: true, serverSource: true })
-  assert.deepEqual(server.images.map(({ manifest }) => manifest), ['server', 'agent-os'])
+  assert.deepEqual(server.images.map(({ manifest }) => manifest), ['server'])
   assert.equal(server.integration, true)
 
   assert.equal(computeScope({ serverDocker: true }).packages, 'server')
-  assert.equal(computeScope({ agentDocker: true }).packages, 'agent-os')
 
   const knowledge = computeScope({ openNotebook: true })
   assert.deepEqual(knowledge.images.map(({ manifest }) => manifest), ['open-notebook'])
@@ -278,6 +270,6 @@ test('CI selects checks and image publishing by component', () => {
   assert.equal(deployment.deploy_contract, true)
 
   assert.equal(computeScope({}, 'gateway').packages, 'gateway')
-  assert.deepEqual(computeScope({}, 'release').images.map(({ manifest }) => manifest), ['server', 'agent-os', 'wukongim', 'open-notebook', 'gateway'])
-  assert.deepEqual(computeScope({ release: true }).images.map(({ manifest }) => manifest), ['server', 'agent-os', 'wukongim', 'open-notebook', 'gateway'])
+  assert.deepEqual(computeScope({}, 'release').images.map(({ manifest }) => manifest), ['server', 'wukongim', 'open-notebook', 'gateway'])
+  assert.deepEqual(computeScope({ release: true }).images.map(({ manifest }) => manifest), ['server', 'wukongim', 'open-notebook', 'gateway'])
 })

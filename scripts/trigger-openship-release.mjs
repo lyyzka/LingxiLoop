@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 
-const imageNames = ['server', 'agent-os', 'wukongim', 'open-notebook', 'gateway']
+const imageNames = ['server', 'wukongim', 'open-notebook', 'gateway']
 
 export function deploymentImages(source) {
   return Object.fromEntries(imageNames.map((name) => {
@@ -19,7 +19,7 @@ export function buildReleaseRequest(secret, commitSha, deployCommitSha, reposito
 }
 
 if (process.argv[1]?.endsWith('trigger-openship-release.mjs')) {
-  const manifests = ['app-a.yml', 'app-b.yml', 'agent-os.yml', 'core-state.yml', 'knowledge-agent.yml']
+  const manifests = ['app-a.yml', 'app-b.yml', 'core-state.yml', 'knowledge-agent.yml']
     .map((name) => readFileSync(new URL(`../deploy/openship/${name}`, import.meta.url), 'utf8')).join('\n')
   const { body, signature } = buildReleaseRequest(
     process.env.RELEASE_HMAC_SECRET,

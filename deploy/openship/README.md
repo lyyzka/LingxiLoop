@@ -1,6 +1,6 @@
 # OpenShip production deployment
 
-Production is the six-project, two-server OpenShip topology below. Each role
+The desired manifest set contains four product projects on two servers. The old Agent OS manifests are removed locally pending the new npm packages; this does not remove existing live OpenShip services. Each role
 has an explicit Compose file; production does not use profiles or the local
 MVP Compose stack.
 
@@ -8,16 +8,14 @@ MVP Compose stack.
 | --- | --- | --- | --- |
 | `lingxiloop-core-state` | `deploy/openship/core-state.yml` | Server A | PostgreSQL, Redis, WuKongIM |
 | `lingxiloop-app-a` | `deploy/openship/app-a.yml` | Server A | migration, Web/API |
-| `lingxiloop-agent-os-a` | `deploy/openship/agent-os.yml` | Server A | Agent OS |
 | `lingxiloop-app-b` | `deploy/openship/app-b.yml` | Server B | migration, Web/API, worker, gateway |
 | `lingxiloop-knowledge-agent` | `deploy/openship/knowledge-agent.yml` | Server B | SurrealDB, Open Notebook |
-| `lingxiloop-agent-os-b` | `deploy/openship/agent-os.yml` | Server B | Agent OS |
 
 Keep every project Always On with OpenShip auto-deploy disabled. GitHub Actions
-builds all five LingxiLoop images with one immutable commit tag, pins every
+builds all four LingxiLoop images with one immutable commit tag, pins every
 OpenShip manifest, deploys the control-plane Worker, then sends one signed
-release request that fans out to all six projects. A deployment-only manifest
-change reuses the complete pinned cohort and still performs the six-project
+release request that fans out to all four product projects. A deployment-only manifest
+change reuses the complete pinned cohort and still performs the four-project
 rollout.
 
 ## Network contract
@@ -32,7 +30,7 @@ traffic is limited to:
 | Server A | Server B | Open Notebook `5055` |
 
 WuKongIM `5200` and API-A `5181` bind to Server A's `10.20.0.2` address.
-SurrealDB has no host port. Agent OS `5190` remains container-local. The
+SurrealDB has no host port. The
 gateway serves the apex and `www`, balances `loop` across both APIs, and
 proxies `im` to WuKongIM.
 
@@ -52,14 +50,10 @@ REDIS_URL=redis://10.20.0.2:6379
 WUKONG_API_URL=http://10.20.0.2:5001
 WUKONG_WS_PUBLIC_URL=wss://im.lingxilearn.cn
 OPEN_NOTEBOOK_URL=http://10.20.0.3:5055
-AGENT_OS_NODE_TIMEOUT_SECONDS=15
 DATABASE_POOL_MAX=8
 ```
 
-Set `INSTANCE_ID=app-a` or `INSTANCE_ID=app-b` in the matching project. Set
-`AGENT_OS_WORKER_ID=agent-os-a` and `agent-os-b` in their matching Agent OS
-projects. Both agents start with `AGENT_OS_MAX_CONCURRENT_RUNS=1` and use the
-same service token, model settings, and callback origin:
+Set `INSTANCE_ID=app-a` or `INSTANCE_ID=app-b` in the matching project. The knowledge project uses this callback origin:
 
 ```dotenv
 LINGXILOOP_CONTROL_PLANE_URL=https://loop.lingxilearn.cn

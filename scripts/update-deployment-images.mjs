@@ -3,7 +3,6 @@ import { readFileSync, writeFileSync } from 'node:fs'
 const manifests = {
   'deploy/openship/app-a.yml': ['server'],
   'deploy/openship/app-b.yml': ['server', 'gateway'],
-  'deploy/openship/agent-os.yml': ['agent-os'],
   'deploy/openship/core-state.yml': ['wukongim'],
   'deploy/openship/knowledge-agent.yml': ['open-notebook'],
 }

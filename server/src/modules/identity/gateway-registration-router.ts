@@ -56,6 +56,7 @@ gatewayRegistrationRouter.post(['/session/ws-ticket', '/auth/ws-ticket'], safe(a
 
 gatewayRegistrationRouter.post('/internal/registration/invitation', safe(async (req, res) => {
   requireGateway(req)
+  if (req.gatewayService?.capability !== 'registration-invitation') throw new HttpError(403, 'registration service required')
   const inviteToken = typeof req.body?.inviteToken === 'string' ? req.body.inviteToken : ''
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : null
   const kind = req.body?.inviteKind === 'project' ? 'project' : 'company'
@@ -76,6 +77,7 @@ gatewayRegistrationRouter.post('/internal/registration/invitation', safe(async (
 
 gatewayRegistrationRouter.post('/internal/registration/provision', safe(async (req, res) => {
   requireGateway(req)
+  if (req.gatewayService?.capability !== 'registration-provision') throw new HttpError(403, 'registration service required')
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
   const name = typeof req.body?.name === 'string' ? req.body.name.trim() : ''
   const inviteToken = typeof req.body?.inviteToken === 'string' ? req.body.inviteToken : ''

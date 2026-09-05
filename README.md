@@ -1,6 +1,8 @@
 # LingxiLoop
 
-LingxiLoop is a Web learning-collaboration product with an independent Agent OS. Nova, Sage, Milo, Trace, Scout, and Forge work with learners in direct messages, Study Rooms, and Labs.
+The old Agent OS and Eval harness have been removed. Agent execution is paused until the independently developed LingxiOS and harness npm packages are published; no replacement SDK or compatibility adapter is installed yet. Chat, files, and product APIs remain available.
+
+LingxiLoop is a Web learning-collaboration product with direct messages, Study Rooms, and Labs.
 
 The browser Web app is the only supported release surface. Electron remains available only for local development; it is never published, auto-updated, offered for download, or tested in CI.
 
@@ -10,21 +12,17 @@ The browser Web app is the only supported release surface. Electron remains avai
 Browser Web ──> LingxiLoop Web/API ──> PostgreSQL / Redis / WuKongIM / Open Notebook
                          │
 LingxiLoop Worker ───────┘
-                         │ authenticated Host Bridge
-Independent Agent OS ────┘
-  └─ isolated persistent IPython kernel per session
 ```
 
 - WuKongIM is the authoritative durable message store.
-- PostgreSQL stores product state, Agent work, audit, and the append-only LLM ledger.
+- PostgreSQL stores product state, audit, and the append-only LLM ledger.
 - Redis carries ephemeral coordination.
-- Agent OS exposes exactly one model tool: `{ name: "ipython", arguments: { code: string } }`. Product effects use the authenticated Host Bridge.
 - Vendored Open Notebook/SurrealDB owns its independent knowledge schema lifecycle.
 - Web and Worker use the same server image but are independently scalable processes; Web never starts background jobs.
 
 ## Local development
 
-Requirements: Node.js 22, Python 3 with IPython, PostgreSQL 16 with pgvector, and Redis 7.
+Requirements: Node.js 22, PostgreSQL 16 with pgvector, and Redis 7.
 
 ```powershell
 npm ci
@@ -34,9 +32,9 @@ npm run dev:migrate
 npm run dev:preview
 ```
 
-Open `http://localhost:5180`. For direct process development, run `npm run dev:all` and `npm run agent-os:start`. Electron can be run locally with `npm run electron:dev`; every package command is fixed to `--publish never`.
+Open `http://localhost:5180`. For direct process development, run `npm run dev:all`. Electron can be run locally with `npm run electron:dev`; every package command is fixed to `--publish never`.
 
-PostgreSQL starts from [`0001_v1_baseline.sql`](server/src/db/migrations/0001_v1_baseline.sql) and evolves only through new numbered migrations. `npm run db:migrate` takes an advisory lock, verifies recorded names and checksums, and applies each pending file in its own transaction. It refuses a non-empty database without migration history; operations must rebuild such a legacy environment as an empty database. Web and Worker only verify that migrations are current.
+PostgreSQL starts from [`0001_v1_baseline.sql`](server/src/db/migrations/0001_v1_baseline.sql) and evolves only through new numbered migrations. `npm run db:migrate` takes an advisory lock, verifies recorded names and checksums, and applies each pending file in its own transaction. It refuses a non-empty database without migration history; operations must rebuild such a legacy environment as an empty database. Web and Worker only verify that migrations are current. Historical runtime tables remain in the migration chain until the published npm architecture defines its replacement schema; this cleanup does not install a guessed schema.
 
 For the packaged service topology:
 
@@ -50,10 +48,10 @@ Compose runs the one-shot `db-migrate` service before Web and Worker.
 
 ## Verification
 
-Run only the commands for the changed surface: Web uses the unprefixed lint/typecheck/test/build commands; Admin, Control, and Server use their matching prefixes; Agent Eval uses either `eval:harness` or `eval:runtime`; integration accepts owning files through `--file`.
+Run only the commands for the changed surface: Web uses the unprefixed lint/typecheck/test/build commands; Admin, Control, and Server use their matching prefixes; integration accepts owning files through `--file`.
 
 CI classifies changed paths, runs only their checks, and publishes only affected images to `ghcr.io/<repository-owner-lowercase>/` with immutable commit-SHA tags. CI does not install or run a browser.
 
-Production deployment and migration requirements are in [`docs/RELEASE.md`](docs/RELEASE.md). The current domain model is in [`docs/DOMAIN_MODEL.md`](docs/DOMAIN_MODEL.md), and Agent Eval is documented in [`docs/agent-eval.md`](docs/agent-eval.md).
+Production deployment and migration requirements are in [`docs/RELEASE.md`](docs/RELEASE.md). The current domain model is in [`docs/DOMAIN_MODEL.md`](docs/DOMAIN_MODEL.md).
 
 Licensed under [MIT](LICENSE).

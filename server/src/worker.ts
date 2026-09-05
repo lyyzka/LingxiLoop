@@ -1,8 +1,5 @@
-import { startMemorySynthesisScheduler } from './agent-os/memory-service.js'
-import { startLearningRoutineScheduler } from './agent-os/routine-scheduler.js'
-import { startAgentWorkWatchdog } from './agent-os/work-watchdog.js'
 import { startStaleAgentRunSweeper } from './agents/observability.js'
-import { pool } from './db/pool.js'
+import { closeDatabasePools } from './db/pool.js'
 import { startDbGcWorker } from './db-gc.js'
 import { env } from './env.js'
 import { reconcileImChannels, startImChannelReconciliation } from './im/reconcile.js'
@@ -32,13 +29,10 @@ import { initializeNativeStorage } from './storage.js'
 export const productionWorkerTasks: readonly WorkerTaskDefinition[] = [
   { name: 'attention-projection', concurrency: 'database-lock', start: () => startAttentionProjectionWorker() },
   { name: 'teacher-briefings', concurrency: 'queue-claim', start: () => startTeacherBriefingWorker() },
-  { name: 'learning-routines', concurrency: 'queue-claim', start: () => startLearningRoutineScheduler() },
   { name: 'notifications', concurrency: 'queue-claim', start: () => startNotificationScheduler() },
   { name: 'learning-effects', concurrency: 'queue-claim', start: () => startLearningEffectWorker() },
   { name: 'company-onboarding-effects', concurrency: 'queue-claim', start: () => startCompanyOnboardingEffectWorker() },
   { name: 'im-channel-reconciliation', concurrency: 'idempotent', start: () => startImChannelReconciliation() },
-  { name: 'agent-work-watchdog', concurrency: 'idempotent', start: () => startAgentWorkWatchdog() },
-  { name: 'memory-synthesis', concurrency: 'idempotent', start: () => startMemorySynthesisScheduler() },
   { name: 'email-retry', concurrency: 'queue-claim', start: () => startEmailRetryWorker() },
   { name: 'email-storage-gc', concurrency: 'idempotent', start: () => startEmailGcWorker() },
   { name: 'document-mention-delivery', concurrency: 'queue-claim', start: () => startDocumentMentionDeliveryWorker() },
@@ -72,7 +66,7 @@ export async function startWorkerProcess(options: WorkerProcessOptions = {}): Pr
   const tasks = options.tasks ?? productionWorkerTasks
   const prepare = options.prepare ?? prepareWorkerData
   const lifecycle = new Lifecycle()
-  lifecycle.addDisposer('postgres', options.closePostgres ?? (() => pool.end()))
+  lifecycle.addDisposer('postgres', options.closePostgres ?? (() => closeDatabasePools()))
   lifecycle.addDisposer('redis', options.closeRedis ?? (() => { sub.disconnect(); redis.disconnect() }))
 
   try {

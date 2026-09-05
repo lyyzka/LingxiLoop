@@ -183,9 +183,7 @@ test('direct and group Agent retrieval share one membership-scoped Project resol
   assert.match(calls[0]!.text, /conversation\.members @> to_jsonb\(ARRAY\[\$3::text\]\)/)
   assert.deepEqual(calls[0]!.params, ['conversation-1', 'company-1', 'user-1'])
 
-  const controlPlane = readFileSync(new URL('../agent-os/control-plane.ts', import.meta.url), 'utf8')
   const agentApplication = readFileSync(new URL('../modules/knowledge/agent-application.ts', import.meta.url), 'utf8')
-  assert.match(controlPlane, /workspaceRow\?\.kind === 'group' \|\| workspaceRow\?\.kind === 'direct'/)
   assert.match(agentApplication, /findKnowledgeRetrievalProject\(db, work\.companyId, work\.channelId, userId\)/)
 })
 

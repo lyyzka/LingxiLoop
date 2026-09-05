@@ -223,30 +223,6 @@ export function releaseCanvasSharedFence(db: Queryable, canvasId: string) {
   return db.query(`SELECT pg_advisory_unlock_shared(hashtextextended($1,0))`, [`canvas-workspace:${canvasId}`])
 }
 
-async function beginSummaryIfFinished(db: Queryable, canvasId: string): Promise<void> {
-  const { rows: unfinished } = await db.query(
-    `SELECT 1 FROM canvas_agent_assignments WHERE canvas_id=$1 AND
-      (status IN ('queued','working','waiting') OR (status='blocked' AND error IS NULL)) LIMIT 1`,
-    [canvasId],
-  )
-  if (unfinished[0]) return
-  const { rows } = await db.query<CanvasRow>(
-    `UPDATE canvases SET status='summarizing',updated_at=NOW() WHERE id=$1 AND status='active' RETURNING *`,
-    [canvasId],
-  )
-  const canvas = rows[0]
-  if (!canvas?.initiator_agent_id || !canvas.conversation_id) return
-  if (!canvas.authorization_user_id) throw new Error('Canvas has no persisted human authorization principal')
-  const summaryWorkId = `canvas-summary-${createHash('sha256').update(canvas.id).digest('hex').slice(0,24)}`
-  await db.query(
-    `INSERT INTO agent_work_items
-       (id,company_id,authorization_user_id,agent_id,channel_id,thread_root_client_msg_no,trigger_client_msg_no,reason,status,priority,canvas_id,execution_role)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,'canvas_summary','queued',200,$8,'reporter') ON CONFLICT (id) DO NOTHING`,
-    [summaryWorkId, canvas.company_id, canvas.authorization_user_id, canvas.initiator_agent_id,
-      canvas.conversation_id, canvas.trigger_client_msg_no, `canvas-summary:${canvas.id}`, canvas.id],
-  )
-}
-
 export async function stopCanvasAssignmentState(db: Queryable, args: {
   companyId: string; canvasId: string; agentId: string
 }) {
@@ -302,7 +278,6 @@ export async function stopCanvasAssignmentState(db: Queryable, args: {
         AND assignment.status='blocked' AND assignment.error IS NOT NULL AND work.status='blocked'`,
     [args.canvasId],
   )
-  await beginSummaryIfFinished(db, args.canvasId)
   return activity
 }
 

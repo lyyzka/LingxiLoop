@@ -80,10 +80,7 @@ test('Web composition contains no background scheduler or worker startup', async
   const web = await readFile(new URL('../web.ts', import.meta.url), 'utf8')
   const worker = await readFile(new URL('../worker.ts', import.meta.url), 'utf8')
   const starters = [
-    'startLearningRoutineScheduler',
     'startLearningEffectWorker',
-    'startAgentWorkWatchdog',
-    'startMemorySynthesisScheduler',
     'startEmailRetryWorker',
     'startEmailGcWorker',
     'startDocumentMentionDeliveryWorker',
@@ -137,22 +134,7 @@ test('Open Notebook restarts only after SurrealDB is healthy', async () => {
   assert.match(compose, /depends_on:\r?\n {6}surrealdb:\r?\n {8}condition: service_healthy\r?\n {8}restart: true/)
 })
 
-test('Agent OS composes the vendored worker and delegates graceful shutdown', async () => {
-  const service = await readFile(new URL('../agent-os/service.ts', import.meta.url), 'utf8')
-  assert.match(service, /AgentWorker/)
-  assert.match(service, /await worker\.start\(\)/)
-  assert.match(service, /await worker\.stop\(\)/)
-  assert.match(service, /third_party\/lingxios\/kernel\/runner\.py/)
-})
 
-test('Agent OS images use Node 20 and include the vendored LingxiOS source', async () => {
-  const agentImage = await readFile(new URL('../../docker/agent-os.Dockerfile', import.meta.url), 'utf8')
-  const serverImage = await readFile(new URL('../../docker/lingxiloop-server.Dockerfile', import.meta.url), 'utf8')
-  assert.match(agentImage, /node:20-bookworm-slim/)
-  assert.match(agentImage, /COPY third_party\/lingxios \.\/third_party\/lingxios/)
-  assert.match(agentImage, /AGENT_OS_HOMES_ROOT=\/var\/lib\/lingxiloop-agent-os\/v2-homes/)
-  assert.match(serverImage, /COPY third_party\/lingxios \.\/third_party\/lingxios/)
-})
 
 test('database pool does not load unrelated application secrets', async () => {
   const pool = await readFile(new URL('../db/pool.ts', import.meta.url), 'utf8')

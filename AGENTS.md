@@ -6,13 +6,13 @@ This is a stable web product. Follow the user's request to completion; ask only 
 
 - Keep Web/API and background workers separate. The browser web app is the supported release surface; Electron is local development only and every local package command uses `--publish never`.
 - PostgreSQL owns product state, WuKongIM durable IM, Redis ephemeral coordination, and vendored Open Notebook/SurrealDB its own schema.
-- Agent OS is independently deployable: `ipython` is its only model-visible tool; effects cross the authenticated Host Bridge. Preserve leases, bounded retries, idempotency, authorization, and the shared LLM ledger.
+- The old Agent OS and harness are removed pending the published LingxiOS npm packages. Do not restore vendored runtime code or invent a compatibility adapter. Keep product authorization and the shared LLM ledger intact.
 - At every server trust boundary, enforce tenant and project authorization. Never expose or log credentials, tokens, or prompts; preserve signed callback/webhook checks.
 - Keep web UI keyboard-accessible, visibly focused, semantically labelled, motion-reduced, and readable.
 
 ## Data and delivery
 
 - `server/src/db/migrations/0001_v1_baseline.sql` is immutable. Add one next-numbered, transactional, forward-compatible migration; runtime code never executes DDL. A non-empty database without `schema_migrations` must be rebuilt by operations, never adopted by the app.
-- Use the smallest owning check: web (`lint`, `typecheck`, `test`, `build`); admin/control (`admin:*`/`control:*`); server (`server:*` and affected integration); Agent Eval (changed `eval:harness` or `eval:runtime`); Open Notebook (its own affected package). Migration and Agent OS changes also require their owning integration coverage.
+- Use the smallest owning check: web (`lint`, `typecheck`, `test`, `build`); admin/control (`admin:*`/`control:*`); server (`server:*` and affected integration); Open Notebook (its own affected package). Migration and runtime integration changes also require their owning integration coverage.
 - Do not add or use Playwright for repository verification.
 - Use `operate-openship-production` only for production work. Its MCP transport supplies authentication; never copy its credentials into files or output.

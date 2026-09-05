@@ -45,7 +45,6 @@ export interface PlatformInfrastructure {
   db: Queryable
   storage: Storage
   redisPing(): Promise<void>
-  agentOsHealth(): Promise<void>
   openNotebookEnabled(): boolean
   openNotebookHealth(): Promise<void>
   loadOpenGraph(url: string): Promise<unknown>
@@ -98,13 +97,11 @@ export class PlatformApplication {
     const checks: DependencyReadiness = {
       database: false,
       redis: false,
-      agentOs: false,
       openNotebook: !this.infrastructure.openNotebookEnabled(),
     }
     const probes: Array<Promise<void>> = [
       timeout(assertDatabaseReady(this.infrastructure.db), 2_000, 'database').then(() => { checks.database = true }),
       timeout(this.infrastructure.redisPing(), 2_000, 'redis').then(() => { checks.redis = true }),
-      timeout(this.infrastructure.agentOsHealth(), 3_000, 'Agent OS').then(() => { checks.agentOs = true }),
     ]
     if (this.infrastructure.openNotebookEnabled()) {
       probes.push(timeout(this.infrastructure.openNotebookHealth(), 3_000, 'Open Notebook').then(() => {

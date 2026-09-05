@@ -75,16 +75,6 @@ export async function releaseDeferredWakeState(
   )
   const job = rows[0]
   if (!job || job.wake_released_at || !job.wake_channel_id || !job.wake_trigger_client_msg_no) return 'none'
-  for (const recipient of job.wake_recipients ?? []) {
-    await db.query(
-      `INSERT INTO agent_work_items
-         (id, company_id, authorization_user_id, agent_id, channel_id, thread_root_client_msg_no, trigger_client_msg_no, reason)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-       ON CONFLICT (agent_id, trigger_client_msg_no, reason) DO NOTHING`,
-      [randomUUID(), job.company_id, job.authorization_user_id, recipient.agentId, job.wake_channel_id,
-        job.wake_thread_root_client_msg_no, job.wake_trigger_client_msg_no, recipient.reason],
-    )
-  }
   await db.query(
     `UPDATE knowledge_source_jobs SET wake_released_at=NOW(), wake_error=$2, updated_at=NOW()
       WHERE source_id=$1 AND wake_released_at IS NULL`,

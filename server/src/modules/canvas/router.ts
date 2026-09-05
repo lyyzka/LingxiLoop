@@ -3,7 +3,6 @@ import { Router } from 'express'
 import {
   addCanvasComment,
   appendCanvasFrameContent,
-  assignCanvasWorkspaceWork,
   createCanvasFrame,
   deleteCanvasFrame,
   ensureConversationCanvas,
@@ -11,7 +10,6 @@ import {
   getConversationCanvas,
   listCanvasWorkspaces,
   setCanvasStatus,
-  steerCanvasAssignment,
   stopCanvasAssignment,
   stopCanvasWorkspace,
   updateCanvasFrame,
@@ -21,13 +19,11 @@ import { requireCanvasFrameWorkspace, requireCanvasWorkspace, requireConversatio
 import { HttpError } from '../../http/errors.js'
 import {
   canvasAppendRequestSchema,
-  canvasAssignmentRequestSchema,
   canvasCommentRequestSchema,
   canvasConversationQuerySchema,
   canvasFrameCreateRequestSchema,
   canvasFrameUpdateRequestSchema,
   canvasStatusRequestSchema,
-  canvasSteerRequestSchema,
 } from './contracts.js'
 
 export const canvasRouter = Router()
@@ -64,23 +60,14 @@ api.get('/canvases/:id', safe(async (req, res) => {
   res.json(await getCanvasSnapshot(companyId, userId, String(req.params.id)))
 }))
 
-api.post('/canvases/:id/assignments', safe(async (req, res) => {
-  const { userId, companyId } = await requireCanvasWorkspace(req, String(req.params.id), true)
-  const input = canvasAssignmentRequestSchema.parse(req.body)
-  res.status(201).json(await assignCanvasWorkspaceWork({
-    companyId,
-    canvasId: String(req.params.id),
-    actorId: userId,
-    agentId: input.agentId,
-    assignment: input.assignment,
-  }))
+api.post('/canvases/:id/assignments', safe(async (req) => {
+  await requireCanvasWorkspace(req, String(req.params.id), true)
+  throw new HttpError(503, 'Agent 执行暂不可用，正在等待新运行时接入')
 }))
 
-api.post('/canvases/:id/assignments/:agentId/steer', safe(async (req, res) => {
-  const { companyId } = await requireCanvasWorkspace(req, String(req.params.id), true)
-  const input = canvasSteerRequestSchema.parse(req.body)
-  await steerCanvasAssignment({ companyId, canvasId: String(req.params.id), agentId: String(req.params.agentId), text: input.text })
-  res.json({ ok: true })
+api.post('/canvases/:id/assignments/:agentId/steer', safe(async (req) => {
+  await requireCanvasWorkspace(req, String(req.params.id), true)
+  throw new HttpError(503, 'Agent 执行暂不可用，正在等待新运行时接入')
 }))
 
 api.post('/canvases/:id/assignments/:agentId/stop', safe(async (req, res) => {

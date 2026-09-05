@@ -1,12 +1,11 @@
-import { createHash, randomUUID } from 'node:crypto'
-import type { LingxiMessageV1 } from '../agent-os/types.js'
+import { createHash } from 'node:crypto'
+import type { LingxiMessageV1 } from './message-types.js'
 import type { Queryable } from '../db/queryable.js'
 import { parseMentions } from '../mentions.js'
 import { resolveLearningAgentRecipients } from './routing.js'
 import {
   completeWebhookReceipt,
   containsManagedTeacherAgent,
-  enqueueWebhookWork,
   lockWebhookReceipt,
   teacherRoomForWebhook,
   webhookBinding,
@@ -33,7 +32,6 @@ export interface WukongWebhookInfrastructure {
   verify(raw: Buffer, signature?: string, token?: string): boolean
   isKnowledgeAttachment(mime: string, size: number): boolean
   createKnowledgeJob(db: Queryable, input: KnowledgeJobInput): Promise<{ deferAgentWake: boolean; sourceId: string }>
-  emitQueued(input: { companyId: string; channelId: string; channelType: number; agentId: string; workId: string }): Promise<void>
 }
 
 export interface WukongCommittedEvent {
@@ -59,7 +57,7 @@ export class WukongWebhookApplication {
 
   async process(input: WukongCommittedEvent): Promise<Record<string, unknown>> {
     const payloadHash = createHash('sha256').update(input.raw).digest('hex')
-    const outcome = await this.infrastructure.transaction(async (db) => {
+    return this.infrastructure.transaction(async (db) => {
       const receipt = await lockWebhookReceipt(db, {
         eventId: input.eventId,
         eventType: input.eventType,
@@ -68,14 +66,14 @@ export class WukongWebhookApplication {
       if (receipt.payloadHash !== payloadHash) {
         throw Object.assign(new Error('event_id was reused with a different payload'), { status: 409 })
       }
-      if (receipt.processed) return { response: { ok: true, duplicate: true }, queued: [] }
+      if (receipt.processed) return { ok: true, duplicate: true }
       if (input.eventType !== 'msg.notify' && !input.eventType.includes('message')) {
         await completeWebhookReceipt(db, input.eventId)
-        return { response: { ok: true, ignored: true }, queued: [] }
+        return { ok: true, ignored: true }
       }
       if (input.payload.data?.suppressAgentWake === true) {
         await completeWebhookReceipt(db, input.eventId)
-        return { response: { ok: true, ignored: true, reason: 'product-state update' }, queued: [] }
+        return { ok: true, ignored: true, reason: 'product-state update' }
       }
       const binding = await webhookBinding(db, input.channelId)
       if (!binding) throw Object.assign(new Error('WuKong channel is not bound yet; retry webhook'), { status: 503 })
@@ -127,13 +125,6 @@ export class WukongWebhookApplication {
         companyId: binding.company_id,
         agentIds: recipients,
       })) throw new Error('Pulse can only be invoked from its registered teacher room')
-      const wakeRecipients = recipients.map((agentId) => ({
-        agentId,
-        reason: input.payload.kind === 'handoff'
-          ? 'handoff'
-          : mentionedIds.includes(agentId) || mentionAll ? 'mention' : 'message',
-      }))
-      let deferAgentWake = false
       let knowledgeSourceId: string | undefined
       if (input.payload.kind === 'attachment' && !teacherRoom) {
         const attachment = record(input.payload.data)
@@ -160,44 +151,19 @@ export class WukongWebhookApplication {
             ...(input.payload.replyToClientMsgNo
               ? { threadRootClientMsgNo: input.payload.replyToClientMsgNo }
               : {}),
-            recipients: wakeRecipients,
+            recipients: [],
           })
-          deferAgentWake = ingestion.deferAgentWake
           knowledgeSourceId = ingestion.sourceId
         }
       }
-      const queued: Array<{ workId: string; agentId: string }> = []
-      for (const { agentId, reason } of deferAgentWake ? [] : wakeRecipients) {
-        const workId = await enqueueWebhookWork(db, {
-          workId: randomUUID(),
-          companyId: binding.company_id,
-          authorizationUserId: input.fromUid,
-          agentId,
-          channelId: input.channelId,
-          threadRootClientMsgNo: input.payload.replyToClientMsgNo ?? null,
-          triggerClientMsgNo: input.clientMsgNo,
-          reason,
-          executionRole: binding.leader_agent_id === agentId ? 'coordinator' : 'specialist',
-        })
-        if (workId) queued.push({ workId, agentId })
-      }
       await completeWebhookReceipt(db, input.eventId)
       return {
-        response: {
-          ok: true,
-          recipients,
-          deferAgentWake,
-          ...(knowledgeSourceId ? { knowledgeSourceId } : {}),
-        },
-        queued: queued.map((item) => ({
-          ...item,
-          companyId: binding.company_id,
-          channelId: input.channelId,
-          channelType: Number(binding.profile.channelType ?? 2),
-        })),
+        ok: true,
+        recipients,
+        deferAgentWake: false,
+        agentRuntimeAvailable: false,
+        ...(knowledgeSourceId ? { knowledgeSourceId } : {}),
       }
     })
-    await Promise.allSettled(outcome.queued.map((item) => this.infrastructure.emitQueued(item)))
-    return outcome.response
   }
 }

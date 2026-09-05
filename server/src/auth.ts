@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { env } from './env.js'
 import { redis } from './redis.js'
 
@@ -9,12 +9,19 @@ export interface GatewayAssertion {
   path: string
   timestamp: number
   nonce: string
+  service?: {
+    audience: 'registration'
+    capability: 'registration-provision' | 'registration-invitation'
+    bodyHash: string
+    emailVerified?: boolean
+  }
 }
 
 export interface AuthedRequest {
   authUserId?: string
   gatewayAuthenticated?: boolean
   gatewayAuthUserId?: string
+  gatewayService?: GatewayAssertion['service']
 }
 
 function decode(value: string): GatewayAssertion | null {
@@ -49,19 +56,34 @@ export function verifyGatewayAssertion(value: string, method: string, path: stri
 }
 
 export async function authMiddleware(
-  request: { headers: Record<string, string | string[] | undefined>; method: string; originalUrl: string } & AuthedRequest,
+  request: { headers: Record<string, string | string[] | undefined>; method: string; originalUrl: string; body?: unknown } & AuthedRequest,
   _response: unknown,
   next: () => void,
 ): Promise<void> {
   const header = request.headers['x-lingxiloop-gateway']
   const assertion = typeof header === 'string' ? verifyGatewayAssertion(header, request.method, request.originalUrl) : null
-  if (assertion) {
+  if (assertion && (!assertion.service || validRegistrationService(assertion, request.body))) {
     const fresh = await redis.set(`gateway:nonce:${assertion.nonce}`, '1', 'PX', 60_000, 'NX')
     if (fresh) {
       request.gatewayAuthenticated = true
       request.gatewayAuthUserId = assertion.authUserId ?? undefined
       request.authUserId = assertion.appUserId ?? undefined
+      request.gatewayService = assertion.service
     }
   }
   next()
+}
+
+export function validRegistrationService(assertion: GatewayAssertion, body: unknown): boolean {
+  const service = assertion.service
+  if (!service || service.audience !== 'registration' || assertion.appUserId !== null
+    || assertion.method !== 'POST' || !body || typeof body !== 'object'
+    || service.bodyHash !== createHash('sha256').update(JSON.stringify(body)).digest('base64url')) return false
+  if (service.capability === 'registration-invitation') {
+    return assertion.path === '/api/internal/registration/invitation'
+  }
+  return service.capability === 'registration-provision'
+    && assertion.path === '/api/internal/registration/provision'
+    && service.emailVerified === true && Boolean(assertion.authUserId)
+    && (body as { authUserId?: unknown }).authUserId === assertion.authUserId
 }

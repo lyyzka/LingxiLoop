@@ -9,8 +9,6 @@ const application = readFileSync(new URL('../im/read-receipts-application.ts', i
 const repository = readFileSync(new URL('../im/read-receipts-repository.ts', import.meta.url), 'utf8')
 const messagesApplication = readFileSync(new URL('../im/messages-application.ts', import.meta.url), 'utf8')
 const ws = readFileSync(new URL('../ws.ts', import.meta.url), 'utf8')
-const controlPlane = readFileSync(new URL('../agent-os/control-plane.ts', import.meta.url), 'utf8')
-const actions = readFileSync(new URL('../agent-os/learning-actions.ts', import.meta.url), 'utf8')
 
 test('read route requires a durable cursor and retains unseen unread messages', () => {
   assert.match(router, /imMessagesApplication\.markRead/)
@@ -40,15 +38,6 @@ test('WebSocket fan-out enforces both tenant and authenticated recipient', () =>
   assert.match(ws, /recipientIds: _internalRecipients/)
 })
 
-test('Agent context and explicit chat.history advance receipts only after history sync', () => {
-  const contextSync = controlPlane.indexOf('const history = await wukongClient().syncMessages')
-  const contextAdvance = controlPlane.indexOf('await advanceAgentReadReceipt', contextSync)
-  assert.ok(contextSync >= 0 && contextAdvance > contextSync)
-  const historyBranch = actions.indexOf("if (method === 'history')")
-  const actionSync = actions.indexOf('await wukongClient().syncMessages', historyBranch)
-  const actionAdvance = actions.indexOf('await advanceAgentReadReceipt', actionSync)
-  assert.ok(historyBranch >= 0 && actionSync > historyBranch && actionAdvance > actionSync)
-})
 
 test('recordReadReceiptAdvance ignores repeats and appends exact intervals', async () => {
   const { appendReadReceiptAdvance } = await import('../im/read-receipts-repository.js')

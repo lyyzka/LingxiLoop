@@ -5,9 +5,8 @@ import test from 'node:test'
 const read = (path: string) => readFile(new URL(path, import.meta.url), 'utf8')
 
 test('agent identity has one Bloub rendering path and no portrait generation surface', async () => {
-  const [router, cli, api, editor, avatar, notification, runtime, events, participantState, redis, message, chatStyles] = await Promise.all([
+  const [router, api, editor, avatar, notification, runtime, events, participantState, redis, message, chatStyles] = await Promise.all([
     read('../../server/src/modules/agents/router.ts'),
-    read('../../server/src/agents/cli.ts'),
     read('../features/agents/api.ts'),
     read('../features/agents/components/AgentEditor.tsx'),
     read('../components/Avatar.tsx'),
@@ -19,7 +18,7 @@ test('agent identity has one Bloub rendering path and no portrait generation sur
     read('../features/chat/components/ConversationMessage.tsx'),
     read('../styles/chat.css'),
   ])
-  const production = [router, cli, api, editor].join('\n')
+  const production = [router, api, editor].join('\n')
 
   assert.doesNotMatch(production, /avatar\/generate|generateAndPersistAvatar|agent-gender|agent-avatar|visualSignatureFor|cmdAvatar\b|AVATAR_PALETTE|defaultAvatarBg/)
   assert.match(editor, /<Field label="趣味头像"/)

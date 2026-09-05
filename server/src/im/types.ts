@@ -1,4 +1,4 @@
-import type { LingxiMessageV1 } from '../agent-os/types.js'
+import type { LingxiMessageV1 } from './message-types.js'
 
 export const WUKONG_CHANNEL_TYPE_PERSON = 1
 export const WUKONG_CHANNEL_TYPE_GROUP = 2

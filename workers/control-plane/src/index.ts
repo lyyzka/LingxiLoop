@@ -16,7 +16,6 @@ type Secrets = {
   OPENSHIP_IMAGE_TARGETS: string
   ALIYUN_OTP_EMAIL_PASSWORD: string
   TURNSTILE_SECRET_KEY: string
-  GITHUB_ACTIONS_TOKEN: string
   CF_ACCESS_CLIENT_ID?: string
   CF_ACCESS_CLIENT_SECRET?: string
 }
@@ -35,14 +34,12 @@ const encoder = new TextEncoder()
 const authSettingsCacheKey = 'https://lingxiloop.invalid/auth-settings'
 const authSettingsCache = () => caches.open('lingxiloop-auth-settings')
 const app = new Hono<{ Bindings: Bindings; Variables: Variables }>()
-const releaseImageNames = ['server', 'agent-os', 'wukongim', 'open-notebook', 'gateway'] as const
+const releaseImageNames = ['server', 'wukongim', 'open-notebook', 'gateway'] as const
 const productionTopology: Record<string, readonly string[]> = {
   'lingxiloop-core-state': ['postgres', 'redis', 'wukongim'],
   'lingxiloop-app-a': ['db-migrate', 'lingxiloop'],
-  'lingxiloop-agent-os-a': ['agent-os'],
   'lingxiloop-app-b': ['db-migrate', 'lingxiloop', 'worker', 'gateway'],
   'lingxiloop-knowledge-agent': ['surrealdb', 'open-notebook'],
-  'lingxiloop-agent-os-b': ['agent-os'],
   'lingxilit-shanghai-b': ['clickhouse', 'openlit'],
   'Uptime Kuma': ['uptime-kuma'],
 }
@@ -93,7 +90,7 @@ async function sendEmail(env: Bindings, message: { to: string; subject: string; 
   await sendSmtpEmail({ address: 'no-reply@lingxilearn.cn', password: env.ALIYUN_OTP_EMAIL_PASSWORD }, message)
 }
 
-async function originRequest(env: Bindings, path: string, init: RequestInit, identity?: { appUserId?: string; authUserId?: string }): Promise<Response> {
+async function originRequest(env: Bindings, path: string, init: RequestInit, identity?: { appUserId?: string; authUserId?: string }, service?: { capability: 'registration-provision' | 'registration-invitation'; emailVerified?: boolean }): Promise<Response> {
   const url = new URL(path, env.ORIGIN_BASE_URL)
   const assertion = {
     appUserId: identity?.appUserId ?? null,
@@ -102,6 +99,7 @@ async function originRequest(env: Bindings, path: string, init: RequestInit, ide
     path: url.pathname + url.search,
     timestamp: Date.now(),
     nonce: crypto.randomUUID(),
+    ...(service ? { service: { ...service, audience: 'registration', bodyHash: await sha256(String(init.body)) } } : {}),
   }
   const payload = base64url(encoder.encode(JSON.stringify(assertion)))
   const headers = new Headers(init.headers)
@@ -131,9 +129,9 @@ async function loadAuthSettings(c: AppContext): Promise<AuthSettings> {
   })))
   return settings
 }
-const githubRepository = 'LingXi-Org/LingxiLoop'
 
-async function provision(env: Bindings, authUser: { id: string; email: string; name: string }): Promise<void> {
+async function provision(env: Bindings, authUser: { id: string; email: string; name: string; emailVerified: boolean }): Promise<void> {
+  if (!authUser.emailVerified) throw new Error('verified registration identity required')
   const claim = await env.DB.prepare(
     `SELECT invite_token,invite_kind,status FROM registration_claims WHERE auth_user_id=?`,
   ).bind(authUser.id).first<{ invite_token: string; invite_kind: string; status: string }>()
@@ -155,7 +153,7 @@ async function provision(env: Bindings, authUser: { id: string; email: string; n
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
-  }, { authUserId: authUser.id })
+  }, { authUserId: authUser.id }, { capability: 'registration-provision', emailVerified: true })
   if (!response.ok) {
     const error = (await response.text()).slice(0, 500)
     if (claim) {
@@ -260,7 +258,7 @@ app.post('/api/auth/sign-up/email', async (c) => {
     const validation = await originRequest(c.env, '/api/internal/registration/invitation', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ email: input.email, inviteToken, inviteKind: 'project' }),
-    })
+    }, undefined, { capability: 'registration-invitation' })
     if (!validation.ok) return c.json({ error: '邀请无效、已过期或与邮箱不匹配' }, validation.status === 404 ? 404 : 403)
   }
   const request = new Request(c.req.raw, { body: JSON.stringify({ email: input.email, password: input.password, name: input.name }) })
@@ -294,7 +292,7 @@ app.get('/api/registration/invitation', async (c) => {
   if (!token) return c.json({ error: 'token required' }, 400)
   return originRequest(c.env, '/api/internal/registration/invitation', {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ inviteToken: token, inviteKind: kind }),
-  })
+  }, undefined, { capability: 'registration-invitation' })
 })
 
 app.post('/api/internal/bootstrap-admin', async (c) => {
@@ -488,36 +486,6 @@ app.put('/api/control/auth-settings', async (c) => {
   return c.json(values)
 })
 
-app.post('/api/control/eval/jobs', async (c) => {
-  const session = requireAdmin(c)
-  if (session instanceof Response) return session
-  const input = await c.req.json<{ profile?: string; reason?: string }>()
-  if (!['core', 'full'].includes(input.profile ?? '') || !input.reason?.trim() || input.reason.trim().length > 280) {
-    return c.json({ error: 'profile and 1–280 character reason are required' }, 400)
-  }
-  const link = await c.env.DB.prepare(`SELECT app_user_id FROM app_user_links WHERE auth_user_id=? AND suspended_at IS NULL`)
-    .bind(session.user.id).first<{ app_user_id: string }>()
-  if (!link) return c.json({ error: 'business account is not provisioned' }, 409)
-  const response = await originRequest(c.env, '/api/admin/eval/jobs', {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input),
-  }, { appUserId: link.app_user_id, authUserId: session.user.id })
-  const result = await response.json<{ created?: boolean; job?: { id?: string; profile?: string; status?: string; commitSha?: string }; error?: string }>()
-  if (!response.ok) return c.json(result, response.status as 400)
-  if (result.created && result.job?.id) {
-    const dispatched = await fetch(`https://api.github.com/repos/${githubRepository}/actions/workflows/live-eval.yml/dispatches`, {
-      method: 'POST',
-      headers: {
-        accept: 'application/vnd.github+json', authorization: `Bearer ${c.env.GITHUB_ACTIONS_TOKEN}`,
-        'content-type': 'application/json', 'user-agent': 'LingxiLoop-Control-Plane', 'x-github-api-version': '2022-11-28',
-      },
-      body: JSON.stringify({ ref: 'main', inputs: { profile: result.job.profile, job_id: result.job.id, commit_sha: result.job.commitSha } }),
-    })
-    if (!dispatched.ok) return c.json({ error: `GitHub Actions dispatch failed (${dispatched.status})`, job: result.job }, 502)
-  }
-  await c.env.DB.prepare(`INSERT INTO control_audit(id,actor_user_id,action,resource,reason,detail,created_at) VALUES(?,?,?,?,?,?,?)`)
-    .bind(crypto.randomUUID(), session.user.id, 'dispatch', `eval:${result.job?.id}`, input.reason.trim(), JSON.stringify({ profile: input.profile }), Date.now()).run()
-  return c.json(result, response.status as 200)
-})
 
 app.post('/api/control/platform/users/:id/:action', async (c) => {
   const adminSession = requireAdmin(c)
@@ -631,6 +599,7 @@ app.use('/api/*', async (c, next) => {
 })
 
 async function proxyAppRequest(c: AppContext): Promise<Response> {
+  if (/^\/api\/internal(?:\/|$)/i.test(decodeURIComponent(c.req.path))) return c.json({ error: 'internal service route' }, 403)
   const session = requireSession(c)
   if (session instanceof Response) return session
   let link = await c.env.DB.prepare(`SELECT app_user_id FROM app_user_links WHERE auth_user_id=? AND suspended_at IS NULL`).bind(session.user.id).first<{ app_user_id: string }>()

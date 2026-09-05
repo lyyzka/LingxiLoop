@@ -44,7 +44,6 @@ interface PlatformDashboard {
 
 const OPENSHIP_URL = 'https://ops.christmas1314.xyz'
 const SERVICE_LABELS: Record<string, string> = {
-  'agent-os': 'Agent OS',
   clickhouse: 'ClickHouse',
   'db-migrate': 'DB Migration',
   gateway: 'Gateway',

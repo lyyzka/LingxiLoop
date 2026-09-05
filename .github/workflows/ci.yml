@@ -11,7 +11,7 @@ on:
         description: Component to verify, or release to deploy all production projects
         required: true
         type: choice
-        options: [web, admin-control, server, agent-os, open-notebook, wukongim, gateway, deployment, release]
+        options: [web, admin-control, server, open-notebook, wukongim, gateway, deployment, release]
 
 concurrency:
   group: lingxiloop-${{ github.ref }}
@@ -32,8 +32,6 @@ jobs:
       admin: ${{ steps.scope.outputs.admin }}
       control: ${{ steps.scope.outputs.control }}
       server: ${{ steps.scope.outputs.server }}
-      eval_harness: ${{ steps.scope.outputs.eval_harness }}
-      eval_runtime: ${{ steps.scope.outputs.eval_runtime }}
       integration: ${{ steps.scope.outputs.integration }}
       deploy_contract: ${{ steps.scope.outputs.deploy_contract }}
       control_deploy: ${{ steps.scope.outputs.control_deploy }}
@@ -80,7 +78,6 @@ jobs:
               - 'worker-configuration.d.ts'
             server:
               - 'server/src/**'
-              - 'third_party/lingxios/**'
               - 'server/scripts/**'
               - 'server/package.json'
               - 'server/package-lock.json'
@@ -88,10 +85,8 @@ jobs:
               - 'server/tsconfig.json'
               - 'server/*.conf'
               - 'server/docker/lingxiloop-server.Dockerfile'
-              - 'server/docker/agent-os.Dockerfile'
             server_source:
               - 'server/src/**'
-              - 'third_party/lingxios/**'
               - '!server/src/__tests__/**'
               - '!server/src/__integration__/**'
               - 'server/package.json'
@@ -99,28 +94,6 @@ jobs:
               - 'server/*.conf'
             server_docker:
               - 'server/docker/lingxiloop-server.Dockerfile'
-            agent_docker:
-              - 'server/docker/agent-os.Dockerfile'
-            agent:
-              - 'server/src/agent-os/**'
-              - 'server/src/bin/agent-os.ts'
-              - 'server/docker/agent-os.Dockerfile'
-              - 'third_party/lingxios/**'
-            eval_harness:
-              - 'eval/suites/smoke.v1.json'
-              - 'eval/baselines/smoke.v1.json'
-              - 'scripts/run-agent-eval.ts'
-              - 'server/src/__tests__/eval-evaluator.test.ts'
-            eval_runtime:
-              - 'eval/suites/runtime-smoke.v1.json'
-              - 'eval/live-runtime.v1.json'
-              - 'eval/baselines/runtime-smoke.v1.json'
-              - 'scripts/run-agent-runtime-eval.ts'
-              - 'scripts/run-agent-live-eval.ts'
-              - 'server/src/eval/live.ts'
-              - 'server/src/__tests__/eval-live.test.ts'
-              - 'server/src/__tests__/eval-trace-harness.test.ts'
-              - 'third_party/lingxios/**'
             open_notebook:
               - 'third_party/open-notebook/Dockerfile'
               - 'third_party/open-notebook/.dockerignore'
@@ -172,10 +145,6 @@ jobs:
           SERVER: ${{ steps.paths.outputs.server }}
           SERVER_SOURCE: ${{ steps.paths.outputs.server_source }}
           SERVER_DOCKER: ${{ steps.paths.outputs.server_docker }}
-          AGENT_DOCKER: ${{ steps.paths.outputs.agent_docker }}
-          AGENT: ${{ steps.paths.outputs.agent }}
-          EVAL_HARNESS: ${{ steps.paths.outputs.eval_harness }}
-          EVAL_RUNTIME: ${{ steps.paths.outputs.eval_runtime }}
           OPEN_NOTEBOOK: ${{ steps.paths.outputs.open_notebook }}
           WUKONGIM: ${{ steps.paths.outputs.wukongim }}
           GATEWAY: ${{ steps.paths.outputs.gateway }}
@@ -198,30 +167,16 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with: { node-version: "22", cache: npm }
-      - if: needs.changes.outputs.web == 'true' || needs.changes.outputs.admin == 'true' || needs.changes.outputs.control == 'true' || needs.changes.outputs.server == 'true' || needs.changes.outputs.eval_harness == 'true' || needs.changes.outputs.eval_runtime == 'true'
+      - if: needs.changes.outputs.web == 'true' || needs.changes.outputs.admin == 'true' || needs.changes.outputs.control == 'true' || needs.changes.outputs.server == 'true'
         run: npm ci
-      - if: needs.changes.outputs.eval_runtime == 'true'
-        uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
-      - if: needs.changes.outputs.eval_runtime == 'true'
-        run: python -m pip install --disable-pip-version-check ipython==9.4.0
       - if: needs.changes.outputs.web == 'true'
         run: npm run lint && npm test && npm run build
       - if: needs.changes.outputs.admin == 'true'
         run: npm run admin:lint && npm run admin:test && npm run admin:build
       - if: needs.changes.outputs.server == 'true'
-        run: npm ci --prefix third_party/lingxios && npm --prefix third_party/lingxios run typecheck && npm --prefix third_party/lingxios test
-      - if: needs.changes.outputs.server == 'true'
         run: npm run server:lint && npm run server:typecheck && npm run server:test
       - if: needs.changes.outputs.control == 'true'
         run: npm run control:lint && npm run control:typecheck && npm run control:test
-      - if: needs.changes.outputs.eval_harness == 'true'
-        run: npm run test:eval:harness && npm run eval:harness
-      - if: needs.changes.outputs.eval_runtime == 'true'
-        run: npm run test:eval:runtime && npm run eval:runtime
-      - if: always() && (needs.changes.outputs.eval_harness == 'true' || needs.changes.outputs.eval_runtime == 'true') && hashFiles('artifacts/eval-*.json') != ''
-        uses: actions/upload-artifact@v4
-        with: { name: "agent-eval-${{ github.sha }}", path: "artifacts/eval-*.json", if-no-files-found: error }
       - if: needs.changes.outputs.deploy_contract == 'true'
         run: node --test scripts/production-rag-contract.test.mjs
       - if: needs.changes.outputs.release == 'true'
@@ -333,9 +288,8 @@ jobs:
     if: >-
       always() &&
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-      needs.changes.outputs.control_deploy == 'true' && needs.checks.result == 'success' &&
-      (needs.live-release-gate.result == 'success' || needs.live-release-gate.result == 'skipped')
-    needs: [changes, checks, live-release-gate]
+      needs.changes.outputs.control_deploy == 'true' && needs.checks.result == 'success'
+    needs: [changes, checks]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
@@ -361,46 +315,12 @@ jobs:
           VITE_LINGXILIT_URL: ${{ vars.VITE_LINGXILIT_URL || 'https://openlit.lingxilearn.cn' }}
           VITE_TURNSTILE_SITE_KEY: 0x4AAAAAAEk9EZhHYeS3szPO
 
-  live-release-gate:
-    if: >-
-      always() && github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-      needs.update-manifests.result == 'success'
-    needs: [update-manifests]
-    runs-on: ubuntu-latest
-    timeout-minutes: 35
-    env:
-      EVAL_COMMIT_SHA: ${{ github.sha }}
-      EVAL_CALLBACK_URL: ${{ vars.EVAL_CALLBACK_URL }}
-      EVAL_CI_HMAC_SECRET: ${{ secrets.EVAL_CI_HMAC_SECRET }}
-      EVAL_CANDIDATE_API_KEY: ${{ secrets.EVAL_CANDIDATE_API_KEY || secrets.OPENAI_API_KEY }}
-      EVAL_CANDIDATE_BASE_URL: ${{ vars.EVAL_CANDIDATE_BASE_URL || vars.OPENAI_BASE_URL }}
-      EVAL_CANDIDATE_MODEL: ${{ vars.EVAL_CANDIDATE_MODEL || vars.OPENAI_MODEL }}
-      EVAL_JUDGE_API_KEY: ${{ secrets.EVAL_JUDGE_API_KEY }}
-      EVAL_JUDGE_BASE_URL: ${{ vars.EVAL_JUDGE_BASE_URL }}
-      EVAL_JUDGE_MODEL: ${{ vars.EVAL_JUDGE_MODEL }}
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}
-      OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
-      OTEL_SERVICE_NAME: lingxiloop-release-eval
-      OTEL_DEPLOYMENT_ENVIRONMENT: ci
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v5
-        with: { node-version: "22", cache: npm }
-      - uses: actions/setup-python@v5
-        with: { python-version: '3.12' }
-      - run: npm ci
-      - run: npm run eval:live -- --profile core --enforce-only
-      - if: always() && hashFiles('artifacts/eval-live-report.json') != ''
-        uses: actions/upload-artifact@v4
-        with: { name: "release-live-eval-${{ github.sha }}", path: artifacts/eval-live-report.json, if-no-files-found: error }
-
   rollout:
     if: >-
       always() && github.ref == 'refs/heads/main' && (github.event_name == 'push' || needs.changes.outputs.release == 'true') &&
       needs.update-manifests.result == 'success' &&
-      (needs.live-release-gate.result == 'success' || needs.live-release-gate.result == 'skipped') &&
       (needs.deploy.result == 'success' || needs.deploy.result == 'skipped')
-    needs: [update-manifests, deploy, live-release-gate]
+    needs: [update-manifests, deploy]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     environment: production

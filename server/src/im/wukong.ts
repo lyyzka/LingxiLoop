@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
-import type { LingxiMessageV1 } from '../agent-os/types.js'
+import type { LingxiMessageV1 } from './message-types.js'
 import type { ImBootstrap, ImChannelProfile, ImMessage } from './types.js'
 
 export interface WukongConfig {

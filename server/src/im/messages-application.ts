@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { LingxiMessageV1 } from '../agent-os/types.js'
+import type { LingxiMessageV1 } from './message-types.js'
 import type { Queryable } from '../db/queryable.js'
 import type { ReadReceiptAdvance } from './read-receipts-contracts.js'
 import type { ImChannelProfile } from './types.js'

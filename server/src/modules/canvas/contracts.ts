@@ -1,6 +1,6 @@
 import type { CanvasActivityKind } from '../../../../src/lib/canvasEventKinds.js'
 import { z } from 'zod'
-import type { AgentExecutionRole } from '../../agent-os/types.js'
+import type { AgentExecutionRole } from '../../agents/contracts.js'
 
 export const CANVAS_FRAME_TYPES = ['html', 'markdown', 'document', 'image', 'artifact'] as const
 export type CanvasFrameType = typeof CANVAS_FRAME_TYPES[number]

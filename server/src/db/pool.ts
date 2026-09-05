@@ -28,3 +28,15 @@ export const pool = new Pool({
 pool.on('error', (err) => {
   console.error('[pg] idle client error', err)
 })
+
+export async function closeDatabasePools(): Promise<void> {
+  await pool.end()
+}
+
+export function isDatabaseConnectionError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  const code = (error as Error & { code?: string }).code
+  return ['53300', '57P01', '57P02', '57P03', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT'].includes(code ?? '')
+    || Boolean(code?.startsWith('08'))
+    || /^(timeout exceeded when trying to connect|Connection terminated due to connection timeout)$/.test(error.message)
+}

@@ -56,13 +56,18 @@ describe('control-plane trust boundaries', () => {
         .bind('ws-user', 'WebSocket User', 'ws@example.com', now, now),
       env.DB.prepare(`INSERT INTO account(id,accountId,providerId,issuer,userId,password,createdAt,updatedAt) VALUES(?,?,'credential','local:credential',?,?,?,?)`)
         .bind('ws-account', 'ws-user', 'ws-user', await hashPassword('password123'), now, now),
-      env.DB.prepare(`INSERT INTO app_user_links(auth_user_id,app_user_id,provisioned_at) VALUES(?,?,?)`)
-        .bind('ws-user', 'app-ws-user', now),
     ])
     fetchMock.activate()
     fetchMock.disableNetConnect()
     fetchMock.get('https://challenges.cloudflare.com').intercept({ path: '/turnstile/v0/siteverify', method: 'POST' }).reply(200, { success: true })
     fetchMock.get('https://origin.example.com').intercept({ path: '/api/auth/ws-ticket', method: 'POST' }).reply(200, { ticket: 'ticket-1' })
+    let registrationAssertion: Record<string, unknown> | undefined
+    fetchMock.get('https://origin.example.com').intercept({ path: '/api/internal/registration/provision', method: 'POST' }).reply((request) => {
+      const header = new Headers(request.headers).get('x-lingxiloop-gateway')!
+      registrationAssertion = JSON.parse(atob(header.split('.')[0]!.replaceAll('-', '+').replaceAll('_', '/'))) as Record<string, unknown>
+      expect(JSON.parse(String(request.body))).toEqual({ authUserId: 'ws-user', email: 'ws@example.com', name: 'WebSocket User' })
+      return { statusCode: 200, data: { appUserId: 'app-ws-user' } }
+    })
     try {
       const signIn = await SELF.fetch('https://admin.example.com/api/auth/sign-in/email', {
         method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://admin.example.com', 'x-captcha-response': 'XXXX.DUMMY.TOKEN.XXXX' },
@@ -72,6 +77,14 @@ describe('control-plane trust boundaries', () => {
         method: 'POST', headers: { cookie: signIn.headers.get('set-cookie') ?? '' },
       })
       expect({ status: response.status, body: await response.json() }).toEqual({ status: 200, body: { ticket: 'ticket-1' } })
+      expect(registrationAssertion).toMatchObject({ appUserId: null, authUserId: 'ws-user', method: 'POST', path: '/api/internal/registration/provision',
+        service: { audience: 'registration', capability: 'registration-provision', emailVerified: true, bodyHash: expect.any(String) } })
+      for (const path of ['/api/internal/registration/provision', '/api/internal/registration/invitation']) {
+        const denied = await SELF.fetch(`https://admin.example.com${path}`, {
+          method: 'POST', headers: { cookie: signIn.headers.get('set-cookie') ?? '' },
+        })
+        expect(denied.status).toBe(403)
+      }
       fetchMock.assertNoPendingInterceptors()
     } finally { fetchMock.deactivate() }
   })
@@ -79,7 +92,7 @@ describe('control-plane trust boundaries', () => {
   it('fans one signed release out to every OpenShip project exactly once', async () => {
     const commitSha = 'a'.repeat(40)
     const deployCommitSha = 'b'.repeat(40)
-    const imageDigests = Object.fromEntries(['server', 'agent-os', 'wukongim', 'open-notebook', 'gateway']
+    const imageDigests = Object.fromEntries(['server', 'wukongim', 'open-notebook', 'gateway']
       .map((name, index) => [name, `registry/lingxiloop-${name}:${index ? commitSha : 'c'.repeat(40)}`]))
     const body = JSON.stringify({ commitSha, deployCommitSha, imageDigests })
     const key = await crypto.subtle.importKey('raw', new TextEncoder().encode('test-release-secret'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
@@ -91,10 +104,6 @@ describe('control-plane trust boundaries', () => {
     openShip.intercept({
       path: '/api/proxy/api/projects/proj_test-a/services/svc_app-a', method: 'PATCH',
       body: JSON.stringify({ image: imageDigests.server }),
-    }).reply(200, { success: true })
-    openShip.intercept({
-      path: '/api/proxy/api/projects/proj_test-a/services/svc_agent-a', method: 'PATCH',
-      body: JSON.stringify({ image: imageDigests['agent-os'] }),
     }).reply(200, { success: true })
     openShip.intercept({
       path: '/api/proxy/api/projects/proj_test-a/services/svc_wukong', method: 'PATCH',

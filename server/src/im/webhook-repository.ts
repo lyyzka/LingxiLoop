@@ -108,39 +108,3 @@ export async function webhookConversation(
   )
   return rows[0] ? { projectId: rows[0].project_id, kind: rows[0].kind } : null
 }
-
-export async function enqueueWebhookWork(
-  db: Queryable,
-  input: {
-    workId: string
-    companyId: string
-    authorizationUserId: string
-    agentId: string
-    channelId: string
-    threadRootClientMsgNo: string | null
-    triggerClientMsgNo: string
-    reason: string
-    executionRole: 'coordinator' | 'specialist'
-  },
-): Promise<string | null> {
-  const { rows } = await db.query<{ id: string }>(
-    `INSERT INTO agent_work_items(
-       id,company_id,authorization_user_id,agent_id,channel_id,thread_root_client_msg_no,
-       trigger_client_msg_no,reason,execution_role
-     ) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)
-     ON CONFLICT(agent_id,trigger_client_msg_no,reason) DO NOTHING
-     RETURNING id`,
-    [
-      input.workId,
-      input.companyId,
-      input.authorizationUserId,
-      input.agentId,
-      input.channelId,
-      input.threadRootClientMsgNo,
-      input.triggerClientMsgNo,
-      input.reason,
-      input.executionRole,
-    ],
-  )
-  return rows[0]?.id ?? null
-}

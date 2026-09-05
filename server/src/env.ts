@@ -44,7 +44,6 @@ export const env = {
   COMMIT_SHA: process.env.LINGXILOOP_COMMIT_SHA?.trim() || 'dev',
   /** Release gate for the deterministic, source-grounded HTML deck pipeline. */
   PRESENTATION_HTML_ENABLED: process.env.PRESENTATION_HTML_ENABLED?.trim().toLowerCase() === 'true',
-  AGENT_OS_APPROVAL_TTL_MS: integerAtLeast('AGENT_OS_APPROVAL_TTL_MS', 24 * 60 * 60_000, 60_000),
   DATABASE_POOL_MAX: integerAtLeast('DATABASE_POOL_MAX', 20, 1),
   WUKONG_USER_TOKEN_SECRET: wukongUserTokenSecret(),
   DATABASE_URL: required('DATABASE_URL'),
@@ -55,17 +54,9 @@ export const env = {
   /** Standard OpenAI API endpoint. */
   OPENAI_BASE_URL: process.env.OPENAI_BASE_URL?.trim() || 'https://api.openai.com/v1',
   /**
-   * The single global OpenAI Chat Completions model used by the Agent OS main
-   * loop, context compaction, and retained learning utilities.
+   * The global OpenAI Chat Completions model for retained product utilities.
    */
   OPENAI_MODEL: DEFAULT_MODEL,
-  EVAL_CANDIDATE_API_KEY: process.env.EVAL_CANDIDATE_API_KEY?.trim() || process.env.OPENAI_API_KEY || '',
-  EVAL_CANDIDATE_BASE_URL: process.env.EVAL_CANDIDATE_BASE_URL?.trim() || process.env.OPENAI_BASE_URL?.trim() || 'https://api.openai.com/v1',
-  EVAL_CANDIDATE_MODEL: process.env.EVAL_CANDIDATE_MODEL?.trim() || DEFAULT_MODEL,
-  EVAL_JUDGE_API_KEY: process.env.EVAL_JUDGE_API_KEY?.trim() || '',
-  EVAL_JUDGE_BASE_URL: process.env.EVAL_JUDGE_BASE_URL?.trim() || 'https://api.openai.com/v1',
-  EVAL_JUDGE_MODEL: process.env.EVAL_JUDGE_MODEL?.trim() || '',
-  EVAL_CI_HMAC_SECRET: process.env.EVAL_CI_HMAC_SECRET?.trim() || '',
   OPENAI_EMBEDDING_MODEL: required('OPENAI_EMBEDDING_MODEL'),
   OPENAI_IMAGE_MODEL: process.env.OPENAI_IMAGE_MODEL?.trim() || '',
   /**

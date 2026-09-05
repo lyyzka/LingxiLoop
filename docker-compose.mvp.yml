@@ -157,7 +157,6 @@ services:
       PORT: 5181
       DATABASE_URL: postgres://lingxiloop:lingxiloop@postgres:5432/lingxiloop
       REDIS_URL: redis://redis:6379
-      AGENT_OS_SERVICE_TOKEN: ${AGENT_OS_SERVICE_TOKEN:?AGENT_OS_SERVICE_TOKEN is required in .env}
       WUKONG_API_URL: http://wukongim:5001
       WUKONG_WS_URL: ${WUKONG_WS_URL:-ws://localhost:5200}
       WUKONG_API_TOKEN: ${WUKONG_API_TOKEN:-dev-wukong-api-token}
@@ -226,43 +225,6 @@ services:
     networks: [lingxiloop-mvp, lingxiloop-knowledge-internal]
     logging: *quiet-logging
 
-  agent-os:
-    image: accel.way2api.fun/ghcr.io/lyyzka/lingxiloop-agent-os:b42fef160fe697d46a8818e054f945d1f80953f7
-    pull_policy: always
-    restart: unless-stopped
-    depends_on:
-      lingxiloop:
-        condition: service_healthy
-      wukongim:
-        condition: service_healthy
-    environment:
-      NODE_ENV: production
-      LINGXILOOP_LOG_LEVEL: ${LINGXILOOP_LOG_LEVEL:-warn}
-      AGENT_OS_PORT: 5190
-      AGENT_OS_MAX_CONCURRENT_RUNS: ${AGENT_OS_MAX_CONCURRENT_RUNS:-8}
-      AGENT_OS_SERVICE_TOKEN: ${AGENT_OS_SERVICE_TOKEN:?AGENT_OS_SERVICE_TOKEN is required in .env}
-      LINGXILOOP_CONTROL_PLANE_URL: http://lingxiloop:5181
-      OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY is required in .env}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-mini}
-      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:?OPENAI_EMBEDDING_MODEL is required in .env}
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
-      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS:-}
-      OTEL_SERVICE_NAME: lingxiloop-agent-os
-      OTEL_DEPLOYMENT_ENVIRONMENT: ${OTEL_DEPLOYMENT_ENVIRONMENT:-production}
-      LINGXILIT_PRICING_JSON: ${LINGXILIT_PRICING_JSON:-}
-      AGENT_OS_HOMES_ROOT: /var/lib/lingxiloop-agent-os/homes
-    volumes:
-      - lingxiloop-agent-os-data:/var/lib/lingxiloop-agent-os
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:5190/readyz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
-      interval: 5s
-      timeout: 3s
-      retries: 20
-      start_period: 10s
-    networks: [lingxiloop-mvp]
-    logging: *quiet-logging
-
 networks:
   lingxiloop-mvp: {}
   lingxiloop-knowledge-internal:
@@ -273,6 +235,5 @@ volumes:
   lingxiloop-postgres-data: {}
   lingxiloop-redis-data: {}
   lingxiloop-wukong-data: {}
-  lingxiloop-agent-os-data: {}
   open-notebook-surreal-data: {}
   open-notebook-data: {}

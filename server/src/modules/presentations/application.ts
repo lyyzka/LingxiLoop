@@ -1,5 +1,6 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto'
-import type { AgentWorkItem, LingxiMessageV1 } from '../../agent-os/types.js'
+import type { LingxiMessageV1 } from '../../im/message-types.js'
+import type { AgentActionContext } from '../../agents/contracts.js'
 import type { Queryable } from '../../db/queryable.js'
 import type { Storage } from '../../storage.js'
 import {
@@ -72,7 +73,7 @@ function buildArtifactClientMsgNo(presentationId: string, agentId: string): stri
   return `presentation-card-${presentationId}-${agentKey}`
 }
 
-function actorUserId(work: AgentWorkItem): string {
+function actorUserId(work: AgentActionContext): string {
   const id = work.authorizationUserId?.trim()
   if (!id) throw new Error('Agent work has no persisted human authorization principal')
   return id
@@ -102,7 +103,7 @@ export class PresentationsApplication {
     }
   }
 
-  async createForAgent(work: AgentWorkItem, rawInput: CreatePresentationInput): Promise<ReturnType<typeof privateAgentView>> {
+  async createForAgent(work: AgentActionContext, rawInput: CreatePresentationInput): Promise<ReturnType<typeof privateAgentView>> {
     this.requireEnabled()
     const input = createPresentationRequestSchema.parse(rawInput)
     const authorizationUserId = actorUserId(work)
@@ -198,7 +199,7 @@ export class PresentationsApplication {
     return presentationDetail(found.presentation, found.latestVersion)
   }
 
-  async getForAgent(work: AgentWorkItem, presentationId: string) {
+  async getForAgent(work: AgentActionContext, presentationId: string) {
     return privateAgentView(await this.get(work.companyId, actorUserId(work), presentationId))
   }
 
@@ -328,17 +329,17 @@ export class PresentationsApplication {
 
 export function createPresentationAgentFacade(application: PresentationsApplication) {
   return {
-    createPresentationForAgent: (work: AgentWorkItem, input: CreatePresentationInput) => application.createForAgent(work, input),
-    getPresentationForAgent: (work: AgentWorkItem, presentationId: string) => application.getForAgent(work, presentationId),
-    revisePresentationOutlineForAgent: async (work: AgentWorkItem, presentationId: string, input: RevisePresentationOutlineInput) =>
+    createPresentationForAgent: (work: AgentActionContext, input: CreatePresentationInput) => application.createForAgent(work, input),
+    getPresentationForAgent: (work: AgentActionContext, presentationId: string) => application.getForAgent(work, presentationId),
+    revisePresentationOutlineForAgent: async (work: AgentActionContext, presentationId: string, input: RevisePresentationOutlineInput) =>
       privateAgentView(await application.reviseOutline(work.companyId, actorUserId(work), presentationId, input)),
-    approvePresentationOutlineForAgent: async (work: AgentWorkItem, presentationId: string, input: ApprovePresentationOutlineInput) =>
+    approvePresentationOutlineForAgent: async (work: AgentActionContext, presentationId: string, input: ApprovePresentationOutlineInput) =>
       privateAgentView(await application.approveOutline(work.companyId, actorUserId(work), presentationId, input)),
-    revisePresentationForAgent: async (work: AgentWorkItem, presentationId: string, input: RevisePresentationInput) =>
+    revisePresentationForAgent: async (work: AgentActionContext, presentationId: string, input: RevisePresentationInput) =>
       privateAgentView(await application.revise(work.companyId, actorUserId(work), presentationId, input)),
-    cancelPresentationForAgent: async (work: AgentWorkItem, presentationId: string, _input: { idempotencyKey: string }) =>
+    cancelPresentationForAgent: async (work: AgentActionContext, presentationId: string, _input: { idempotencyKey: string }) =>
       privateAgentView(await application.cancel(work.companyId, actorUserId(work), presentationId)),
-    retryPresentationForAgent: async (work: AgentWorkItem, presentationId: string, input: { idempotencyKey: string }) =>
+    retryPresentationForAgent: async (work: AgentActionContext, presentationId: string, input: { idempotencyKey: string }) =>
       privateAgentView(await application.retry(work.companyId, actorUserId(work), presentationId, input)),
   }
 }

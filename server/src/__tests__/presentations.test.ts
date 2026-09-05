@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import type { AgentWorkItem } from '../agent-os/types.js'
+import type { AgentActionContext } from '../agents/contracts.js'
 import type { Queryable } from '../db/queryable.js'
 import { PresentationsApplication, PresentationApplicationError } from '../modules/presentations/application.js'
 import type {
@@ -375,10 +375,9 @@ test('Agent access to a PRIVATE presentation returns only an opaque direct-deliv
     storage: { readObject: async () => Buffer.alloc(0) }, enabled: () => true,
     sendArtifactCard: async () => { throw new Error('PRIVATE presentation must not emit a group card') },
   })
-  const work: AgentWorkItem = {
-    id: 'work-a', fence: 1, companyId: 'company-a', authorizationUserId: 'user-a', agentId: 'nova',
-    channelId: 'conversation-a', triggerClientMsgNo: 'trigger-a', reason: 'message', executionRole: 'coordinator',
-    lane: 'learner', leaseToken: 'lease-a',
+  const work: AgentActionContext = {
+    id: 'work-a', companyId: 'company-a', authorizationUserId: 'user-a', agentId: 'nova',
+    channelId: 'conversation-a', triggerClientMsgNo: 'trigger-a', reason: 'message',
   }
   assert.deepEqual(await application.getForAgent(work, 'presentation-private'), {
     id: 'presentation-private', status: 'planning', visibilityScope: 'PRIVATE', deliveryState: 'privateDirect',
@@ -406,10 +405,9 @@ test('create idempotency replay reuses the exact same Artifact card nonce', asyn
     sendArtifactCard: async (input) => { cards.push({ clientMsgNo: input.clientMsgNo, channelId: input.channelId }) },
   })
   const work = {
-    id: 'work-replay', fence: 1, companyId: 'company-a', authorizationUserId: 'user-a', agentId,
-    channelId: 'conversation-a', triggerClientMsgNo: 'trigger-a', reason: 'message', executionRole: 'coordinator',
-    lane: 'learner', leaseToken: 'lease-a',
-  } as AgentWorkItem
+    id: 'work-replay', companyId: 'company-a', authorizationUserId: 'user-a', agentId,
+    channelId: 'conversation-a', triggerClientMsgNo: 'trigger-a', reason: 'message',
+  } as AgentActionContext
   const request = { idempotencyKey: 'same-create', requirements: '生成演示', targetSlideCount: 24 }
   await application.createForAgent(work, request)
   await application.createForAgent(work, request)
@@ -483,8 +481,8 @@ test('feature flag disables generation before any persistence or provider side e
     db: database.db, transaction: async (work) => work(database.db),
     storage: { readObject: async () => Buffer.alloc(0) }, enabled: () => false, sendArtifactCard: async () => undefined,
   })
-  const work = { id: 'work', fence: 1, companyId: 'company', authorizationUserId: 'user', agentId: 'nova', channelId: 'channel',
-    triggerClientMsgNo: 'trigger', reason: 'message', executionRole: 'coordinator', lane: 'learner', leaseToken: 'lease' } as AgentWorkItem
+  const work = { id: 'work', companyId: 'company', authorizationUserId: 'user', agentId: 'nova', channelId: 'channel',
+    triggerClientMsgNo: 'trigger', reason: 'message' } as AgentActionContext
   await assert.rejects(() => application.createForAgent(work, {
     idempotencyKey: 'request-a', requirements: '生成一份系统讲解', targetSlideCount: 24,
   }), (error: unknown) => error instanceof PresentationApplicationError && error.code === 'feature_disabled')

@@ -87,24 +87,21 @@ test('migrated domains are complete vertical slices with thin HTTP routers', asy
   assert.doesNotMatch(documentCollaboration, /\b(?:pool|client|db)\.query\s*\(|`\s*(?:SELECT|INSERT|UPDATE|DELETE|WITH)\b/i)
   assert.match(documentRepository, /Queryable/)
   const documentConsumers = await Promise.all([
-    '../agents/cli/document.ts',
     '../web.ts',
     '../ws.ts',
   ].map((path) => readFile(new URL(path, import.meta.url), 'utf8')))
   assert.match(documentConsumers.join('\n'), /modules\/documents\/public\.js/)
   assert.doesNotMatch(documentConsumers.join('\n'), /modules\/documents\/(?:collaboration-|markdown)/)
-  assert.doesNotMatch(documentConsumers[0], /db\/pool\.js|\bpool\.query\b|redis\.js/)
-  assert.match(documentConsumers[0], /modules\/conversations\/public\.js/)
-  const wsDocumentAuthorization = documentConsumers[2].slice(
-    documentConsumers[2].indexOf('async function docCompanyFor'),
-    documentConsumers[2].indexOf('function sendJson'),
+  const wsDocumentAuthorization = documentConsumers[1].slice(
+    documentConsumers[1].indexOf('async function docCompanyFor'),
+    documentConsumers[1].indexOf('function sendJson'),
   )
   assert.match(wsDocumentAuthorization, /permissionService\.can/)
   assert.match(wsDocumentAuthorization, /action: writable \? 'document:write' : 'document:read'/)
   assert.doesNotMatch(wsDocumentAuthorization, /\bpool\.query\b|`\s*SELECT\b/i)
-  const wsDocumentMention = documentConsumers[2].slice(
-    documentConsumers[2].indexOf("if (type === 'doc.mention.notify')"),
-    documentConsumers[2].indexOf('export function attachWebSocket'),
+  const wsDocumentMention = documentConsumers[1].slice(
+    documentConsumers[1].indexOf("if (type === 'doc.mention.notify')"),
+    documentConsumers[1].indexOf('export function attachWebSocket'),
   )
   assert.match(wsDocumentMention, /notifyDocumentMention/)
   assert.doesNotMatch(wsDocumentMention, /\bpool\.query\b|document_mentions|agent_log|im_channel_bindings/)
@@ -122,63 +119,10 @@ test('migrated domains are complete vertical slices with thin HTTP routers', asy
   assert.match(knowledgeIngestionRepository, /FOR UPDATE SKIP LOCKED/)
   await assert.rejects(readFile(new URL('../modules/admin/router.ts', import.meta.url), 'utf8'), { code: 'ENOENT' })
   const pollCallers = await Promise.all([
-    '../agent-os/learning-actions.ts',
-    '../agents/cli.ts',
     '../worker.ts',
   ].map((path) => readFile(new URL(path, import.meta.url), 'utf8')))
   assert.doesNotMatch(pollCallers.join('\n'), /from ['"][^'"]*modules\/polls\/(?:application|repository|facade|contracts)/)
   assert.doesNotMatch(pollCallers.join('\n'), /from ['"][^'"]*polls\.js/)
-  const canvasCallers = await Promise.all([
-    '../agent-os/learning-actions.ts',
-    '../agent-os/control-plane.ts',
-    '../__integration__/canvas.test.ts',
-  ].map((path) => readFile(new URL(path, import.meta.url), 'utf8')))
-  assert.doesNotMatch(canvasCallers.join('\n'), /from ['"][^'"]*modules\/canvas\/(?:application|repository|contracts)/)
-  assert.doesNotMatch(canvasCallers.join('\n'), /from ['"][^'"]*canvas\/service\.js/)
-  const calendarCli = await readFile(new URL('../agents/cli/calendar.ts', import.meta.url), 'utf8')
-  assert.match(calendarCli, /from ['"]\.\.\/\.\.\/modules\/calendar\/index\.js['"]/)
-  assert.doesNotMatch(calendarCli, /modules\/calendar\/(?:application|contracts|facade|repository)\.js/)
-  assert.doesNotMatch(calendarCli, /from ['"][^'"]*db\/pool\.js['"]|\bpool\.query\b/)
-  assert.doesNotMatch(calendarCli, /`\s*(?:SELECT|INSERT|UPDATE|DELETE)\b/is)
-  assert.doesNotMatch(calendarCli, /from ['"][^'"]*calendar\.js['"]|import\(['"][^'"]*calendar\.js['"]\)/)
-  const emailCli = await readFile(new URL('../agents/cli/email.ts', import.meta.url), 'utf8')
-  assert.match(emailCli, /from ['"]\.\.\/\.\.\/modules\/email\/index\.js['"]/)
-  assert.doesNotMatch(emailCli, /from ['"][^'"]*db\/|\bpool\.query\b/)
-  assert.doesNotMatch(emailCli, /`\s*(?:SELECT|INSERT|UPDATE|DELETE|WITH)\b/is)
-  assert.doesNotMatch(emailCli, /modules\/email\/(?:agent-)?(?:application|contracts|facade|repository)\.js/)
-  const conversationMetadataCli = await readFile(
-    new URL('../agents/cli/conversation-metadata.ts', import.meta.url),
-    'utf8',
-  )
-  assert.match(conversationMetadataCli, /modules\/conversations\/public\.js/)
-  assert.doesNotMatch(conversationMetadataCli, /from ['"][^'"]*(?:db\/|redis\.js)|\bpool\.query\b/)
-  assert.doesNotMatch(conversationMetadataCli, /`\s*(?:SELECT|INSERT|UPDATE|DELETE|WITH)\b/is)
-  assert.doesNotMatch(
-    conversationMetadataCli,
-    /modules\/conversations\/(?:application|contracts|facade|repository)\.js/,
-  )
-  const conversationDeliveryCli = await readFile(
-    new URL('../agents/cli/conversation-delivery.ts', import.meta.url),
-    'utf8',
-  )
-  assert.match(conversationDeliveryCli, /modules\/conversations\/public\.js/)
-  assert.doesNotMatch(conversationDeliveryCli, /from ['"][^'"]*(?:db\/|redis\.js)|\bpool\.query\b/)
-  assert.doesNotMatch(conversationDeliveryCli, /`\s*(?:SELECT|INSERT|UPDATE|DELETE|WITH)\b/is)
-  assert.doesNotMatch(
-    conversationDeliveryCli,
-    /modules\/conversations\/(?:application|contracts|facade|repository)\.js/,
-  )
-  const participantDirectoryCli = await readFile(
-    new URL('../agents/cli/participant-directory.ts', import.meta.url),
-    'utf8',
-  )
-  assert.match(participantDirectoryCli, /modules\/agents\/index\.js/)
-  assert.doesNotMatch(participantDirectoryCli, /from ['"][^'"]*(?:db\/|redis\.js)|\bpool\.query\b/)
-  assert.doesNotMatch(participantDirectoryCli, /`\s*(?:SELECT|INSERT|UPDATE|DELETE|WITH)\b/is)
-  assert.doesNotMatch(
-    participantDirectoryCli,
-    /modules\/agents\/(?:application|contracts|facade|repository|directory-(?:application|repository))\.js/,
-  )
   await assert.rejects(readFile(new URL('../calendar.ts', import.meta.url), 'utf8'), { code: 'ENOENT' })
   await assert.rejects(readFile(new URL('../email.ts', import.meta.url), 'utf8'), { code: 'ENOENT' })
   await assert.rejects(readFile(new URL('../email-retry.ts', import.meta.url), 'utf8'), { code: 'ENOENT' })
@@ -191,8 +135,6 @@ test('migrated domains are complete vertical slices with thin HTTP routers', asy
   const emailCallers = await Promise.all([
     '../modules/companies/invitation-email.ts',
     '../modules/notifications/worker.ts',
-    '../agents/cli.ts',
-    '../agents/cli/email.ts',
     '../modules/agents/facade.ts',
     '../modules/messages/facade.ts',
     '../web.ts',
@@ -262,10 +204,8 @@ test('retired observability HTTP views cannot return', async () => {
 
 test('retired boards capability has no HTTP or Agent entry point', async () => {
   const router = await readFile(new URL('../api/router.ts', import.meta.url), 'utf8')
-  const cli = await readFile(new URL('../agents/cli.ts', import.meta.url), 'utf8')
   await assert.rejects(readFile(new URL('../modules/boards/router.ts', import.meta.url), 'utf8'))
   assert.doesNotMatch(router, /boardsRouter|modules\/boards/)
-  assert.doesNotMatch(cli, /createBoardCommands|cmdBoard|cmdCard|case 'kanban'/)
 })
 
 test('authentication, request context, authorization, and errors have one shared boundary', async () => {

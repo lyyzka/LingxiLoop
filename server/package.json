@@ -6,7 +6,6 @@
   "scripts": {
     "server:start": "tsx server/src/bin/web.ts",
     "worker:start": "tsx server/src/bin/worker.ts",
-    "agent-os:start": "tsx server/src/bin/agent-os.ts",
     "db:migrate": "tsx server/src/migrate-bin.ts"
   },
   "dependencies": {

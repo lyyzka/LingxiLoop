@@ -54,7 +54,7 @@ platformRouter.get('/meta', (_req, res) => {
     product: 'LingxiLoop',
     version: env.APP_VERSION,
     commitSha: env.COMMIT_SHA,
-    reasoningRuntime: 'agent-os',
+    reasoningRuntime: null,
   })
 })
 

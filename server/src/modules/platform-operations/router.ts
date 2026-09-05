@@ -18,7 +18,6 @@ import {
   type AdminListQuery,
 } from './resources.js'
 import { changeUserLifecycle } from './user-lifecycle.js'
-import { createEvalJob, getEvalComparison, getEvalDashboard, getEvalJob, getEvalRunDetail, listEvalJobs } from '../../eval/public.js'
 
 export const adminRouter = Router()
 
@@ -116,77 +115,6 @@ adminRouter.get('/dashboard', safe(async (_request, response) => {
     dependencies,
     recentAudit: recentAudit.rows,
   })
-}))
-
-adminRouter.get('/eval/dashboard', safe(async (request, response) => {
-  const suiteKey = typeof request.query.suiteKey === 'string' ? request.query.suiteKey : undefined
-  const [dashboard, jobs, policies] = await Promise.all([
-    getEvalDashboard({ suiteKey, limit: 100, sinceDays: 90 }),
-    listEvalJobs(pool, 50),
-    pool.query(`SELECT suite_key AS "suiteKey",candidate_model AS "candidateModel",prompt_version AS "promptVersion",
-      mode,baseline_run_id AS "baselineRunId",reason,updated_by AS "updatedBy",updated_at AS "updatedAt"
-      FROM eval_gate_policies ORDER BY updated_at DESC`),
-  ])
-  response.json({ ...dashboard, jobs, policies: policies.rows })
-}))
-
-adminRouter.get('/eval/runs/:id', safe(async (request, response) => {
-  response.json(await getEvalRunDetail(String(request.params.id)))
-}))
-
-adminRouter.get('/eval/compare', safe(async (request, response) => {
-  const baseRunId = typeof request.query.baseRunId === 'string' ? request.query.baseRunId : ''
-  const candidateRunId = typeof request.query.candidateRunId === 'string' ? request.query.candidateRunId : ''
-  if (!baseRunId || !candidateRunId) throw new HttpError(400, 'baseRunId and candidateRunId are required')
-  response.json(await getEvalComparison(baseRunId, candidateRunId))
-}))
-
-adminRouter.post('/eval/jobs', safe(async (request, response) => {
-  const parsed = z.object({ profile: z.enum(['core', 'full']), reason: z.string().trim().min(1).max(280) }).strict().safeParse(request.body)
-  if (!parsed.success) throw new HttpError(400, parsed.error.issues[0]?.message ?? 'invalid eval job')
-  if (!env.EVAL_JUDGE_MODEL) throw new HttpError(503, 'live eval judge is not configured')
-  if (!/^[0-9a-f]{40}$/i.test(env.COMMIT_SHA)) throw new HttpError(503, 'deployed commit metadata is unavailable')
-  const result = await createEvalJob(pool, {
-    profile: parsed.data.profile,
-    suiteKey: 'agent-runtime-live',
-    suiteVersion: 'runtime-live.v1',
-    commitSha: env.COMMIT_SHA,
-    promptVersion: 'prompt-v7',
-    candidateModel: env.EVAL_CANDIDATE_MODEL,
-    judgeModel: env.EVAL_JUDGE_MODEL,
-    requestedBy: identity(response).id,
-    reason: parsed.data.reason,
-  })
-  response.status(result.created ? 201 : 200).json(result)
-}))
-
-adminRouter.get('/eval/jobs/:id', safe(async (request, response) => {
-  const job = await getEvalJob(pool, String(request.params.id))
-  if (!job) throw new HttpError(404, 'eval job not found')
-  response.json(job)
-}))
-
-adminRouter.put('/eval/gate-policy', safe(async (request, response) => {
-  const parsed = z.object({
-    mode: z.enum(['monitor', 'enforce']),
-    baselineRunId: z.string().min(1).optional().nullable(),
-    reason: z.string().trim().min(1).max(280),
-  }).strict().safeParse(request.body)
-  if (!parsed.success) throw new HttpError(400, parsed.error.issues[0]?.message ?? 'invalid gate policy')
-  if (parsed.data.mode === 'enforce' && !parsed.data.baselineRunId) throw new HttpError(400, 'enforce mode requires a baseline run')
-  const baseline = parsed.data.baselineRunId ? await pool.query<{ id: string }>(
-    `SELECT id FROM eval_runs WHERE id=$1 AND suite_key='agent-runtime-live' AND model=$2 AND prompt_version='prompt-v7' AND status='pass'`,
-    [parsed.data.baselineRunId, env.EVAL_CANDIDATE_MODEL],
-  ) : null
-  if (parsed.data.baselineRunId && !baseline?.rows[0]) throw new HttpError(409, 'baseline must be a passing run for the same suite, model, and prompt')
-  const { rows } = await pool.query(
-    `INSERT INTO eval_gate_policies(suite_key,candidate_model,prompt_version,mode,baseline_run_id,reason,updated_by)
-     VALUES('agent-runtime-live',$1,'prompt-v7',$2,$3,$4,$5)
-     ON CONFLICT (suite_key,candidate_model,prompt_version) DO UPDATE SET mode=EXCLUDED.mode,baseline_run_id=EXCLUDED.baseline_run_id,
-       reason=EXCLUDED.reason,updated_by=EXCLUDED.updated_by,updated_at=NOW() RETURNING *`,
-    [env.EVAL_CANDIDATE_MODEL, parsed.data.mode, parsed.data.baselineRunId ?? null, parsed.data.reason, identity(response).id],
-  )
-  response.json(rows[0])
 }))
 
 adminRouter.get('/search', safe(async (request, response) => {

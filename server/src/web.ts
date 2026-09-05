@@ -9,16 +9,14 @@ import { api } from './api/router.js'
 import { initializeNativeStorage } from './storage.js'
 import { attachWebSocket } from './ws.js'
 import { bootDocumentBus } from './modules/documents/public.js'
-import { pool } from './db/pool.js'
+import { closeDatabasePools } from './db/pool.js'
 import { redis, sub } from './redis.js'
 import { resendInboundEmailRouter } from './modules/email/index.js'
-import { agentOSControlRouter } from './agent-os/control-plane.js'
 import { wukongWebhookRouter } from './im/webhook.js'
 import { wukongClient } from './im/wukong.js'
 import { Lifecycle, type ServiceHandle } from './runtime/lifecycle.js'
 import { openNotebookEmbeddingRouter } from './modules/knowledge/embedding-proxy.js'
 import { errorHandler } from './http/errors.js'
-import { evalCallbackRouter } from './eval/callback-router.js'
 
 export async function startWebProcess(): Promise<ServiceHandle> {
   // Construct every mandatory infrastructure adapter before exposing HTTP.
@@ -61,7 +59,6 @@ export async function startWebProcess(): Promise<ServiceHandle> {
   // becomes a no-op for these requests.
   app.use('/webhooks/email', resendInboundEmailRouter)
   app.use('/webhooks/wukong', wukongWebhookRouter)
-  app.use('/api/internal/eval', evalCallbackRouter, errorHandler)
 
   // Keep legacy JSON payloads bounded independently from the 200 MB upload
   // policy. File uploads PUT directly to R2 and never enter this parser.
@@ -78,9 +75,6 @@ export async function startWebProcess(): Promise<ServiceHandle> {
     next()
   })
   app.use('/api', api)
-  // The independent Agent OS uses a service identity and scoped work leases;
-  // it never receives a human session or direct database credentials.
-  app.use('/internal/agent-os', agentOSControlRouter)
 
   // ============== Host gating ==============
   // If an operator adds an API-only subdomain, prevent its unknown routes
@@ -129,7 +123,7 @@ export async function startWebProcess(): Promise<ServiceHandle> {
     // SPA catch-all — any GET that isn't an API / runtime / uploads / ws path
     // returns index.html so client-side routes like /invite/<token> work on
     // first load + on refresh. POST/PUT/DELETE never fall through to here.
-    app.get(/^(?!\/(api|runtime|uploads|ws)(\/|$)).*/, (_req, res) => {
+    app.get(/^(?!\/(api|internal|runtime|uploads|ws)(\/|$)).*/, (_req, res) => {
       res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate')
       res.sendFile(INDEX_HTML)
     })
@@ -160,7 +154,7 @@ export async function startWebProcess(): Promise<ServiceHandle> {
 
   const server = http.createServer(app)
   const lifecycle = new Lifecycle()
-  lifecycle.addDisposer('postgres', () => pool.end())
+  lifecycle.addDisposer('postgres', () => closeDatabasePools())
   lifecycle.addDisposer('redis', () => { sub.disconnect(); redis.disconnect() })
   lifecycle.addDisposer('http', () => {
     if (!server.listening) return

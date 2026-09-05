@@ -17,7 +17,7 @@
  *   4. npm run test:integration
  *
  * Run one or more owning files without enumerating the full suite:
- *   npm run test:integration -- --file eval.test.ts
+ *   npm run test:integration -- --file runtime-retirement.test.ts
  *
  * If INTEGRATION_DATABASE_URL is unset we print a one-line "skipped" and
  * exit 0 — so this script slots into CI / pre-commit hooks without
@@ -103,7 +103,6 @@ if (SUSPICIOUS.test(INTEGRATION_URL)) {
 // test target when it's imported by the test harness.
 process.env.DATABASE_URL = INTEGRATION_URL
 
-// Agent OS protocol tests inject their own Responses and Kernel doubles;
 // integration tests must never contact a real model endpoint by accident.
 // Integration specs provide explicit embedding overrides where vector values
 // are under test. Every other spec must remain hermetic and never contact the

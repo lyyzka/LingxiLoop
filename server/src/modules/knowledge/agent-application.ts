@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import type { AgentWorkItem } from '../../agent-os/types.js'
+import type { AgentActionContext } from '../../agents/contracts.js'
 import type { Queryable } from '../../db/queryable.js'
 import type { BoundedStorageReader, Storage } from '../../storage.js'
 import { createPermissionService } from '../access/public.js'
@@ -41,14 +41,14 @@ export function createKnowledgeAgentApplication(db: Queryable, infrastructure: K
     }
   }
 
-  function authorizationUserId(work: AgentWorkItem): string {
+  function authorizationUserId(work: AgentActionContext): string {
     const userId = work.authorizationUserId?.trim()
     if (!userId) throw new Error('Agent work has no persisted human authorization principal')
     return userId
   }
 
   async function projectScope(
-    work: AgentWorkItem,
+    work: AgentActionContext,
     action: 'knowledge:read' | 'knowledge:write' | 'knowledge:manage' = 'knowledge:read',
     sourceId?: string,
   ): Promise<{ projectId: string; authorizationUserId: string }> {
@@ -66,7 +66,7 @@ export function createKnowledgeAgentApplication(db: Queryable, infrastructure: K
     return { projectId, authorizationUserId: userId }
   }
 
-  async function localSources(work: AgentWorkItem, projectId: string): Promise<AgentKnowledgeSourceRow[]> {
+  async function localSources(work: AgentActionContext, projectId: string): Promise<AgentKnowledgeSourceRow[]> {
     return listAgentKnowledgeSources(db, {
       companyId: work.companyId,
       projectId,
@@ -75,12 +75,12 @@ export function createKnowledgeAgentApplication(db: Queryable, infrastructure: K
     })
   }
 
-  async function listKnowledgeSourcesForAgent(work: AgentWorkItem): Promise<unknown[]> {
+  async function listKnowledgeSourcesForAgent(work: AgentActionContext): Promise<unknown[]> {
     const { projectId } = await projectScope(work)
     return (await localSources(work, projectId)).map(agentSourceView)
   }
 
-  async function createAgentSource(work: AgentWorkItem, input: {
+  async function createAgentSource(work: AgentActionContext, input: {
     kind: 'text' | 'url' | 'file'
     title: string
     text?: string
@@ -120,17 +120,17 @@ export function createKnowledgeAgentApplication(db: Queryable, infrastructure: K
     return { id, status: 'queued' }
   }
 
-  function addKnowledgeText(work: AgentWorkItem, input: { title: string; text: string; idempotencyKey: string }) {
+  function addKnowledgeText(work: AgentActionContext, input: { title: string; text: string; idempotencyKey: string }) {
     if (!input.text.trim()) throw new Error('text is required')
     if (Buffer.byteLength(input.text) > MAX_SOURCE_BYTES) throw new Error('source exceeds 200 MB')
     return createAgentSource(work, { kind: 'text', title: input.title, text: input.text, idempotencyKey: input.idempotencyKey })
   }
 
-  async function addKnowledgeUrl(work: AgentWorkItem, input: { title: string; url: string; idempotencyKey: string }) {
+  async function addKnowledgeUrl(work: AgentActionContext, input: { title: string; url: string; idempotencyKey: string }) {
     return createAgentSource(work, { kind: 'url', title: input.title, url: await validateKnowledgeUrl(input.url), idempotencyKey: input.idempotencyKey })
   }
 
-  function addKnowledgeFile(work: AgentWorkItem, input: { title: string; storageKey: string; mime: string; size: number; idempotencyKey: string }) {
+  function addKnowledgeFile(work: AgentActionContext, input: { title: string; storageKey: string; mime: string; size: number; idempotencyKey: string }) {
     if (!input.storageKey.startsWith(`attachments/${work.companyId}/`)) {
       throw new Error('only a tenant-scoped attachment from the current conversation can be added')
     }
@@ -139,7 +139,7 @@ export function createKnowledgeAgentApplication(db: Queryable, infrastructure: K
   }
 
   async function resolveSource(
-    work: AgentWorkItem,
+    work: AgentActionContext,
     sourceId: string,
     action: 'knowledge:read' | 'knowledge:manage' = 'knowledge:read',
   ): Promise<{ projectId: string; externalId: string; authorizationUserId: string }> {
@@ -154,13 +154,13 @@ export function createKnowledgeAgentApplication(db: Queryable, infrastructure: K
     return { projectId, externalId, authorizationUserId: userId }
   }
 
-  async function retryKnowledgeSourceForAgent(work: AgentWorkItem, sourceId: string): Promise<{ status: string }> {
+  async function retryKnowledgeSourceForAgent(work: AgentActionContext, sourceId: string): Promise<{ status: string }> {
     const { projectId, authorizationUserId: userId } = await projectScope(work, 'knowledge:manage', sourceId)
     await retryKnowledgeSource(sourceId, work.companyId, projectId, userId)
     return { status: 'queued' }
   }
 
-  async function setKnowledgeSourceEnabled(work: AgentWorkItem, sourceId: string, enabled: boolean): Promise<{ enabled: boolean }> {
+  async function setKnowledgeSourceEnabled(work: AgentActionContext, sourceId: string, enabled: boolean): Promise<{ enabled: boolean }> {
     const source = await resolveSource(work, sourceId, 'knowledge:manage')
     await setAgentSourceExcluded(db, {
       sourceId,
@@ -173,7 +173,7 @@ export function createKnowledgeAgentApplication(db: Queryable, infrastructure: K
     return { enabled }
   }
 
-  async function deleteKnowledgeSourceForAgent(work: AgentWorkItem, sourceId: string): Promise<{ deleted: boolean }> {
+  async function deleteKnowledgeSourceForAgent(work: AgentActionContext, sourceId: string): Promise<{ deleted: boolean }> {
     const { projectId, authorizationUserId: userId } = await projectScope(work, 'knowledge:manage', sourceId)
     await deleteKnowledgeSource(sourceId, work.companyId, projectId, userId)
     return { deleted: true }

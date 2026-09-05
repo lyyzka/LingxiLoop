@@ -57,10 +57,11 @@ interface Room {
   updatesSinceSnapshot: number
   /** Set during cold-load to coalesce concurrent waiters. */
   loaded: Promise<void>
-  /** Serializes persistence, Redis publication, and compaction. Mutating
-   *  APIs await this promise so an infrastructure failure rejects the
-   *  originating request instead of being hidden. */
+  /** Only database persistence determines whether an edit is confirmed. */
   pendingEffects: Promise<void>
+  unsaved: Array<{ update: Uint8Array; authorId: string; originId: string }>
+  publishing: boolean
+  cursor: bigint
   /** Marked true after the doc is hydrated from DB; flips OFF doc.on('update')
    *  persistence to skip writing replays back into the log. */
   hydrated: boolean
@@ -68,6 +69,14 @@ interface Room {
 
 const COMPACT_AFTER_UPDATES = 200
 const ROOM_GRACE_MS = 60_000
+const RECOVER_INTERVAL_MS = 5_000
+const MAX_UNSAVED_BYTES = 8 * 1024 * 1024
+
+function assertRoomWritable(room: Room, additionalBytes: number): void {
+  if (room.unsaved.reduce((bytes, entry) => bytes + entry.update.byteLength, additionalBytes) > MAX_UNSAVED_BYTES) {
+    throw new Error('document persistence backlog full; retry after storage recovers')
+  }
+}
 
 export interface DocumentCollaborationBus {
   publish(event: DocumentUpdateEvent | DocumentAwarenessEvent): Promise<void>
@@ -93,6 +102,7 @@ class DocumentRoomRuntime {
   private readonly evictions = new Map<string, NodeJS.Timeout>()
   private readonly origin: string
   private busBootstrapped = false
+  private recoveryRunning = false
 
   constructor(private readonly dependencies: DocumentCollaborationDependencies) {
     this.origin = `instance:${dependencies.instanceId}`
@@ -119,15 +129,63 @@ class DocumentRoomRuntime {
     room.updatesSinceSnapshot = 0
   }
 
-  private async hydrateDoc(documentId: string, companyId: string, doc: Y.Doc): Promise<void> {
+  private async hydrateDoc(documentId: string, companyId: string, doc: Y.Doc, cursor = 0n, origin: unknown = 'hydrate'): Promise<bigint> {
     const { snapshot, tail } = await this.dependencies.transaction(async (db) => {
       await lockTenantDocument(db, documentId, companyId)
       const snapshot = await loadDocumentSnapshot(db, documentId, companyId)
-      const tail = await loadDocumentUpdatesAfter(db, documentId, companyId, snapshot.lastIncluded)
+      const tail = await loadDocumentUpdatesAfter(db, documentId, companyId, snapshot.lastIncluded > cursor ? snapshot.lastIncluded : cursor)
       return { snapshot, tail }
     })
-    if (snapshot.state) Y.applyUpdate(doc, snapshot.state, 'hydrate')
-    for (const update of tail) Y.applyUpdate(doc, update.bytes, 'hydrate')
+    if (snapshot.state && (cursor === 0n || snapshot.lastIncluded > cursor)) Y.applyUpdate(doc, snapshot.state, origin)
+    for (const update of tail) Y.applyUpdate(doc, update.bytes, origin)
+    return tail.at(-1)?.id ?? (snapshot.lastIncluded > cursor ? snapshot.lastIncluded : cursor)
+  }
+
+  private flush(room: Room): Promise<void> {
+    // A rejected request stays rejected; its delta remains queued until a later flush commits it.
+    room.pendingEffects = room.pendingEffects.catch(() => undefined).then(async () => {
+      while (room.unsaved.length) {
+        const entry = room.unsaved[0]!
+        await this.dependencies.transaction(async (db) => {
+          await lockTenantDocument(db, room.documentId, room.companyId)
+          await persistDocumentUpdate(db, {
+            documentId: room.documentId, companyId: room.companyId, authorId: entry.authorId, bytes: entry.update,
+          })
+        })
+        room.unsaved.shift()
+        room.updatesSinceSnapshot++
+        // Bound fanout to one in-flight publish per room even if Redis waits indefinitely.
+        // Skipped/missed notifications are recovered from the durable cursor below.
+        if (!room.publishing) {
+          room.publishing = true
+          void this.dependencies.bus.publish({
+            type: 'doc.update', companyId: room.companyId, documentId: room.documentId,
+            updateB64: Buffer.from(entry.update).toString('base64'), originId: entry.originId, authorId: entry.authorId,
+          }).catch((error: unknown) => console.error('[documents] fanout failed; durable replay will recover', error))
+            .finally(() => { room.publishing = false })
+        }
+      }
+    })
+    // Some Yjs updates originate from image normalization rather than an awaited API call.
+    void room.pendingEffects.catch((error: unknown) => console.error('[documents] edit not persisted; retained for retry', error))
+    return room.pendingEffects
+  }
+
+  async recover(): Promise<void> {
+    if (this.recoveryRunning) return
+    this.recoveryRunning = true
+    try {
+      for (const room of this.rooms.values()) {
+        if (!room.hydrated) continue
+        try {
+          await this.flush(room)
+          room.cursor = await this.hydrateDoc(room.documentId, room.companyId, room.doc, room.cursor, { remote: this.origin })
+          await this.maybeCompact(room)
+        } catch (error) {
+          console.error('[documents] recovery will retry', error)
+        }
+      }
+    } finally { this.recoveryRunning = false }
   }
 
   async getOrCreateRoom(documentId: string, companyId: string): Promise<Room> {
@@ -151,11 +209,14 @@ class DocumentRoomRuntime {
       hydrated: false,
       loaded: Promise.resolve(),
       pendingEffects: Promise.resolve(),
+      unsaved: [],
+      publishing: false,
+      cursor: 0n,
     }
     this.rooms.set(documentId, room)
 
     room.loaded = (async () => {
-      await this.hydrateDoc(documentId, companyId, doc)
+      room.cursor = await this.hydrateDoc(documentId, companyId, doc)
       room.hydrated = true
       doc.on('update', (update: Uint8Array, updateOrigin: unknown) => {
         if (updateOrigin === 'hydrate') return
@@ -176,24 +237,8 @@ class DocumentRoomRuntime {
           if (subscriber.originId !== originId) subscriber.onUpdate(update, originId)
         }
         if (!isRemote) {
-          room.updatesSinceSnapshot += 1
-          room.pendingEffects = room.pendingEffects.then(async () => {
-            await this.dependencies.transaction(async (db) => {
-              await lockTenantDocument(db, documentId, room.companyId)
-              await persistDocumentUpdate(db, {
-                documentId, companyId: room.companyId, authorId, bytes: update,
-              })
-            })
-            await this.dependencies.bus.publish({
-              type: 'doc.update',
-              companyId: room.companyId,
-              documentId,
-              updateB64: Buffer.from(update).toString('base64'),
-              originId,
-              authorId,
-            })
-            await this.maybeCompact(room)
-          })
+          room.unsaved.push({ update, authorId, originId })
+          void this.flush(room)
         }
       })
       normalizeMarkdownImageParagraphs(doc, pmFragment(doc), {
@@ -209,7 +254,8 @@ class DocumentRoomRuntime {
       await room.loaded
       return room
     } catch (error) {
-      if (this.rooms.get(documentId) === room) this.rooms.delete(documentId)
+      if (room.unsaved.length === 0 && this.rooms.get(documentId) === room) this.rooms.delete(documentId)
+      else room.loaded = Promise.resolve()
       throw error
     }
   }
@@ -229,7 +275,9 @@ class DocumentRoomRuntime {
     room.subs.delete(subscriber)
     if (room.subs.size !== 0) return
     const timer = setTimeout(() => {
-      if ((this.rooms.get(documentId)?.subs.size ?? 0) === 0) {
+      if (room.unsaved.length > 0) {
+        this.unsubscribe(documentId, subscriber)
+      } else if ((this.rooms.get(documentId)?.subs.size ?? 0) === 0) {
         this.rooms.delete(documentId)
         this.evictions.delete(documentId)
       }
@@ -246,8 +294,10 @@ class DocumentRoomRuntime {
     update: Uint8Array,
   ): Promise<void> {
     const room = await this.getOrCreateRoom(documentId, companyId)
+    assertRoomWritable(room, update.byteLength)
+    const previous = room.pendingEffects
     Y.applyUpdate(room.doc, update, { originId, authorId } as never)
-    await room.pendingEffects
+    await (previous === room.pendingEffects ? this.flush(room) : room.pendingEffects)
   }
 
   private applyRemoteUpdate(
@@ -283,6 +333,8 @@ class DocumentRoomRuntime {
   async boot(): Promise<void> {
     if (this.busBootstrapped) return
     this.busBootstrapped = true
+    const recovery = setInterval(() => { void this.recover() }, RECOVER_INTERVAL_MS)
+    recovery.unref()
     try {
       await this.dependencies.bus.subscribe((event) => {
         if (event.originId === this.origin) return
@@ -300,6 +352,7 @@ class DocumentRoomRuntime {
       })
     } catch (error) {
       this.busBootstrapped = false
+      clearInterval(recovery)
       throw error
     }
   }
@@ -703,6 +756,7 @@ async function applyAgentEdit(
 ): Promise<AgentDocumentEditResult> {
   const room = await runtime.getOrCreateRoom(documentId, companyId)
   const fragment = pmFragment(room.doc)
+  assertRoomWritable(room, Buffer.byteLength(JSON.stringify(ops)))
   let replaced = 0
   let imagePlaced: 'absolute' | 'anchor' | 'anchor-missed' | null = null
   let imagesDeleted = 0
@@ -820,6 +874,7 @@ export function createDocumentCollaborationApplication(dependencies: DocumentCol
     applyLocalUpdate: runtime.applyLocalUpdate.bind(runtime),
     broadcastAwareness: runtime.broadcastAwareness.bind(runtime),
     boot: runtime.boot.bind(runtime),
+    recover: runtime.recover.bind(runtime),
     instanceOrigin: runtime.instanceOrigin.bind(runtime),
     readDocumentText: (documentId: string, companyId: string) => (
       readDocumentText(runtime, dependencies.imageStorage, documentId, companyId)

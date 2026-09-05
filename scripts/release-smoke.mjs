@@ -53,12 +53,12 @@ try {
 
   const dependencyHealth = await request('/api/health/dependencies', { authenticated: false })
   if (!dependencyHealth?.ok || !Object.values(dependencyHealth.dependencies ?? {}).every(Boolean)) {
-    throw new Error('/api/health/dependencies did not report database, Redis and Agent OS healthy')
+    throw new Error('/api/health/dependencies did not report configured product dependencies healthy')
   }
 
   const meta = await request('/api/meta', { authenticated: false })
-  if (meta?.product !== 'LingxiLoop' || meta?.reasoningRuntime !== 'agent-os') {
-    throw new Error('/api/meta did not report the LingxiLoop + Agent OS production contract')
+  if (meta?.product !== 'LingxiLoop' || meta?.reasoningRuntime !== null) {
+    throw new Error('/api/meta did not report the LingxiLoop runtime-pending contract')
   }
   if (expectedSha && meta.commitSha !== expectedSha) {
     throw new Error(`/api/meta commit mismatch: expected ${expectedSha}, got ${meta.commitSha}`)

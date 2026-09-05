@@ -4,7 +4,7 @@
  * This is the only Agent OS/IM entry point into Learning application use cases.
  * Persistence remains private to capability repositories behind this surface.
  */
-import type { AgentWorkItem, HostAction } from '../../agent-os/types.js'
+import type { AgentActionContext, AgentAction } from '../../agents/contracts.js'
 import { pool } from '../../db/pool.js'
 import type { Queryable } from '../../db/queryable.js'
 import { withTransaction } from '../../db/transaction.js'
@@ -141,11 +141,11 @@ function teacherTransaction(db: Queryable) {
     : work(db)
 }
 
-export function loadTeacherTurnContext(work: AgentWorkItem, db: Queryable = pool) {
+export function loadTeacherTurnContext(work: AgentActionContext, db: Queryable = pool) {
   return loadTeacherTurnContextApplication(work, db)
 }
 
-export function describeTeacherAction(work: AgentWorkItem, action: HostAction, db: Queryable = pool) {
+export function describeTeacherAction(work: AgentActionContext, action: AgentAction, db: Queryable = pool) {
   return describeTeacherActionApplication(work, action, db)
 }
 
@@ -157,7 +157,7 @@ export function assertTeacherApprovalFresh(
 }
 
 export function executeTeacherAction(
-  work: AgentWorkItem,
+  work: AgentActionContext,
   method: string,
   args: Record<string, unknown>,
   db: Queryable = pool,
@@ -197,7 +197,7 @@ async function syncLearningMessages(input: {
 }
 
 export function startMission(
-  work: AgentWorkItem,
+  work: AgentActionContext,
   input: {
     goal: string
     successCriteria: string
@@ -241,7 +241,7 @@ export function startMission(
 }
 
 export function recordAttempt(
-  work: AgentWorkItem,
+  work: AgentActionContext,
   input: {
     activityId?: string
     missionStepId?: string
@@ -262,7 +262,7 @@ export function recordAttempt(
   })
 }
 
-export function loadLearningTurnContext(work: AgentWorkItem, actorId?: string) {
+export function loadLearningTurnContext(work: AgentActionContext, actorId?: string) {
   return loadLearningContext(pool, { syncMessages: syncLearningMessages }, {
     companyId: work.companyId,
     channelId: work.channelId,
@@ -273,7 +273,7 @@ export function loadLearningTurnContext(work: AgentWorkItem, actorId?: string) {
 }
 
 export function proposeEvaluation(
-  work: AgentWorkItem,
+  work: AgentActionContext,
   input: {
     attemptId: string
     demonstratedLevel: number

@@ -1,6 +1,6 @@
 /** Pulse application orchestration. Persistence is owned by teacher-* repositories. */
 import { createHash } from 'node:crypto'
-import type { AgentWorkItem, HostAction } from '../../agent-os/types.js'
+import type { AgentActionContext, AgentAction } from '../../agents/contracts.js'
 import type { Queryable } from '../../db/queryable.js'
 import type { ImChannelProfile } from '../../im/types.js'
 import { wukongClient } from '../../im/wukong.js'
@@ -148,7 +148,7 @@ interface TeacherScope {
   mode: 'teacher' | 'routine' | 'approval'
 }
 
-async function resolveTeacherTriggerAuthor(work: AgentWorkItem, db: Queryable): Promise<string | undefined> {
+async function resolveTeacherTriggerAuthor(work: AgentActionContext, db: Queryable): Promise<string | undefined> {
   if (work.reason === 'routine') return undefined
   if (work.reason === 'resume' && work.triggerClientMsgNo.startsWith('approval:')) {
     return findTeacherApprovalTriggerAuthor(db, {
@@ -162,7 +162,7 @@ async function resolveTeacherTriggerAuthor(work: AgentWorkItem, db: Queryable): 
   return messages.find((message) => message.clientMsgNo === work.triggerClientMsgNo)?.fromUid
 }
 
-export async function resolveTeacherScope(work: AgentWorkItem, db: Queryable): Promise<TeacherScope> {
+export async function resolveTeacherScope(work: AgentActionContext, db: Queryable): Promise<TeacherScope> {
   const row = await findTeacherScopeBinding(db, work.companyId, work.agentId, work.channelId)
   if (!row) { inc('learning.teacher_agent.authorization_denied', { reason: 'scope' }); throw new Error('teacher Agent is not registered for this room') }
   if (row.room_status !== 'active') throw new Error('teacher room is closed')
@@ -195,7 +195,7 @@ async function digestSchedule(scope: Pick<TeacherScope, 'companyId'|'agentId'|'r
     ...(weekday?{weekday}:{}),status:row.status==='active'?'active':'paused',...(row.next_run_at?{nextRunAt:String(row.next_run_at)}:{}) }
 }
 
-export async function loadTeacherTurnContext(work: AgentWorkItem, db: Queryable): Promise<TeacherTurnContext | undefined> {
+export async function loadTeacherTurnContext(work: AgentActionContext, db: Queryable): Promise<TeacherTurnContext | undefined> {
   let scope:TeacherScope
   try { scope=await resolveTeacherScope(work,db) } catch { return undefined }
   const [counts,digest]=await Promise.all([
@@ -375,7 +375,7 @@ async function configureDigest(scope:TeacherScope,args:Record<string,unknown>,db
 
 export interface TeacherApprovalMetadata {requestedBy:string;summary:string;scope:Record<string,unknown>;preview:Record<string,unknown>}
 
-export async function describeTeacherAction(work:AgentWorkItem,action:HostAction,db:Queryable):Promise<TeacherApprovalMetadata|undefined>{
+export async function describeTeacherAction(work:AgentActionContext,action:AgentAction,db:Queryable):Promise<TeacherApprovalMetadata|undefined>{
   if(!action.action.startsWith('teacher.'))return undefined
   const scope=await resolveTeacherScope(work,db)
   const method=action.action.slice('teacher.'.length)
@@ -437,7 +437,7 @@ export async function assertTeacherApprovalFresh(input:{channelId:string;company
 
 export function teacherActionRequiresApproval(action:string):boolean{return action.startsWith('teacher.')&&APPROVAL_METHODS.has(action.slice('teacher.'.length))}
 
-export async function executeTeacherAction(work:AgentWorkItem,method:string,args:Record<string,unknown>,db:Queryable,transaction:TeacherTransaction):Promise<unknown>{
+export async function executeTeacherAction(work:AgentActionContext,method:string,args:Record<string,unknown>,db:Queryable,transaction:TeacherTransaction):Promise<unknown>{
   const scope=await resolveTeacherScope(work,db)
   if(scope.mode==='routine'&&WRITE_METHODS.has(method))throw new Error('scheduled teacher summaries are read-only')
   if(method==='current')return loadTeacherTurnContext(work,db)

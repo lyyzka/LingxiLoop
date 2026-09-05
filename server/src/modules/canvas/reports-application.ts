@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import type { CanvasActivityKind } from '../../../../src/lib/canvasEventKinds.js'
-import type { AgentExecutionRole } from '../../agent-os/types.js'
+import type { AgentExecutionRole } from '../../agents/contracts.js'
 import type { Queryable } from '../../db/queryable.js'
 import type { CanvasEvent } from '../../redis.js'
 import { createEvidenceRecordInTransaction, createEvidenceWithLinksInTransaction } from '../evidence/public.js'

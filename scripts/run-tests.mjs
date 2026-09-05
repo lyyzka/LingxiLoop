@@ -6,10 +6,9 @@ import { resolve } from 'node:path'
 const testsByScope = {
   server: [
     'server/src/__tests__/gateway-auth.test.ts',
+    'server/src/__tests__/document-collaboration.test.ts',
     'server/src/__tests__/admin-platform.test.ts',
     'server/src/__tests__/api-module-boundaries.test.ts',
-    'server/src/__tests__/agent-os-authorization.test.ts',
-    'server/src/__tests__/agent-os-tool.test.ts',
     'server/src/__tests__/domain-events.test.ts',
     'server/src/__tests__/entitlement-resolver.test.ts',
     'server/src/__tests__/llm-ledger.test.ts',

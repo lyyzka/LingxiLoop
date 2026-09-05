@@ -184,71 +184,7 @@ test('[integration] reply continues the thread when the latest row is our own ou
     `follow-up TO should preserve the parent's recipients, got: ${JSON.stringify(rows[0].to_addrs)}`)
 })
 
-test('[integration] lingxiloop reply CLI on an email convo uses the injected provider', async () => {
-  // Mirror of the HTTP-side auto-promote test, but exercising the
-  // `runCli` entrypoint that the agent's `bash` tool actually shells
-  // into. Pre-fix this used to silently write a kind='text' row and
-  // the external recipient never saw the reply — same bug class as
-  // the chat-side regression, different code path.
-  const { runCli } = await import('../agents/cli.js')
-  const { conversationId, agentId } = await seedEmailConvoWithInbound()
 
-  const res = await runCli(['--as', agentId, 'reply', conversationId, 'taking a look now'])
-  assert.equal(res.ok, true, `runCli failed: ${res.text}`)
-  assert.match(res.text, /replied via email/, 'CLI reports the email auto-promote path')
-  assert.equal(res.sideEffects?.[0]?.event, 'message.posted')
-  assert.equal(res.sideEffects?.[0]?.command, 'reply')
-  assert.equal(res.sideEffects?.[0]?.medium, 'email')
-
-  // An outbound email_messages row was written for the agent.
-  const { rows: outbound } = await pool.query<{ direction: string; transport_status: string; body: string; auto_submitted: boolean | null }>(
-    `SELECT direction, transport_status, body, auto_submitted
-       FROM email_messages
-      WHERE conversation_id = $1 AND author_id = $2
-      ORDER BY created_at DESC`,
-    [conversationId, agentId],
-  )
-  assert.equal(outbound.length, 1, 'exactly one outbound row for the agent')
-  assert.equal(outbound[0].direction, 'out')
-  assert.equal(outbound[0].transport_status, 'sent')
-  assert.equal(outbound[0].body, 'taking a look now')
-  // CLI path stamps autoSubmitted=true → RFC 3834 Auto-Submitted header.
-  assert.equal(outbound[0].auto_submitted, true, 'agent CLI replies are auto-submitted=true')
-
-})
-
-test('[integration] lingxiloop reply CLI on a domain discussion does not auto-promote to email', async () => {
-  // Mirror of the HTTP-side regression test. A direct chat reply
-  // through the CLI must NOT accidentally trigger the email path.
-  const { runCli } = await import('../agents/cli.js')
-  const { companyId, projectId, agentId } = await seedCompanyWithAgent()
-  await seedUserMembership(ME_USER_ID, companyId)
-  await pool.query(
-    `INSERT INTO project_memberships(company_id,project_id,user_id,role)
-     VALUES ($1,$2,$3,'OWNER')`,
-    [companyId, projectId, ME_USER_ID],
-  )
-  const convId = `direct-cli-${Date.now()}`
-  await pool.query(
-    `INSERT INTO conversations (id, kind, title, members, company_id, project_id, topic)
-       VALUES ($1, 'group', $2, $3::jsonb, $4, $5, $6)`,
-    [convId, 'Domain discussion', JSON.stringify([ME_USER_ID, agentId]), companyId, projectId, 'discussion'],
-  )
-  await pool.query(
-    `INSERT INTO im_channel_bindings(channel_id,company_id,profile)
-     VALUES ($1,$2,$3::jsonb)`,
-    [convId, companyId, JSON.stringify({ channelId: convId, channelType: 2, title: 'Domain discussion', members: [ME_USER_ID, agentId] })],
-  )
-
-  const res = await runCli(['--as', agentId, 'reply', convId, 'plain chat reply'])
-  assert.equal(res.ok, true, `runCli failed: ${res.text}`)
-  assert.doesNotMatch(res.text, /email/i, 'CLI must NOT report an email path on a direct convo')
-
-  const { rows: emailRows } = await pool.query(
-    `SELECT 1 FROM email_messages WHERE conversation_id = $1`, [convId],
-  )
-  assert.equal(emailRows.length, 0, 'no email_messages row for a direct-kind convo')
-})
 
 test('[integration] non-email conversation POST is retired in favor of WuKongIM', async () => {
   // Chat messages are written through the WuKongIM SDK. The legacy REST

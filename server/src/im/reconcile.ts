@@ -1,5 +1,5 @@
 import { pool } from '../db/pool.js'
-import type { LingxiMessageV1 } from '../agent-os/types.js'
+import type { LingxiMessageV1 } from './message-types.js'
 import { wukongClient } from './wukong.js'
 import type { WorkerTaskHandle } from '../runtime/lifecycle.js'
 

@@ -19,7 +19,7 @@ export default defineWorkersConfig(async () => ({
             BOOTSTRAP_ADMIN_TOKEN: 'test-bootstrap-secret',
             OPENSHIP_PAT: 'test-openship-pat',
             OPENSHIP_PROJECT_IDS: 'proj_test-a,proj_test-b',
-            OPENSHIP_IMAGE_TARGETS: 'server:proj_test-a:svc_app-a,agent-os:proj_test-a:svc_agent-a,wukongim:proj_test-a:svc_wukong,open-notebook:proj_test-b:svc_notebook,gateway:proj_test-b:svc_gateway',
+            OPENSHIP_IMAGE_TARGETS: 'server:proj_test-a:svc_app-a,wukongim:proj_test-a:svc_wukong,open-notebook:proj_test-b:svc_notebook,gateway:proj_test-b:svc_gateway',
             ALIYUN_OTP_EMAIL_PASSWORD: 'test-email-password',
             TURNSTILE_SECRET_KEY: '1x0000000000000000000000000000000AA',
           },
