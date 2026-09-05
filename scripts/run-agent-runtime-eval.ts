@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   AgentRuntime,
   ApprovalPendingError,
+  KernelManager,
   type KernelExecutionOptions,
   type KernelExecutor,
   type HostPort,
@@ -236,6 +238,7 @@ class EvalHost implements HostPort {
   readonly events: RunEvent[] = []
   readonly messages: AssistantMessage[] = []
   readonly outcomes = new Map<string, WorkCompletion>()
+  readonly actionResults = new Map<string, HostActionResult>()
   actionHandler: (action: HostAction) => Promise<HostActionResult> = async () => ({ ok: true, value: null })
 
   async claimWork(): Promise<WorkItem | null> { return null }
@@ -257,7 +260,9 @@ class EvalHost implements HostPort {
   }
   async executeAction(_work: WorkItem, action: HostAction): Promise<HostActionResult> {
     this.actions.push(structuredClone(action))
-    return this.actionHandler(action)
+    const result = await this.actionHandler(action)
+    this.actionResults.set(action.idempotencyKey, structuredClone(result))
+    return result
   }
   async emitEvent(_work: WorkItem, event: RunEvent): Promise<void> { this.events.push(structuredClone(event)) }
   async commitMessage(_work: WorkItem, message: AssistantMessage): Promise<void> { this.messages.push(structuredClone(message)) }
@@ -464,7 +469,13 @@ function citationsFromEvents(events: RunEvent[]): EvalCitationObservation[] {
   })
 }
 
-async function executeRuntimeCase(testCase: EvalCaseInput): Promise<EvalObservation> {
+export interface RuntimeEvalExecutionOptions {
+  model?: AgentModelDriver
+  realKernel?: boolean
+  homesRoot?: string
+}
+
+export async function executeRuntimeCase(testCase: EvalCaseInput, options: RuntimeEvalExecutionOptions = {}): Promise<EvalObservation> {
   const scenario = testCase.runtimeScenario ?? ''
   const item = work(testCase.caseId, scenario === 'canvas-report-gate'
     ? {
@@ -937,24 +948,37 @@ async function executeRuntimeCase(testCase: EvalCaseInput): Promise<EvalObservat
 
   runtimeContext.messages[0].body = input
   host.contexts.set(item.id, runtimeContext)
-  const model = new ContractCheckingModel(turns)
+  const model = options.model ?? new ContractCheckingModel(turns)
+  const kernel = options.realKernel
+    ? new KernelManager({ execute: (workItem, action) => host.executeAction(workItem, action) }, {
+        homesRoot: options.homesRoot,
+        runnerPath: resolve('third_party/lingxios/kernel/runner.py'),
+        executionTimeoutMs: 120_000,
+        maxKernels: 1,
+        allowNetwork: false,
+      })
+    : new HostBridgeKernel(host, actionResults)
   const startedAt = Date.now()
-  await new AgentRuntime(host, model, new HostBridgeKernel(host, actionResults), {
-    policy: new LingxiLoopRuntimePolicy(),
-    heartbeatMs: 60_000,
-    maxHops: 4,
-    promptContractVersion: 'prompt-v7',
-  }).runWork(toLingxiOSWork(item))
+  try {
+    await new AgentRuntime(host, model, kernel, {
+      policy: new LingxiLoopRuntimePolicy(),
+      heartbeatMs: 60_000,
+      maxHops: options.realKernel ? 12 : 4,
+      promptContractVersion: 'prompt-v7',
+    }).runWork(toLingxiOSWork(item))
+  } finally {
+    if (kernel instanceof KernelManager) kernel.close()
+  }
   const latencyMs = Math.max(0, Date.now() - startedAt)
   const outcome = host.outcomes.get(item.id)
   if (!outcome) throw new Error(`${testCase.caseId} did not complete through the Agent OS host`)
   if (outcome.status === 'failed') throw new Error(
     `${testCase.caseId} failed in Agent OS: ${outcome.error ?? 'unknown error'}; actions=${host.actions.map((action) => action.action).join(',')}; mission=${runtimeContext.learningContext?.activeMission?.status ?? 'none'}`,
   )
-  model.assertComplete()
+  if (model instanceof ContractCheckingModel) model.assertComplete()
   const answer = outcome.resultText ?? host.messages.find((message) => message.runId === item.id)?.body ?? ''
   const actionCitations = host.actions.flatMap((action) => {
-    const result = actionResults.get(action.idempotencyKey)
+    const result = host.actionResults.get(action.idempotencyKey)
     return extractKnowledgeCitations(action.action, {
       __hostActionResult: true,
       value: result?.value,
@@ -978,7 +1002,7 @@ async function executeRuntimeCase(testCase: EvalCaseInput): Promise<EvalObservat
     citedSourceIds: [...new Set(citedSourceIds)],
     citations,
     toolCalls: host.actions.map((action) => {
-      const result = actionResults.get(action.idempotencyKey)
+      const result = host.actionResults.get(action.idempotencyKey)
       return {
         id: action.idempotencyKey,
         name: action.action,
@@ -1009,7 +1033,7 @@ async function executeRuntimeCase(testCase: EvalCaseInput): Promise<EvalObservat
     }, 0),
     costUsd: 0,
     ...(outcome.error ? { error: outcome.error } : {}),
-    metadata: { executionMode: 'agent-os-runtime', scriptedModel: true, network: false },
+    metadata: { executionMode: 'agent-os-runtime', scriptedModel: !options.model, realKernel: Boolean(options.realKernel), network: false },
   }
   const serialized = JSON.stringify(observation)
   for (const secret of ['AUTO_EVIDENCE_SECRET', 'DYNAMIC_SECRET_EXCERPT']) {
@@ -1018,30 +1042,34 @@ async function executeRuntimeCase(testCase: EvalCaseInput): Promise<EvalObservat
   return observation
 }
 
-const suitePath = resolve(option('--suite'))
-const baselinePath = resolve(option('--baseline'))
-const reportPath = resolve(option('--report'))
-const suite = validateEvalRunInput(JSON.parse(await readFile(suitePath, 'utf8')), { allowRuntimeScenarios: true })
-const baseline = validateEvalBaseline(JSON.parse(await readFile(baselinePath, 'utf8')))
-suite.target = {
-  ...(suite.target ?? {}),
-  ...(process.env.GITHUB_SHA ? { commitSha: process.env.GITHUB_SHA } : {}),
+async function main(): Promise<void> {
+  const suitePath = resolve(option('--suite'))
+  const baselinePath = resolve(option('--baseline'))
+  const reportPath = resolve(option('--report'))
+  const suite = validateEvalRunInput(JSON.parse(await readFile(suitePath, 'utf8')), { allowRuntimeScenarios: true })
+  const baseline = validateEvalBaseline(JSON.parse(await readFile(baselinePath, 'utf8')))
+  suite.target = {
+    ...(suite.target ?? {}),
+    ...(process.env.GITHUB_SHA ? { commitSha: process.env.GITHUB_SHA } : {}),
+  }
+  const observations = new Map<string, EvalObservation>()
+  for (const testCase of suite.cases) observations.set(testCase.caseId, await executeRuntimeCase(testCase))
+  const report = evaluateRun(suite, observations)
+  const gate = compareEvalReport(report, baseline)
+  const artifact = {
+    schemaVersion: 'lingxiloop.eval-artifact.v1',
+    executionMode: 'agent-os-runtime',
+    suitePath,
+    baselinePath,
+    report,
+    gate,
+  }
+  await mkdir(dirname(reportPath), { recursive: true })
+  await writeFile(reportPath, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8')
+  const markdown = evalGateMarkdown(report, baseline, gate)
+  process.stdout.write(markdown)
+  if (process.env.GITHUB_STEP_SUMMARY) await writeFile(process.env.GITHUB_STEP_SUMMARY, markdown, { flag: 'a' })
+  if (!gate.passed) process.exitCode = 1
 }
-const observations = new Map<string, EvalObservation>()
-for (const testCase of suite.cases) observations.set(testCase.caseId, await executeRuntimeCase(testCase))
-const report = evaluateRun(suite, observations)
-const gate = compareEvalReport(report, baseline)
-const artifact = {
-  schemaVersion: 'lingxiloop.eval-artifact.v1',
-  executionMode: 'agent-os-runtime',
-  suitePath,
-  baselinePath,
-  report,
-  gate,
-}
-await mkdir(dirname(reportPath), { recursive: true })
-await writeFile(reportPath, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8')
-const markdown = evalGateMarkdown(report, baseline, gate)
-process.stdout.write(markdown)
-if (process.env.GITHUB_STEP_SUMMARY) await writeFile(process.env.GITHUB_STEP_SUMMARY, markdown, { flag: 'a' })
-if (!gate.passed) process.exitCode = 1
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) await main()

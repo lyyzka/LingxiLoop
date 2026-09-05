@@ -77,6 +77,7 @@ test('Eval observations redact message bodies and secrets before report persiste
       output: { stderr: sentinel },
     }],
     error: 'provider rejected sk-secretvalue8374',
+    judgments: [{ scorer: 'ClosedQA', score: 0.9, passed: true, model: 'judge', rationale: `ok sk-secretvalue8374 ${'x'.repeat(600)}` }],
     metadata: { authorization: `Bearer ${sentinel}` },
   })
   const serialized = JSON.stringify(sanitized)
@@ -86,6 +87,7 @@ test('Eval observations redact message bodies and secrets before report persiste
   assert.match(serialized, /source-1/)
   assert.equal(sanitized.input, '[redacted]')
   assert.equal(sanitized.answer, '[redacted]')
+  assert.ok((sanitized.judgments?.[0].rationale.length ?? 0) <= 500)
 })
 
 test('golden gate fails a case and stage regression even when the run minimum still passes', () => {

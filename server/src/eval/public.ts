@@ -5,3 +5,4 @@ export {
   getEvalDashboard,
   getEvalRunDetail,
 } from './service.js'
+export { createEvalJob, getEvalJob, listEvalJobs } from './jobs.js'

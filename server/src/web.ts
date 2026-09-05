@@ -18,6 +18,7 @@ import { wukongClient } from './im/wukong.js'
 import { Lifecycle, type ServiceHandle } from './runtime/lifecycle.js'
 import { openNotebookEmbeddingRouter } from './modules/knowledge/embedding-proxy.js'
 import { errorHandler } from './http/errors.js'
+import { evalCallbackRouter } from './eval/callback-router.js'
 
 export async function startWebProcess(): Promise<ServiceHandle> {
   // Construct every mandatory infrastructure adapter before exposing HTTP.
@@ -60,6 +61,7 @@ export async function startWebProcess(): Promise<ServiceHandle> {
   // becomes a no-op for these requests.
   app.use('/webhooks/email', resendInboundEmailRouter)
   app.use('/webhooks/wukong', wukongWebhookRouter)
+  app.use('/api/internal/eval', evalCallbackRouter, errorHandler)
 
   // Keep legacy JSON payloads bounded independently from the 200 MB upload
   // policy. File uploads PUT directly to R2 and never enter this parser.

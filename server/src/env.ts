@@ -59,6 +59,13 @@ export const env = {
    * loop, context compaction, and retained learning utilities.
    */
   OPENAI_MODEL: DEFAULT_MODEL,
+  EVAL_CANDIDATE_API_KEY: process.env.EVAL_CANDIDATE_API_KEY?.trim() || process.env.OPENAI_API_KEY || '',
+  EVAL_CANDIDATE_BASE_URL: process.env.EVAL_CANDIDATE_BASE_URL?.trim() || process.env.OPENAI_BASE_URL?.trim() || 'https://api.openai.com/v1',
+  EVAL_CANDIDATE_MODEL: process.env.EVAL_CANDIDATE_MODEL?.trim() || DEFAULT_MODEL,
+  EVAL_JUDGE_API_KEY: process.env.EVAL_JUDGE_API_KEY?.trim() || '',
+  EVAL_JUDGE_BASE_URL: process.env.EVAL_JUDGE_BASE_URL?.trim() || 'https://api.openai.com/v1',
+  EVAL_JUDGE_MODEL: process.env.EVAL_JUDGE_MODEL?.trim() || '',
+  EVAL_CI_HMAC_SECRET: process.env.EVAL_CI_HMAC_SECRET?.trim() || '',
   OPENAI_EMBEDDING_MODEL: required('OPENAI_EMBEDDING_MODEL'),
   OPENAI_IMAGE_MODEL: process.env.OPENAI_IMAGE_MODEL?.trim() || '',
   /**

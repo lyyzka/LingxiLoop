@@ -12,6 +12,7 @@ import type {
 } from './contracts.js'
 import { EVAL_DIMENSIONS } from './contracts.js'
 import { evaluateRun } from './evaluator.js'
+import { finalizeLiveReport, type LiveEvalProfile } from './live.js'
 import { evalPersistence } from './facade.js'
 import type {
   AgentEventRow,
@@ -25,6 +26,8 @@ import {
   extractKnowledgeCitations,
   sanitizeEvalMetadata,
   sanitizeEvalObservation,
+  sanitizeEvalStage,
+  sanitizeEvalText,
   sanitizeHostActionArgs,
   sanitizeHostActionResult,
 } from './trace.js'
@@ -432,7 +435,13 @@ function runSource(input: EvalRunInput): string {
   return historical === input.cases.length ? 'agent-os' : 'mixed'
 }
 
-export async function createEvalRun(input: EvalRunInput, createdBy: string): Promise<{ id: string; report: EvalRunReport }> {
+export async function prepareEvalRun(input: EvalRunInput, createdBy: string): Promise<{
+  id: string
+  report: EvalRunReport
+  input: EvalRunInput
+  createdBy: string
+  source: string
+}> {
   if (input.baselineRunId) {
     const baselineSuite = await evalPersistence.findBaselineSuite(input.baselineRunId)
     if (!baselineSuite) throw Object.assign(new Error('baseline eval run not found'), { status: 404 })
@@ -452,22 +461,34 @@ export async function createEvalRun(input: EvalRunInput, createdBy: string): Pro
       ...(!input.target?.model && observedModels.length ? { model: observedModels.length === 1 ? observedModels[0] : 'mixed' } : {}),
     },
   }
-  const evaluatedReport = evaluateRun(effectiveInput, observations)
+  const deterministicReport = evaluateRun(effectiveInput, observations)
+  const liveProfile = jsonRecord(input.metadata).liveProfile
+  const evaluatedReport = liveProfile === 'core' || liveProfile === 'full'
+    ? finalizeLiveReport(deterministicReport, liveProfile as LiveEvalProfile)
+    : deterministicReport
   const report: EvalRunReport = {
     ...evaluatedReport,
     cases: evaluatedReport.cases.map((item) => ({
       ...item,
       observation: sanitizeEvalObservation(item.observation),
+      stages: item.stages.map(sanitizeEvalStage),
+      failureReasons: item.failureReasons.map(sanitizeEvalText),
     })),
   }
   const id = `eval-${randomUUID()}`
-  await evalPersistence.persistEvalRun({
+  return {
     id,
     report,
     input: { ...input, metadata: sanitizeEvalMetadata(input.metadata) },
     createdBy,
     source: runSource(input),
-  })
+  }
+}
+
+export async function createEvalRun(input: EvalRunInput, createdBy: string): Promise<{ id: string; report: EvalRunReport }> {
+  const prepared = await prepareEvalRun(input, createdBy)
+  await evalPersistence.persistEvalRun(prepared)
+  const { id, report } = prepared
   return { id, report }
 }
 
@@ -565,6 +586,8 @@ export async function getEvalDashboard(args: { suiteKey?: string; limit?: number
 export async function getEvalRunDetail(id: string): Promise<EvalDashboardRun & { cases: Array<{
   id: string
   caseId: string
+  scenarioKey: string
+  sampleIndex: number
   name: string
   position: number
   sourceAgentRunId: string | null
@@ -596,6 +619,8 @@ export async function getEvalRunDetail(id: string): Promise<EvalDashboardRun & {
       return {
         id: row.id,
         caseId: row.case_key,
+        scenarioKey: row.scenario_key,
+        sampleIndex: row.sample_index,
         name: row.name,
         position: row.position,
         sourceAgentRunId: row.source_agent_run_id,

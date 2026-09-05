@@ -617,6 +617,8 @@ export function evaluateCase(input: EvalCaseInput, observation: EvalObservation,
     { expected: threshold, actual: score })], { score, threshold }, 1))
   return {
     caseId: input.caseId,
+    scenarioKey: input.scenarioKey ?? input.caseId,
+    sampleIndex: input.sampleIndex ?? 0,
     name: input.name?.trim() || input.caseId,
     sourceAgentRunId: input.sourceAgentRunId ?? null,
     status,

@@ -112,6 +112,8 @@ export interface DashboardRunRow {
 export interface EvalCaseRow {
   id: string
   case_key: string
+  scenario_key: string
+  sample_index: number
   name: string
   position: number
   source_agent_run_id: string | null
@@ -210,9 +212,9 @@ async function insertCase(db: Queryable, runId: string, item: EvalCaseReport, po
   const caseId = `eval-case-${randomUUID()}`
   await db.query(
     `INSERT INTO eval_cases
-       (id,eval_run_id,case_key,name,position,source_agent_run_id,status,score,observation,expectations,failure_reasons)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb)`,
-    [caseId, runId, item.caseId, item.name, position, item.sourceAgentRunId, item.status, item.score,
+       (id,eval_run_id,case_key,scenario_key,sample_index,name,position,source_agent_run_id,status,score,observation,expectations,failure_reasons)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb)`,
+    [caseId, runId, item.caseId, item.scenarioKey, item.sampleIndex, item.name, position, item.sourceAgentRunId, item.status, item.score,
       JSON.stringify(item.observation), JSON.stringify(item.expectations), JSON.stringify(item.failureReasons)],
   )
   for (const [stagePosition, stage] of item.stages.entries()) {

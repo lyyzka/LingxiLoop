@@ -88,6 +88,16 @@ export interface EvalArtifactObservation {
   title?: string
 }
 
+export type EvalJudgmentScorer = 'ClosedQA' | 'Factuality' | 'AnswerRelevancy' | 'Faithfulness'
+
+export interface EvalJudgmentObservation {
+  scorer: EvalJudgmentScorer
+  score: number
+  passed: boolean
+  model: string
+  rationale: string
+}
+
 export type EvalTraceKind = 'input' | 'decision' | 'model' | 'ipython' | 'host_action' | 'approval' | 'canvas' | 'answer'
 export interface EvalTraceEvent {
   id: string
@@ -122,6 +132,7 @@ export interface EvalObservation {
   agentTurns?: EvalAgentTurnObservation[]
   approvals?: EvalApprovalObservation[]
   artifacts?: EvalArtifactObservation[]
+  judgments?: EvalJudgmentObservation[]
   trace?: EvalTraceEvent[]
   taskCompletion?: { completed?: boolean; completionRate?: number; outcome?: string }
   policyViolations?: string[]
@@ -222,6 +233,8 @@ export interface EvalCaseExpectations {
 
 export interface EvalCaseInput {
   caseId: string
+  scenarioKey?: string
+  sampleIndex?: number
   name?: string
   sourceAgentRunId?: string
   /** Versioned deterministic executor scenario resolved by a local/CI runtime harness. */
@@ -255,6 +268,8 @@ export interface EvalStageResult {
 
 export interface EvalCaseReport {
   caseId: string
+  scenarioKey: string
+  sampleIndex: number
   name: string
   sourceAgentRunId: string | null
   status: EvalStatus
@@ -352,6 +367,7 @@ function validateObservation(value: unknown, path: string): void {
     ['agentTurns', 'agentId'],
     ['approvals', 'id'],
     ['artifacts', 'kind'],
+    ['judgments', 'scorer'],
     ['trace', 'id'],
   ] as const) {
     const items = value[key]
@@ -359,6 +375,14 @@ function validateObservation(value: unknown, path: string): void {
     if (!Array.isArray(items) || items.some((item) => !isObject(item) || typeof item[identity] !== 'string' || !item[identity])) {
       throw new EvalInputError(`${path}.${key} must be an array of objects with ${identity}`)
     }
+  }
+  for (const item of Array.isArray(value.judgments) ? value.judgments : []) {
+    if (!isObject(item) || !['ClosedQA', 'Factuality', 'AnswerRelevancy', 'Faithfulness'].includes(String(item.scorer)) ||
+        typeof item.model !== 'string' || !item.model || typeof item.rationale !== 'string' || item.rationale.length > 500 ||
+        typeof item.passed !== 'boolean') {
+      throw new EvalInputError(`${path}.judgments[] is invalid`)
+    }
+    assertOptionalNumber(item, 'score', `${path}.judgments[]`, { max: 1 })
   }
   for (const item of Array.isArray(value.toolCalls) ? value.toolCalls : []) {
     if (!isObject(item)) continue
@@ -521,6 +545,10 @@ export function validateEvalRunInput(
     if (rawCase.name !== undefined && (typeof rawCase.name !== 'string' || !rawCase.name.trim() || rawCase.name.trim().length > 160)) {
       throw new EvalInputError(`cases[${index}].name must contain 1-160 characters`)
     }
+    if (rawCase.scenarioKey !== undefined && (typeof rawCase.scenarioKey !== 'string' || !rawCase.scenarioKey.trim() || rawCase.scenarioKey.trim().length > 120)) {
+      throw new EvalInputError(`cases[${index}].scenarioKey must contain 1-120 characters`)
+    }
+    assertOptionalNumber(rawCase, 'sampleIndex', `cases[${index}]`, { integer: true })
     assertOptionalRecord(rawCase, 'metadata', `cases[${index}]`)
     validateExpectations(rawCase.expectations, `cases[${index}].expectations`)
     if (rawCase.sourceAgentRunId !== undefined && (typeof rawCase.sourceAgentRunId !== 'string' || !rawCase.sourceAgentRunId.trim())) {
@@ -554,6 +582,8 @@ export function validateEvalRunInput(
       return {
         ...item,
         caseId: String(item.caseId).trim(),
+        ...(typeof item.scenarioKey === 'string' ? { scenarioKey: item.scenarioKey.trim() } : {}),
+        ...(typeof item.sampleIndex === 'number' ? { sampleIndex: item.sampleIndex } : {}),
         ...(typeof item.name === 'string' ? { name: item.name.trim() } : {}),
         ...(typeof item.sourceAgentRunId === 'string' ? { sourceAgentRunId: item.sourceAgentRunId.trim() } : {}),
         ...(typeof item.runtimeScenario === 'string' ? { runtimeScenario: item.runtimeScenario.trim() } : {}),

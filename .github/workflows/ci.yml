@@ -113,8 +113,12 @@ jobs:
               - 'server/src/__tests__/eval-evaluator.test.ts'
             eval_runtime:
               - 'eval/suites/runtime-smoke.v1.json'
+              - 'eval/live-runtime.v1.json'
               - 'eval/baselines/runtime-smoke.v1.json'
               - 'scripts/run-agent-runtime-eval.ts'
+              - 'scripts/run-agent-live-eval.ts'
+              - 'server/src/eval/live.ts'
+              - 'server/src/__tests__/eval-live.test.ts'
               - 'server/src/__tests__/eval-trace-harness.test.ts'
               - 'third_party/lingxios/**'
             open_notebook:
@@ -329,8 +333,9 @@ jobs:
     if: >-
       always() &&
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-      needs.changes.outputs.control_deploy == 'true' && needs.checks.result == 'success'
-    needs: [changes, checks]
+      needs.changes.outputs.control_deploy == 'true' && needs.checks.result == 'success' &&
+      (needs.live-release-gate.result == 'success' || needs.live-release-gate.result == 'skipped')
+    needs: [changes, checks, live-release-gate]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: production
@@ -356,12 +361,46 @@ jobs:
           VITE_LINGXILIT_URL: ${{ vars.VITE_LINGXILIT_URL || 'https://openlit.lingxilearn.cn' }}
           VITE_TURNSTILE_SITE_KEY: 0x4AAAAAAEk9EZhHYeS3szPO
 
+  live-release-gate:
+    if: >-
+      always() && github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.update-manifests.result == 'success'
+    needs: [update-manifests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      EVAL_COMMIT_SHA: ${{ github.sha }}
+      EVAL_CALLBACK_URL: ${{ vars.EVAL_CALLBACK_URL }}
+      EVAL_CI_HMAC_SECRET: ${{ secrets.EVAL_CI_HMAC_SECRET }}
+      EVAL_CANDIDATE_API_KEY: ${{ secrets.EVAL_CANDIDATE_API_KEY || secrets.OPENAI_API_KEY }}
+      EVAL_CANDIDATE_BASE_URL: ${{ vars.EVAL_CANDIDATE_BASE_URL || vars.OPENAI_BASE_URL }}
+      EVAL_CANDIDATE_MODEL: ${{ vars.EVAL_CANDIDATE_MODEL || vars.OPENAI_MODEL }}
+      EVAL_JUDGE_API_KEY: ${{ secrets.EVAL_JUDGE_API_KEY }}
+      EVAL_JUDGE_BASE_URL: ${{ vars.EVAL_JUDGE_BASE_URL }}
+      EVAL_JUDGE_MODEL: ${{ vars.EVAL_JUDGE_MODEL }}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${{ vars.OTEL_EXPORTER_OTLP_ENDPOINT }}
+      OTEL_EXPORTER_OTLP_HEADERS: ${{ secrets.OTEL_EXPORTER_OTLP_HEADERS }}
+      OTEL_SERVICE_NAME: lingxiloop-release-eval
+      OTEL_DEPLOYMENT_ENVIRONMENT: ci
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: "22", cache: npm }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: npm ci
+      - run: npm run eval:live -- --profile core --enforce-only
+      - if: always() && hashFiles('artifacts/eval-live-report.json') != ''
+        uses: actions/upload-artifact@v4
+        with: { name: "release-live-eval-${{ github.sha }}", path: artifacts/eval-live-report.json, if-no-files-found: error }
+
   rollout:
     if: >-
       always() && github.ref == 'refs/heads/main' && (github.event_name == 'push' || needs.changes.outputs.release == 'true') &&
       needs.update-manifests.result == 'success' &&
+      (needs.live-release-gate.result == 'success' || needs.live-release-gate.result == 'skipped') &&
       (needs.deploy.result == 'success' || needs.deploy.result == 'skipped')
-    needs: [update-manifests, deploy]
+    needs: [update-manifests, deploy, live-release-gate]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     environment: production

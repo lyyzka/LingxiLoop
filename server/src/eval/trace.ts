@@ -1,4 +1,4 @@
-import type { EvalCitationObservation, EvalObservation } from './contracts.js'
+import type { EvalCitationObservation, EvalObservation, EvalStageResult } from './contracts.js'
 
 const REDACTED = '[redacted]'
 const SENSITIVE_KEY = /(?:password|secret|token|authorization|cookie|excerpt|content|body|code|html|markdown|stdout|stderr|payload|messages?)/i
@@ -129,6 +129,12 @@ export function sanitizeEvalObservation(observation: EvalObservation): EvalObser
     } : {}),
     ...(observation.approvals ? { approvals: observation.approvals.map((approval) => ({ ...approval })) } : {}),
     ...(observation.artifacts ? { artifacts: observation.artifacts.map((artifact) => ({ ...artifact })) } : {}),
+    ...(observation.judgments ? {
+      judgments: observation.judgments.map((judgment) => ({
+        ...judgment,
+        rationale: String(sanitizeValue(judgment.rationale)).slice(0, 500),
+      })),
+    } : {}),
     ...(observation.trace ? {
       trace: observation.trace.map((event) => ({
         ...event,
@@ -151,4 +157,22 @@ export function sanitizeEvalObservation(observation: EvalObservation): EvalObser
 
 export function sanitizeEvalMetadata(metadata: Record<string, unknown> | undefined): Record<string, unknown> {
   return record(sanitizeValue(metadata ?? {}))
+}
+
+export function sanitizeEvalText(value: unknown): string {
+  return String(sanitizeValue(value))
+}
+
+export function sanitizeEvalStage(stage: EvalStageResult): EvalStageResult {
+  return {
+    ...stage,
+    findings: stage.findings.map((finding) => ({
+      ...finding,
+      message: sanitizeEvalText(finding.message),
+      ...(finding.expected !== undefined ? { expected: sanitizeValue(finding.expected) } : {}),
+      ...(finding.actual !== undefined ? { actual: sanitizeValue(finding.actual) } : {}),
+    })),
+    metrics: record(sanitizeValue(stage.metrics)) as EvalStageResult['metrics'],
+    failureReason: stage.failureReason ? sanitizeEvalText(stage.failureReason) : null,
+  }
 }

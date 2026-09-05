@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { after, before, beforeEach, test } from 'node:test'
 import { pool } from '../db/pool.js'
 import { createEvalRun } from '../eval/service.js'
+import { createEvalJob } from '../eval/jobs.js'
 import { ensureSchemaOnce, resetAllTables, teardownAll } from './_helpers.js'
 
 const COMPANY = 'co-eval-integration'
@@ -68,4 +69,45 @@ test('[integration] Eval hydrates dynamic RAG hits but never copies source excer
   const serialized = JSON.stringify(persisted.rows[0]?.observation)
   assert.equal(serialized.includes('DO NOT COPY THIS PRIVATE SOURCE PASSAGE'), false)
   assert.equal(serialized.includes('excerpt'), false)
+})
+
+test('[integration] live Eval persists scenario samples and idempotent jobs', async () => {
+  const jobInput = {
+    profile: 'core' as const,
+    suiteKey: 'agent-runtime-live', suiteVersion: 'runtime-live.v1',
+    commitSha: 'a'.repeat(40), promptVersion: 'prompt-v7',
+    candidateModel: 'candidate-model', judgeModel: 'judge-model',
+    requestedBy: 'integration-admin', reason: 'integration coverage',
+  }
+  const first = await createEvalJob(pool, jobInput)
+  const second = await createEvalJob(pool, jobInput)
+  assert.equal(first.created, true)
+  assert.equal(second.job.id, first.job.id)
+
+  const created = await createEvalRun({
+    suiteKey: 'agent-runtime-live', version: 'runtime-live.v1',
+    target: { model: 'candidate-model', promptVersion: 'prompt-v7' },
+    metadata: { liveProfile: 'full' },
+    cases: [{
+      caseId: 'grounding:sample-1', scenarioKey: 'grounding', sampleIndex: 0,
+      observation: {
+        answer: 'Grounded answer', taskCompletion: { completed: true }, policyViolations: [],
+        judgments: [{ scorer: 'ClosedQA', score: 0.9, passed: true, model: 'judge-model', rationale: 'grounded' }],
+      },
+      expectations: { safety: { requireNoPolicyViolations: true }, task: { requireCompleted: true } },
+    }],
+  }, 'integration-admin')
+  assert.equal(created.report.status, 'pass')
+  const persisted = await pool.query<{ scenario_key: string; sample_index: number; observation: { judgments?: unknown[] } }>(
+    `SELECT scenario_key,sample_index,observation FROM eval_cases WHERE eval_run_id=$1`, [created.id],
+  )
+  assert.equal(persisted.rows[0]?.scenario_key, 'grounding')
+  assert.equal(persisted.rows[0]?.sample_index, 0)
+  assert.equal(persisted.rows[0]?.observation.judgments?.length, 1)
+  await assert.rejects(pool.query(`INSERT INTO eval_gate_policies
+    (suite_key,candidate_model,prompt_version,mode,baseline_run_id,reason,updated_by)
+    VALUES('agent-runtime-live','candidate-model','prompt-v7','enforce',NULL,'invalid','integration-admin')`))
+  await pool.query(`INSERT INTO eval_gate_policies
+    (suite_key,candidate_model,prompt_version,mode,baseline_run_id,reason,updated_by)
+    VALUES('agent-runtime-live','candidate-model','prompt-v7','enforce',$1,'calibrated','integration-admin')`, [created.id])
 })

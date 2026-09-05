@@ -16,6 +16,7 @@ type Secrets = {
   OPENSHIP_IMAGE_TARGETS: string
   ALIYUN_OTP_EMAIL_PASSWORD: string
   TURNSTILE_SECRET_KEY: string
+  GITHUB_ACTIONS_TOKEN: string
   CF_ACCESS_CLIENT_ID?: string
   CF_ACCESS_CLIENT_SECRET?: string
 }
@@ -130,6 +131,7 @@ async function loadAuthSettings(c: AppContext): Promise<AuthSettings> {
   })))
   return settings
 }
+const githubRepository = 'LingXi-Org/LingxiLoop'
 
 async function provision(env: Bindings, authUser: { id: string; email: string; name: string }): Promise<void> {
   const claim = await env.DB.prepare(
@@ -234,6 +236,11 @@ async function attachSession(c: AppContext, source: 'cache' | 'database') {
   }).catch(() => null)
   if (session) c.set('session', session as AuthSession)
 }
+
+app.post('/api/auth/ws-ticket', async (c) => {
+  await attachSession(c, 'cache')
+  return proxyAppRequest(c)
+})
 
 app.use('/api/auth/*', async (c, next) => {
   await attachAuth(c)
@@ -481,6 +488,37 @@ app.put('/api/control/auth-settings', async (c) => {
   return c.json(values)
 })
 
+app.post('/api/control/eval/jobs', async (c) => {
+  const session = requireAdmin(c)
+  if (session instanceof Response) return session
+  const input = await c.req.json<{ profile?: string; reason?: string }>()
+  if (!['core', 'full'].includes(input.profile ?? '') || !input.reason?.trim() || input.reason.trim().length > 280) {
+    return c.json({ error: 'profile and 1–280 character reason are required' }, 400)
+  }
+  const link = await c.env.DB.prepare(`SELECT app_user_id FROM app_user_links WHERE auth_user_id=? AND suspended_at IS NULL`)
+    .bind(session.user.id).first<{ app_user_id: string }>()
+  if (!link) return c.json({ error: 'business account is not provisioned' }, 409)
+  const response = await originRequest(c.env, '/api/admin/eval/jobs', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input),
+  }, { appUserId: link.app_user_id, authUserId: session.user.id })
+  const result = await response.json<{ created?: boolean; job?: { id?: string; profile?: string; status?: string; commitSha?: string }; error?: string }>()
+  if (!response.ok) return c.json(result, response.status as 400)
+  if (result.created && result.job?.id) {
+    const dispatched = await fetch(`https://api.github.com/repos/${githubRepository}/actions/workflows/live-eval.yml/dispatches`, {
+      method: 'POST',
+      headers: {
+        accept: 'application/vnd.github+json', authorization: `Bearer ${c.env.GITHUB_ACTIONS_TOKEN}`,
+        'content-type': 'application/json', 'user-agent': 'LingxiLoop-Control-Plane', 'x-github-api-version': '2022-11-28',
+      },
+      body: JSON.stringify({ ref: 'main', inputs: { profile: result.job.profile, job_id: result.job.id, commit_sha: result.job.commitSha } }),
+    })
+    if (!dispatched.ok) return c.json({ error: `GitHub Actions dispatch failed (${dispatched.status})`, job: result.job }, 502)
+  }
+  await c.env.DB.prepare(`INSERT INTO control_audit(id,actor_user_id,action,resource,reason,detail,created_at) VALUES(?,?,?,?,?,?,?)`)
+    .bind(crypto.randomUUID(), session.user.id, 'dispatch', `eval:${result.job?.id}`, input.reason.trim(), JSON.stringify({ profile: input.profile }), Date.now()).run()
+  return c.json(result, response.status as 200)
+})
+
 app.post('/api/control/platform/users/:id/:action', async (c) => {
   const adminSession = requireAdmin(c)
   if (adminSession instanceof Response) return adminSession
@@ -592,7 +630,7 @@ app.use('/api/*', async (c, next) => {
   await next()
 })
 
-app.all('/api/*', async (c) => {
+async function proxyAppRequest(c: AppContext): Promise<Response> {
   const session = requireSession(c)
   if (session instanceof Response) return session
   let link = await c.env.DB.prepare(`SELECT app_user_id FROM app_user_links WHERE auth_user_id=? AND suspended_at IS NULL`).bind(session.user.id).first<{ app_user_id: string }>()
@@ -603,6 +641,8 @@ app.all('/api/*', async (c) => {
   if (!link) return c.json({ error: 'business account is not provisioned' }, 409)
   const path = c.req.path === '/api/session' ? '/api/auth/me' : c.req.path
   return originRequest(c.env, path + new URL(c.req.url).search, { method: c.req.method, headers: c.req.raw.headers, body: ['GET', 'HEAD'].includes(c.req.method) ? null : c.req.raw.body }, { appUserId: link.app_user_id, authUserId: session.user.id })
-})
+}
+
+app.all('/api/*', proxyAppRequest)
 
 export default app
