@@ -13,7 +13,7 @@ cd eval
 # .env.local has been created locally; on a new checkout copy .env.example.
 ```
 
-Fill `eval/.env.local` with the two API keys and each model's CNY-per-million input/output prices. Defaults: Candidate `Qwen/Qwen3.5-4B`, Judge `deepseek-ai/DeepSeek-V4-Pro`, each at `https://api.siliconflow.cn/v1`. Blank credentials/prices are errors. Zero pricing is allowed only for an actually free service. Prices are configured estimates, not a provider billing statement; pricing changes alter model fingerprints. No product environment or generic `OPENAI_*` key is inherited.
+Fill `eval/.env.local` with the two API keys and each model's CNY-per-million input/output prices. Candidate and Judge default to `deepseek-ai/DeepSeek-V4-Flash` at `https://api.siliconflow.cn/v1`. Blank credentials/prices are errors. Zero pricing is allowed only for an actually free service. Prices are configured estimates, not a provider billing statement; pricing changes alter model fingerprints. No product environment or generic `OPENAI_*` key is inherited.
 
 ```sh
 npm run eval -- run --env .env.local --suite suites/black-box-smoke.v2.json --dataset datasets/smoke.v1.json --revision YOUR_COMMIT

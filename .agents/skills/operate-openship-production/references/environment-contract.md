@@ -5,9 +5,37 @@ This file records names, public values, ownership, and equality rules. It intent
 ## Secret handling
 
 - Local source directory: `D:\Documents\OpenShip`. Its `.txt` files contain plaintext secrets; never commit them, quote their values, attach them to logs, or copy them into this skill.
+- Sigillo at `https://sigillo.lingxilearn.cn` is the encrypted inventory for the sources below. Use its CLI only from the configured `E:\lyyzka\LingxiLoop` scope; do not use `secrets get` or `secrets download` in an agent shell.
+- This inventory is not yet an OpenShip runtime integration. Do not replace OpenShip environment values, alter manifests, or deploy from Sigillo unless the user separately requests that change.
+- For App A/B's shared source-backed settings, the running production containers are authoritative. On 2026-09-06, 34 such settings matched both APIs by in-container hashes after refreshing the backup source and Sigillo; `INSTANCE_ID`, obsolete `AGENT_OS_URL`, and unused `WUKONG_USER_TOKEN_SECRET` remain outside that equality set.
+- The Cloudflare token-manager secret is stored in the Control Plane project's `prod` environment. It is only an authority ceiling for child tokens, never a runtime deployment secret.
 - In OpenShip, mark database URLs/passwords, API keys, service tokens, webhook/HMAC secrets, R2 credentials, registry credentials, and OAuth client secrets as secrets.
 - When comparing two projects, compare secret equality through OpenShip metadata or hashes inside the target containers without returning values.
 - OpenShip masks environment fields but does not mask secrets embedded in `command` or `commandArgv`. SurrealDB credentials therefore use environment variables; never move them back into its command.
+
+## Sigillo project inventory
+
+The import preserves source boundaries so same-named values from different services cannot overwrite one another. Each project contains only environments with the same secret schema, preventing unrelated names from appearing as missing values in Sigillo.
+
+| Sigillo project / environment | Imported source |
+| --- | --- |
+| `LingxiLoop` / `local`, `dev` | `E:\lyyzka\LingxiLoop\.env.local` |
+| `LingxiLoop RAG` / `local` | `.env.local` overlaid by `.env.rag.local` |
+| `LingxiLoop Production App` / `prod` | `D:\Documents\OpenShip\webab.txt` |
+| `LingxiLoop OpenShip Core` / `prod` | `D:\Documents\OpenShip\core.txt` |
+| `LingxiLoop OpenLit` / `prod` | `D:\Documents\OpenShip\openlit.txt` overlaid by `db.txt` |
+| `LingxiLoop Control Plane` / `prod` | `D:\Documents\OpenShip\mail.txt`, plus `CLOUDFLARE_TOKEN_MANAGER_TOKEN` |
+
+Notable same-name values differ between the local and RAG sources, and between production service sources. Keep those scopes separate; do not merge by last-write-wins.
+
+## Cloudflare token lifecycle
+
+The token-manager can create only the child permissions granted to its own Cloudflare principal. Before minting a child token, obtain the current permission-group IDs from Cloudflare, restrict the child to the exact account or zone, and grant the smallest requested permission set. Cloudflare requires `API Tokens Write` for user-owned token creation and `Account API Tokens Write` for account-owned token creation; use the API documented at <https://developers.cloudflare.com/fundamentals/api/how-to/create-via-api/>.
+
+- Only mint a child token for an operation authorized by the current user request. The presence of the manager token is not broader deployment authority.
+- A persistent child token must have a finite `expires_on`, be written directly to its matching Sigillo environment, and be delivered by that operation's approved deployment mechanism. Never place a token in a manifest, command argument, repository file, or log.
+- A temporary child token must be restricted, used only in-memory for its active command, and deleted through Cloudflare's token API in a `finally` path before reporting completion. If delivery to the intended environment fails, revoke the child token instead of leaving it active.
+- Record only child token name, target environment, permission groups, expiry, and revocation status; never record its value. Verify its deletion using the token ID without emitting the value.
 
 ## Local source files
 
@@ -41,13 +69,14 @@ The user identified this as a LingxiLit/OpenLit deployment source, but its conte
 - `AGENT_OS_WORKER_ID` cannot be copied unchanged to both nodes; set `agent-os-a` and `agent-os-b` explicitly.
 - Project-specific bind IP and callback values must be overridden according to the tables below.
 
-### `D:\Documents\OpenShip\webab.txt` (1892 bytes)
+### `D:\Documents\OpenShip\webab.txt` (2161 bytes)
 
 `AGENT_OS_SERVICE_TOKEN`, `AGENT_OS_URL`, `DATABASE_POOL_MAX`, `DATABASE_URL`, `EMAIL_DOMAIN`, `INSTANCE_ID`, `LINGXILOOP_CORS_ORIGINS`, `LINGXILOOP_GATEWAY_HMAC_SECRET`, `LINGXILOOP_INVITE_BASE_URL`, `LINGXILOOP_LOG_LEVEL`, `LINGXILOOP_PUBLIC_ORIGIN`, `METRICS_BEARER_TOKEN`, `OPEN_NOTEBOOK_PASSWORD`, `OPEN_NOTEBOOK_URL`, `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_EMBEDDING_MODEL`, `OPENAI_MODEL`, `OPENLIT_PRICING_JSON`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_EXPORTER_OTLP_HEADERS`, `PRESENTATION_HTML_ENABLED`, `R2_ACCESS_KEY_ID`, `R2_BUCKET`, `R2_ENDPOINT`, `R2_PUBLIC_BASE`, `R2_SECRET_ACCESS_KEY`, `R2_URL_SIGNING_SECRET`, `R2_URL_TTL_SECONDS`, `REDIS_URL`, `RESEND_API_KEY`, `RESEND_WEBHOOK_SECRET`, `WUKONG_API_TOKEN`, `WUKONG_API_URL`, `WUKONG_USER_TOKEN_SECRET`, `WUKONG_WEBHOOK_SECRET`, `WUKONG_WS_PUBLIC_URL`.
 
 - `AGENT_OS_URL` is obsolete. API readiness and dispatch use the shared AgentOS worker heartbeat/work queue; do not configure `AGENT_OS_URL` or `AGENT_OS_ENDPOINTS`.
 - `OPENLIT_PRICING_JSON` must be renamed to `LINGXILIT_PRICING_JSON` for current manifests.
 - `WUKONG_USER_TOKEN_SECRET` may be used by other runtime code but is not present in the current OpenShip App A/B environment lists; verify code requirements before adding it.
+- This file is the App A/B backup snapshot. On 2026-09-06, production refreshed `OPENAI_MODEL`, `OPEN_NOTEBOOK_PASSWORD`, `OTEL_EXPORTER_OTLP_ENDPOINT`, and `OPENLIT_PRICING_JSON`; the same four values were mirrored to Sigillo's Production App environment. This changed no running OpenShip configuration or deployment.
 
 ### `D:\Documents\OpenShip\mail.txt`
 
@@ -91,7 +120,6 @@ OPEN_NOTEBOOK_ENABLED
 R2_URL_SIGNING_SECRET
 RESEND_WEBHOOK_SECRET
 WUKONG_WEBHOOK_SECRET
-AGENT_OS_SERVICE_TOKEN
 LINGXILIT_PRICING_JSON
 OPENAI_EMBEDDING_MODEL
 OPEN_NOTEBOOK_PASSWORD
@@ -102,7 +130,6 @@ LINGXILOOP_INVITE_BASE_URL
 OTEL_EXPORTER_OTLP_HEADERS
 OTEL_DEPLOYMENT_ENVIRONMENT
 OTEL_EXPORTER_OTLP_ENDPOINT
-AGENT_OS_NODE_TIMEOUT_SECONDS
 LINGXILOOP_GATEWAY_HMAC_SECRET
 ```
 
@@ -115,13 +142,12 @@ PORT=5181
 NODE_ENV=production
 NODE_OPTIONS=--max-old-space-size=320
 DATABASE_POOL_MAX=8
-AGENT_OS_NODE_TIMEOUT_SECONDS=15
 WUKONG_API_URL=http://10.20.0.2:5001
 WUKONG_WS_URL=wss://im.lingxilearn.cn
 OPEN_NOTEBOOK_ENABLED=true
 OPEN_NOTEBOOK_URL=http://10.20.0.3:5055
 OPENAI_BASE_URL=https://api.siliconflow.cn/v1
-OPENAI_MODEL=Qwen/Qwen3.5-4B
+OPENAI_MODEL=deepseek-ai/DeepSeek-V4-Flash
 OPENAI_EMBEDDING_MODEL=BAAI/bge-m3
 OPENAI_IMAGE_MODEL=
 OTEL_DEPLOYMENT_ENVIRONMENT=production
@@ -139,10 +165,10 @@ PRESENTATION_HTML_ENABLED=false
 Current SiliconFlow observability pricing and L0 limits:
 
 ```json
-{"chat":{"Qwen/Qwen3.5-4B":{"promptPrice":0,"completionPrice":0}},"embeddings":{"BAAI/bge-m3":0},"limits":{"api.siliconflow.cn":{"Qwen/Qwen3.5-4B":{"rpm":1000,"tpm":80000},"BAAI/bge-m3":{"rpm":2000,"tpm":500000}}}}
+{"chat":{"deepseek-ai/DeepSeek-V4-Flash":{"promptPrice":0.000447,"completionPrice":0.001341,"cacheReadPrice":0.0000447}},"embeddings":{"BAAI/bge-m3":0},"limits":{"api.siliconflow.cn":{"BAAI/bge-m3":{"rpm":2000,"tpm":500000}}}}
 ```
 
-`promptPrice`, `completionPrice`, and embedding prices are USD per 1,000 tokens for LingxiLit cost spans. The zero values reflect the provider's observed free online-inference price; update this JSON when that price or the account's rate-limit tier changes.
+`promptPrice`, `completionPrice`, `cacheReadPrice`, and embedding prices are USD per 1,000 tokens for LingxiLit cost spans. Chat prices conservatively use the provider's non-discount period and the 2026-09-05 USD/CNY rate (6.7118); cache reads use the provider's 10% input rate. Update this JSON when price, exchange rate, or the account's rate-limit tier changes.
 
 State endpoint shapes, with credentials redacted:
 
@@ -159,62 +185,6 @@ Node differences:
 | App B | `app-b` | `deploy/openship/app-b.yml` | loopback `5181/8080`; migration, Web, Worker, Gateway |
 
 All other app values must be equal. The 2026-09-02 audit found the two running APIs equal for every shared runtime value.
-
-## AgentOS A and B
-
-Runtime keys:
-
-```text
-NODE_ENV
-NODE_OPTIONS
-OPENAI_MODEL
-AGENT_OS_PORT
-OPENAI_API_KEY
-OPENAI_BASE_URL
-OTEL_SERVICE_NAME
-AGENT_OS_WORKER_ID
-AGENT_OS_HOMES_ROOT
-AGENT_OS_MAX_KERNELS
-LINGXILOOP_LOG_LEVEL
-AGENT_OS_SERVICE_TOKEN
-LINGXILIT_PRICING_JSON
-AGENT_OS_KERNEL_IDLE_MS
-AGENT_OS_SHUTDOWN_GRACE_MS
-OTEL_EXPORTER_OTLP_HEADERS
-OTEL_DEPLOYMENT_ENVIRONMENT
-OTEL_EXPORTER_OTLP_ENDPOINT
-AGENT_OS_MAX_CONCURRENT_RUNS
-LINGXILOOP_CONTROL_PLANE_URL
-```
-
-Shared non-secret values:
-
-```dotenv
-NODE_ENV=production
-NODE_OPTIONS=--max-old-space-size=384
-LINGXILOOP_LOG_LEVEL=warn
-OTEL_SERVICE_NAME=lingxiloop-agent-os
-OTEL_DEPLOYMENT_ENVIRONMENT=production
-OTEL_EXPORTER_OTLP_ENDPOINT=http://10.20.0.3:4318
-AGENT_OS_PORT=5190
-AGENT_OS_MAX_CONCURRENT_RUNS=1
-AGENT_OS_MAX_KERNELS=4
-AGENT_OS_KERNEL_IDLE_MS=900000
-AGENT_OS_SHUTDOWN_GRACE_MS=20000
-AGENT_OS_HOMES_ROOT=/var/lib/lingxiloop-agent-os/v2-homes
-LINGXILOOP_CONTROL_PLANE_URL=https://loop.lingxilearn.cn
-OPENAI_BASE_URL=https://api.siliconflow.cn/v1
-OPENAI_MODEL=Qwen/Qwen3.5-4B
-```
-
-Node-specific project values:
-
-| Project | Worker ID | Required volume name | Actual mounted volume |
-| --- | --- | --- | --- |
-| AgentOS-A | `agent-os-a` | `openship-lingxiloop-agent-os-a-agent-os-data` | same |
-| AgentOS-B | `agent-os-b` | `openship-lingxiloop-agent-os-b-agent-os-data` | same |
-
-Do not restore the obsolete `openship-lingxiloop-knowledge-agent-agent-os-data` plan unless intentionally recovering that historical volume. Each current AgentOS project has its own independent volume.
 
 ## Core state
 
@@ -346,15 +316,15 @@ OPENSHIP_BASE_URL=https://ops.christmas1314.xyz
 AUTH_ALLOWED_HOSTS=loop.lingxilearn.cn,admin.lingxilearn.cn
 UPTIME_BASE_URL=https://uptime.lingxilearn.cn
 APP_VERSION=0.1.0-beta
-OPENSHIP_PROJECT_IDS=proj_khiExWfh7Vsj72VO,proj_5uz48XlBkfJQeNC8,proj_29J2mM47umuIfaDK,proj_IsMy2bWVzEZ7JKEf,proj_frnQUaoQY37ejzL-,proj_CVkF0rOULikADQ-7
-OPENSHIP_IMAGE_TARGETS=server:proj_5uz48XlBkfJQeNC8:svc_9RmMHN7M0K1l5Z_1,server:proj_5uz48XlBkfJQeNC8:svc_Y95Qof0wyIdv7klR,server:proj_IsMy2bWVzEZ7JKEf:svc_70YEsZbgYP34z7Hv,server:proj_IsMy2bWVzEZ7JKEf:svc_wm0I2fR_uglJGyWb,server:proj_IsMy2bWVzEZ7JKEf:svc_okKRA-wGrqgFyZAk,agent-os:proj_29J2mM47umuIfaDK:svc_Q97GKa-vK8cH8O_T,agent-os:proj_CVkF0rOULikADQ-7:svc_rT0BSxd8KVNGSWMU,wukongim:proj_khiExWfh7Vsj72VO:svc_R1qn4zHiKjjfY1An,open-notebook:proj_frnQUaoQY37ejzL-:svc_hmGZIaloXJohVV2r,gateway:proj_IsMy2bWVzEZ7JKEf:svc_q7ZcH8px3jsB9qnY
+OPENSHIP_PROJECT_IDS=proj_khiExWfh7Vsj72VO,proj_5uz48XlBkfJQeNC8,proj_IsMy2bWVzEZ7JKEf,proj_frnQUaoQY37ejzL-
+OPENSHIP_IMAGE_TARGETS=server:proj_5uz48XlBkfJQeNC8:svc_9RmMHN7M0K1l5Z_1,server:proj_5uz48XlBkfJQeNC8:svc_Y95Qof0wyIdv7klR,server:proj_IsMy2bWVzEZ7JKEf:svc_70YEsZbgYP34z7Hv,server:proj_IsMy2bWVzEZ7JKEf:svc_wm0I2fR_uglJGyWb,server:proj_IsMy2bWVzEZ7JKEf:svc_okKRA-wGrqgFyZAk,wukongim:proj_khiExWfh7Vsj72VO:svc_R1qn4zHiKjjfY1An,open-notebook:proj_frnQUaoQY37ejzL-:svc_hmGZIaloXJohVV2r,gateway:proj_IsMy2bWVzEZ7JKEf:svc_q7ZcH8px3jsB9qnY
 ```
 
 D1 binding `DB`, database `lingxiloop-control-plane`, ID `cf22d961-eba4-4d21-b447-4d19ec0ad524`; no pending migrations at the audit.
 
-Required Worker secret names: `ALIYUN_OTP_EMAIL_PASSWORD`, `ALIYUN_SUPPORT_EMAIL_PASSWORD`, `BETTER_AUTH_SECRET`, `GATEWAY_HMAC_SECRET`, `OPENSHIP_PAT`, `RELEASE_HMAC_SECRET`, `TURNSTILE_SECRET_KEY`, and `BOOTSTRAP_ADMIN_TOKEN`. The old `RESEND_API_KEY` and `RESEND_FROM` Worker secrets were deleted after the SMTP cutover. The legacy singular `OPENSHIP_PROJECT_ID` secret may still exist but is unused; project IDs are non-secret checked-in configuration.
+Present Worker secret names: `ALIYUN_OTP_EMAIL_PASSWORD`, `ALIYUN_SUPPORT_EMAIL_PASSWORD`, `BETTER_AUTH_SECRET`, `GATEWAY_HMAC_SECRET`, `OPENSHIP_PAT`, `RELEASE_HMAC_SECRET`, `SIGILLO_PROVIDER_URL`, `SIGILLO_SSO_SECRET`, and `TURNSTILE_SECRET_KEY`. `BOOTSTRAP_ADMIN_TOKEN` is deliberately absent after the one-time bootstrap route completes. The old `RESEND_API_KEY` and `RESEND_FROM` Worker secrets were deleted after the SMTP cutover. The legacy singular `OPENSHIP_PROJECT_ID` secret may still exist but is unused; project IDs are non-secret checked-in configuration.
 
-Wrangler 4.127.1 was authenticated to account ID `5b726c2a59696a3536a55589a8fad188`. The OAuth scopes allow Worker Versions and D1 deployment but not DNS-record mutation. The Worker Custom Domain remains declared in Wrangler. GitHub Actions run `33753015826` promoted source commit `dd717dd234fe47afa0d0d72fcaebd98825d2f361` as serving Worker version `90f18aca-a7ed-4e70-be2c-6756bfa2a5a0` at 100% traffic. Smart Placement is enabled; public probes bypass auth initialization, ordinary business sessions use Better Auth's signed 60-second cookie cache, auth settings use a 60-second per-data-center Cache API entry, and control-plane administration always forces database session validation. The authenticated admin-only topology and deployment endpoints discard services/projects outside the current production allowlists; `/api/control/status-page` aggregates Kuma's public status JSON, and no Kuma API key is stored in Worker configuration. Earlier observed versions are historical.
+Wrangler 4.127.1 was authenticated to account ID `5b726c2a59696a3536a55589a8fad188`. The OAuth scopes allow Worker Versions and D1 deployment but not DNS-record mutation. The Worker Custom Domain remains declared in Wrangler. The 2026-09-06 live check found Worker version `b24e0eb4-7b17-4ce9-a7eb-b43b1f663e4e` at 100% traffic, from deployment tag `7221c6f3af78595397b957ece026437f75490ac7`. Smart Placement is enabled; public probes bypass auth initialization, ordinary business sessions use Better Auth's signed 60-second cookie cache, auth settings use a 60-second per-data-center Cache API entry, and control-plane administration always forces database session validation. The authenticated admin-only topology and deployment endpoints discard services/projects outside the current production allowlists; `/api/control/status-page` aggregates Kuma's public status JSON, and no Kuma API key is stored in Worker configuration. Earlier observed versions are historical.
 
 ## GitHub Actions contract
 
@@ -364,9 +334,9 @@ Wrangler 4.127.1 was authenticated to account ID `5b726c2a59696a3536a55589a8fad1
 - Variable `CLOUDFLARE_ACCOUNT_ID`; optional override `VITE_LINGXILIT_URL` defaults to `https://openlit.lingxilearn.cn` in the production deploy job.
 - Node 22.
 - Quality, unit/eval, and PostgreSQL/Redis integration gates before publishing.
-- Immutable linux/amd64 images for server, AgentOS, WuKongIM, Open Notebook, and Gateway. A deployable change publishes only its affected component images; a `VERSION` release or main-branch manual `workflow_dispatch` with `scope=release` publishes all five.
+- Immutable linux/amd64 images for Server, WuKongIM, Open Notebook, and Gateway. A deployable change publishes only its affected component images; a `VERSION` release or main-branch manual `workflow_dispatch` with `scope=release` publishes all four.
 - `update-manifests` updates only the published component pins in `deploy/openship/*.yml`, commits SHA pins with `[skip ci]`, and exposes that exact manifest commit SHA to rollout. A deployment-only change retains the current complete image set and still rolls out.
-- `deploy` applies D1 migrations when needed and uploads/promotes the Worker Version. The signed release handler requires all five independently immutable image references, synchronizes all ten image-bearing service rows, and creates deployments for all six LingxiLoop projects through OpenShip's Dashboard proxy API. The manifest-pin commit is both the release idempotency key and OpenShip deployment commit, so rebuilding the same source commit cannot be mistaken for an earlier rollout. OpenShip project `autoDeploy` remains disabled.
+- `deploy` applies D1 migrations when needed and uploads/promotes the Worker Version. The signed release handler requires all four independently immutable image references, synchronizes all eight image-bearing service rows, and creates deployments for all four LingxiLoop projects through OpenShip's Dashboard proxy API. The manifest-pin commit is both the release idempotency key and OpenShip deployment commit, so rebuilding the same source commit cannot be mistaken for an earlier rollout. OpenShip project `autoDeploy` remains disabled.
 
 Workflow run `33711770224` tested source/manifest commit `ad9a7f2e8ba3397943babcde1b802edb48e03941`, promoted Worker version `1c19b8d8-0cb5-4979-a3b4-f25a88c3e14e`, retained the four unchanged `b42fef1...` component pins, pinned Gateway to `3b0069a...`, and rolled all six OpenShip projects to `ready`.
 

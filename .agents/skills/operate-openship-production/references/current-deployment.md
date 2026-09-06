@@ -1,6 +1,18 @@
 # Current production deployment
 
-Snapshot: 2026-09-04 15:46 China Standard Time, checked through OpenShip MCP, GitHub Actions, HTTP probes, database queries, and targeted container inspection. Re-read live state before every operation.
+## 2026-09-06 production-source reconciliation
+
+App A/B remained untouched. The production-authoritative values for `OPENAI_MODEL`, `OPEN_NOTEBOOK_PASSWORD`, `OTEL_EXPORTER_OTLP_ENDPOINT`, and `LINGXILIT_PRICING_JSON` were copied into the protected `D:\Documents\OpenShip\webab.txt` backup and its matching Sigillo environment. Hash checks found all 34 shared source-backed settings equal in both running APIs. No manifest, OpenShip environment, or deployment changed.
+
+## 2026-09-06 DeepSeek V4 Flash model migration
+
+App A and App B production environment and running API/worker containers now use `deepseek-ai/DeepSeek-V4-Flash` with the SiliconFlow base URL unchanged. Targeted refresh deployments `dep_tB8THOdfx1gA_NFa` and `dep_nhXOI0yMGNGynmgm` reached `ready`. LingxiLit pricing metadata includes the provider's discounted cache-read rate.
+
+The two stale AgentOS projects were disabled after the retired `deploy/openship/agent-os.yml` prevented refresh. Their exact containers and independent `agent-os-data` volumes were removed under the confirmed no-production-data authorization. AgentOS is no longer a production workload; reintroduce it only through the published LingxiOS npm-package release path.
+
+The post-change scan reports 14/14 healthy workloads, zero outage or action-required issues, and four advisory-only source comparisons. Both hosts contain zero AgentOS containers and zero AgentOS volumes. Container-local checks confirmed the model and unchanged base URL in API-A, API-B, and Worker-B; public root and `/api/health` return HTTP 200.
+
+Snapshot: 2026-09-06 14:13 China Standard Time, checked through OpenShip, HTTP probes, and targeted container inspection. Re-read live state before every operation.
 
 ## 2026-09-05 LingxiLit observability-only UI release
 
@@ -16,7 +28,11 @@ At 00:46 China Standard Time, `LINGXILIT_PRICING_JSON` was added to App A, App B
 
 Container-local assertions confirmed the complete pricing table in API-A, API-B, Worker-B, AgentOS-A, and AgentOS-B. OpenShip reported 16/16 healthy with the watcher enabled, zero outage or action-required issues, and six advisory-only source comparisons. Both AgentOS heartbeats were 0 seconds old with no queued or leased work; public root and `/api/health` returned HTTP 200. The running Server image remains `91fd60c366fa10d0aee2321fe4846bbbff58e6b5`, Gateway and both AgentOS nodes remain `c41b20770cc91cc24dad27781f7fc98258ab5390`; this was an environment-only refresh.
 
-## Scope and authority
+## Historical snapshot (2026-09-04)
+
+The sections below preserve the pre-retirement topology for operational history. They are not the current deployment contract; the 2026-09-06 entry above supersedes their AgentOS, project-count, service-count, and model details.
+
+### Scope and authority
 
 - OpenShip organization: `org_afbfbb11-78d7-41ee-b644-4b745b486069`.
 - The six LingxiLoop projects are Production Docker projects on branch `main`, use local/self-hosted OpenShip source, and have `autoDeploy=false`. The signed post-CI release endpoint performs the fanout.

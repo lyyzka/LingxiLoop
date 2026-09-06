@@ -12,6 +12,8 @@ Work within the existing two-server architecture and the user's requested scope.
 - Separate `current runtime`, `desired manifest`, `historical`, and `unresolved` facts. Do not present one as another.
 - Repository changes do not authorize live deployment. Mutate production only when the user requested that production action, and stop once the requested outcome is verified.
 - Never print, commit, copy into a patch, or summarize plaintext credentials. Use secret names and equality requirements only, redact commands or arguments that may expose values, and let the configured OpenShip MCP transport supply its PAT.
+- Sigillo is the encrypted LingxiLoop secret inventory. Its import alone does not authorize changing an OpenShip runtime or replacing its current secret source; follow the mapping and access boundary in `references/environment-contract.md`.
+- Create or use a Cloudflare child token only for a current, user-authorized operation. A token that is neither safely delivered to its authorized target nor needed during the active operation must be revoked before the operation finishes.
 - Destructive recovery requires explicit authorization for exact targets plus a fresh backup or confirmed data classification. Historical cleanup or reset approval is not standing permission.
 - Prefer OpenShip MCP, targeted host-safe commands, `wrangler`, DNS tools, and HTTP/WebSocket probes. Do not control a browser for production operations.
 
