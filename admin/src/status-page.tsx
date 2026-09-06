@@ -1,20 +1,19 @@
 import { useCustom } from '@refinedev/core'
-import { ActivityIcon, ExternalLinkIcon, RefreshCwIcon, TriangleAlertIcon } from 'lucide-react'
-import { lazy, Suspense } from 'react'
+import { ActivityIcon, ExternalLinkIcon, HeartPulseIcon, RefreshCwIcon, SearchIcon, ShieldCheckIcon, TriangleAlertIcon } from 'lucide-react'
+import { lazy, Suspense, useState } from 'react'
+import { ResourceSkeleton } from '@/components/ResourceSkeleton'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
 import { API_URL } from './api'
 import { type KumaHeartbeat, StatusBlockIndicator } from './kuma-mieru'
+import { PageHeading } from './pages'
 
 const UPTIME_BASE_URL = 'https://uptime.lingxilearn.cn'
 const MonitoringChart = lazy(() => import('./kuma-mieru-chart').then((module) => ({ default: module.MonitoringChart })))
 
-interface StatusMonitor {
-  id: number
-  name: string
-  type: string
-  certExpiryDaysRemaining?: number | string
-  validCert?: boolean
-}
-
+interface StatusMonitor { id: number; name: string; type: string; certExpiryDaysRemaining?: number | string; validCert?: boolean }
 interface StatusGroup { id: number; name: string; monitorList: StatusMonitor[] }
 interface StatusOverview {
   config: { title: string; description: string }
@@ -26,10 +25,6 @@ interface StatusOverview {
   uptime: Record<string, number>
 }
 
-function monitorLabel(name: string): string {
-  return name.includes(' / ') ? name.split(' / ').slice(1).join(' / ') : name
-}
-
 function state(status: number | undefined): string {
   if (status === 1) return '正常'
   if (status === 3) return '维护中'
@@ -38,120 +33,49 @@ function state(status: number | undefined): string {
 }
 
 function formatTime(value?: string): string {
-  if (!value) return '正在采集'
-  return new Date(value.endsWith('Z') ? value : `${value}Z`).toLocaleString()
+  if (!value) return '等待首次检查'
+  const date = new Date(/(?:Z|[+-]\d{2}:?\d{2})$/.test(value) ? value : `${value}Z`)
+  return Number.isNaN(date.getTime()) ? '时间不可用' : date.toLocaleString('zh-CN', { hour12: false })
 }
 
 export function ServiceStatusPage() {
-  const query = useCustom<StatusOverview>({
-    url: `${API_URL}/control/status-page`,
-    method: 'get',
-    queryOptions: { staleTime: 30_000, refetchInterval: 60_000, refetchOnWindowFocus: false },
-  })
+  const query = useCustom<StatusOverview>({ url: `${API_URL}/control/status-page`, method: 'get', queryOptions: { staleTime: 30_000, refetchInterval: 60_000, refetchOnWindowFocus: false } })
+  const [search, setSearch] = useState('')
+  const [filter, setFilter] = useState('all')
   const data = query.query.data?.data
   const monitors = data?.groups.flatMap((group) => group.monitorList) ?? []
   const up = monitors.filter((monitor) => data?.latest[String(monitor.id)]?.status === 1).length
   const down = monitors.filter((monitor) => data?.latest[String(monitor.id)]?.status === 0).length
-  const latestTime = Object.values(data?.latest ?? {}).reduce<string | undefined>((value, heartbeat) => {
-    if (!heartbeat?.time) return value
-    return !value || heartbeat.time > value ? heartbeat.time : value
-  }, undefined)
-  const uptimeValues = monitors
-    .map((monitor) => data?.uptime[`${monitor.id}_24`])
-    .filter((value): value is number => Number.isFinite(value))
-  const averageUptime = uptimeValues.length
-    ? `${(uptimeValues.reduce((sum, value) => sum + value, 0) / uptimeValues.length * 100).toFixed(2)}%`
-    : '—'
+  const uptimeValues = monitors.map((monitor) => data?.uptime[`${monitor.id}_24`]).filter((value): value is number => Number.isFinite(value))
+  const averageUptime = uptimeValues.length ? `${(uptimeValues.reduce((sum, value) => sum + value, 0) / uptimeValues.length * 100).toFixed(2)}%` : '—'
   const allOperational = monitors.length > 0 && up === monitors.length
-
-  return <main className="mx-auto flex w-full max-w-7xl flex-col gap-4" aria-live="polite">
-    <header className="flex flex-wrap items-end justify-between gap-3 border-b border-border/70 pb-4">
-      <div className="min-w-0">
-        <p className="mb-1 text-xs font-semibold uppercase tracking-[0.18em] text-primary">Uptime Kuma</p>
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">{data?.config.title ?? '服务状态'}</h1>
-        <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{data?.config.description ?? '正在读取实时监控数据。'}</p>
-      </div>
-      <a
-        href={`${UPTIME_BASE_URL}/status/lingxiloop`}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-background px-3 text-sm font-medium shadow-xs transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >完整状态页<ExternalLinkIcon className="size-4" /></a>
-    </header>
-
-    {query.query.isError && <section className="grid min-h-48 place-items-center rounded-xl border border-destructive/30 bg-destructive/5 p-6 text-center">
-      <div><TriangleAlertIcon className="mx-auto mb-2 size-6 text-destructive" /><p className="font-medium">无法读取状态提供方</p>
-        <button type="button" className="mt-3 inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-background px-3 text-sm font-medium hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={() => void query.query.refetch()}>
-          <RefreshCwIcon className="size-4" />重试
-        </button>
-      </div>
-    </section>}
-
-    {data && <>
-      <section className={`overflow-hidden rounded-xl border shadow-sm ${allOperational ? 'border-primary/25 bg-primary/[0.045]' : 'border-destructive/30 bg-destructive/[0.045]'}`}>
-        <div className="flex flex-wrap items-center gap-3 border-b border-current/10 px-4 py-3">
-          <span className={`grid size-9 place-items-center rounded-full ${allOperational ? 'bg-primary/12 text-primary' : 'bg-destructive/12 text-destructive'}`}>
-            {allOperational ? <ActivityIcon className="size-5" /> : <TriangleAlertIcon className="size-5" />}
-          </span>
-          <div className="min-w-0 flex-1">
-            <h2 className="font-heading text-base font-semibold">{allOperational ? '所有系统正常' : down ? `${down} 项服务异常` : '部分服务等待检查'}</h2>
-            <p className="text-xs text-muted-foreground">最后心跳 {formatTime(latestTime)} · 每 60 秒刷新</p>
-          </div>
-        </div>
-        <dl className="grid grid-cols-2 divide-x divide-y divide-border/60 sm:grid-cols-4 sm:divide-y-0">
-          <Metric label="正常" value={`${up}/${monitors.length}`} />
-          <Metric label="异常" value={String(down)} danger={down > 0} />
-          <Metric label="24h 平均可用率" value={averageUptime} />
-          <Metric label="监控分组" value={String(data.groups.length)} />
-        </dl>
-      </section>
-
-      {data.incident && <aside className="rounded-xl border border-destructive/30 bg-destructive/5 px-4 py-3">
-        <h2 className="font-semibold text-destructive">{data.incident.title}</h2>
-        <p className="mt-1 text-sm text-muted-foreground">{data.incident.content}</p>
-      </aside>}
-
-      <div className="flex flex-col gap-4">{data.groups.map((group) => {
-        const groupUp = group.monitorList.filter((monitor) => data.latest[String(monitor.id)]?.status === 1).length
-        return <section key={group.id} className="overflow-hidden rounded-xl border border-border/75 bg-card shadow-sm">
-          <header className="flex items-center justify-between gap-4 border-b border-border/70 bg-muted/30 px-4 py-2.5">
-            <h2 className="font-heading text-sm font-semibold">{group.name}</h2>
-            <span className="text-xs tabular-nums text-muted-foreground">{groupUp}/{group.monitorList.length} 正常</span>
-          </header>
-          <div className="divide-y divide-border/60">{group.monitorList.map((monitor) => {
-            const id = String(monitor.id)
-            const heartbeat = data.latest[id]
-            const history = data.history?.[id] ?? []
-            const uptime = data.uptime[`${monitor.id}_24`]
-            const current = state(heartbeat?.status)
-            return <article key={monitor.id} className="grid min-w-0 gap-3 px-4 py-3 lg:grid-cols-[minmax(12rem,1fr)_minmax(16rem,1.65fr)_minmax(12rem,1fr)] lg:items-center">
-              <div className="flex min-w-0 items-center gap-2.5">
-                <span className={`size-2.5 shrink-0 rounded-full ${heartbeat?.status === 1 ? 'bg-primary' : heartbeat?.status === 3 ? 'bg-chart-1' : 'bg-destructive'}`} aria-hidden="true" />
-                <div className="min-w-0">
-                  <h3 className="truncate text-sm font-semibold" title={monitorLabel(monitor.name)}>{monitorLabel(monitor.name)}</h3>
-                  <p className="mt-0.5 truncate text-xs text-muted-foreground">{[
-                    current,
-                    monitor.type.toUpperCase(),
-                    typeof monitor.certExpiryDaysRemaining === 'number' && monitor.validCert ? `证书 ${monitor.certExpiryDaysRemaining} 天` : null,
-                  ].filter(Boolean).join(' · ')}</p>
-                </div>
-              </div>
-              <div className="min-w-0">
-                <div className="mb-1.5 flex items-center justify-between text-[0.68rem] text-muted-foreground"><span>最近 {history.length} 次</span><span className="font-medium tabular-nums text-foreground">{Number.isFinite(uptime) ? `${(uptime * 100).toFixed(2)}%` : '—'}</span></div>
-                <StatusBlockIndicator heartbeats={history} />
-              </div>
-              <div className="min-w-0">
-                <div className="mb-0.5 flex items-center justify-between text-[0.68rem] text-muted-foreground"><span>延迟趋势</span><span className="font-medium tabular-nums text-foreground">{Number.isFinite(heartbeat?.ping) ? `${heartbeat?.ping} ms` : '—'}</span></div>
-                <Suspense fallback={<div className="h-16 animate-pulse rounded-md bg-muted/60" aria-label="正在加载延迟趋势" />}><MonitoringChart heartbeats={history} /></Suspense>
-              </div>
-            </article>
-          })}</div>
-        </section>
-      })}</div>
+  const filtered = data?.groups.map((group) => ({ ...group, monitorList: group.monitorList.filter((monitor) => monitor.name.toLowerCase().includes(search.trim().toLowerCase()) && (filter === 'all' || String(data.latest[String(monitor.id)]?.status) === filter)) })).filter((group) => group.monitorList.length) ?? []
+  return <div className="space-y-6">
+    <PageHeading title="服务状态" description="实时掌握服务可用性、响应延迟与事件进展。" actions={[
+      <Button key="refresh" variant="outline" disabled={query.query.isFetching} onClick={() => void query.query.refetch()}><RefreshCwIcon />刷新</Button>,
+      <Button key="public" asChild><a href={`${UPTIME_BASE_URL}/status/lingxiloop`} target="_blank" rel="noopener noreferrer">公开状态页<ExternalLinkIcon /></a></Button>,
+    ]} />
+    {query.query.isLoading && !data && <ResourceSkeleton variant="detail" label="正在加载服务监控" />}
+    {query.query.isError && <Card role="alert"><CardHeader><CardTitle>无法读取监控数据</CardTitle><CardDescription>监控服务暂时不可用，请稍后重试。</CardDescription></CardHeader><CardContent><Button variant="outline" onClick={() => void query.query.refetch()}>重新加载</Button></CardContent></Card>}
+    {data && !query.query.isError && <>
+      <section className={`flex flex-wrap items-center gap-4 rounded-xl border p-5 ${allOperational ? 'border-emerald-500/20 bg-emerald-500/5' : 'border-amber-500/20 bg-amber-500/5'}`} aria-label="服务健康摘要"><span className={`grid size-12 place-items-center rounded-xl ${allOperational ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600'}`}>{allOperational ? <ShieldCheckIcon className="size-6" /> : <TriangleAlertIcon className="size-6" />}</span><div className="flex-1"><h2 className="text-base font-semibold">{allOperational ? '所有系统运行正常' : down ? `${down} 项服务需要关注` : monitors.length ? '部分服务正在维护或等待检查' : '暂无监控项目'}</h2><p className="mt-1 text-xs text-muted-foreground">由 Uptime Kuma 提供持续观测 · 每 60 秒刷新</p></div><Badge variant="outline" className="bg-card">实时监控</Badge></section>
+      <section className="admin-kpi-grid" aria-label="可用性指标">{[
+        { label: '正常服务', value: `${up} / ${monitors.length}`, note: '最新检查结果', icon: ActivityIcon, color: 'emerald' },
+        { label: '异常服务', value: String(down), note: '需要优先处理', icon: TriangleAlertIcon, color: 'amber' },
+        { label: '24 小时可用率', value: averageUptime, note: `${uptimeValues.length} 项监控的平均值`, icon: HeartPulseIcon, color: 'blue' },
+        { label: '监控分组', value: String(data.groups.length), note: '按系统组织服务', icon: ShieldCheckIcon, color: 'violet' },
+      ].map(({ label, value, note, icon: Icon, color }) => <Card key={label} className="admin-kpi"><CardContent><div className="flex items-center justify-between"><p className="text-sm text-muted-foreground">{label}</p><span className="admin-kpi-icon" data-color={color}><Icon className="size-5" /></span></div><p className="admin-kpi-value">{value}</p><p className="text-xs text-muted-foreground">{note}</p></CardContent></Card>)}</section>
+      {data.incident && <Card className="border-amber-500/30! bg-amber-500/5"><CardHeader><CardTitle>{data.incident.title}</CardTitle><CardDescription>{data.incident.content}</CardDescription></CardHeader></Card>}
+      {data.maintenanceList.length > 0 && <p className="rounded-xl border bg-card p-4 text-sm">当前有 {data.maintenanceList.length} 项维护计划，详情请查看公开状态页。</p>}
+      <div className="admin-toolbar"><InputGroup className="max-w-md"><InputGroupAddon><SearchIcon /></InputGroupAddon><InputGroupInput value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索监控服务…" aria-label="搜索监控服务" /></InputGroup><select aria-label="筛选服务状态" className="admin-select" value={filter} onChange={(event) => setFilter(event.target.value)}><option value="all">全部状态</option><option value="1">正常</option><option value="0">异常</option><option value="3">维护中</option></select></div>
+      <div className="grid items-start gap-5 xl:grid-cols-2">{filtered.map((group) => <Card key={group.id} className="gap-0! overflow-hidden pb-0"><CardHeader className="flex flex-row items-center justify-between border-b pb-5"><div><CardTitle>{group.name}</CardTitle><CardDescription className="mt-1">{group.monitorList.length} 项匹配监控</CardDescription></div><Badge variant="outline">{group.monitorList.filter((monitor) => data.latest[String(monitor.id)]?.status === 1).length} 正常</Badge></CardHeader><CardContent className="divide-y px-0">{group.monitorList.map((monitor) => {
+        const id = String(monitor.id)
+        const heartbeat = data.latest[id]
+        const history = data.history?.[id] ?? []
+        const uptime = data.uptime[`${monitor.id}_24`]
+        return <article key={monitor.id} className="space-y-4 p-5"><header className="flex items-start justify-between gap-4"><div className="min-w-0"><h3 className="break-words text-sm font-semibold">{monitor.name.includes(' / ') ? monitor.name.split(' / ').slice(1).join(' / ') : monitor.name}</h3><p className="mt-1 text-xs text-muted-foreground">{monitor.type.toUpperCase()}{typeof monitor.certExpiryDaysRemaining === 'number' && monitor.validCert ? ` · 证书有效期 ${monitor.certExpiryDaysRemaining} 天` : ''}</p></div><Badge variant="outline" className="admin-status-badge" data-tone={heartbeat?.status === 1 ? 'success' : heartbeat?.status === 0 ? 'danger' : 'neutral'}><span className="size-1.5 rounded-full bg-current" />{state(heartbeat?.status)}</Badge></header><div className="admin-kuma-observation"><div className="mb-2 flex items-center justify-between text-xs text-muted-foreground"><span>最近 {history.length} 次检查</span><strong className="text-foreground">{Number.isFinite(uptime) ? `${(uptime * 100).toFixed(2)}%` : '—'}</strong></div><StatusBlockIndicator heartbeats={history} /><div className="mt-4 flex items-center justify-between text-xs text-muted-foreground"><span>响应延迟</span><strong className="text-foreground">{Number.isFinite(heartbeat?.ping) ? `${heartbeat?.ping} ms` : '—'}</strong></div><Suspense fallback={<div className="h-16 rounded-md bg-muted" aria-label="正在加载延迟趋势" />}><MonitoringChart heartbeats={history} /></Suspense></div><p className="text-[11px] text-muted-foreground">最近心跳 · {formatTime(heartbeat?.time)}</p></article>
+      })}</CardContent></Card>)}</div>
+      {!filtered.length && <Card><CardContent className="py-12 text-center text-sm text-muted-foreground">没有匹配的监控服务，请调整搜索条件。</CardContent></Card>}
     </>}
-  </main>
-}
-
-function Metric({ label, value, danger = false }: { label: string; value: string; danger?: boolean }) {
-  return <div className="px-4 py-3"><dt className="text-[0.68rem] font-medium uppercase tracking-wide text-muted-foreground">{label}</dt><dd className={`mt-1 font-heading text-xl font-semibold tabular-nums ${danger ? 'text-destructive' : ''}`}>{value}</dd></div>
+  </div>
 }

@@ -1,182 +1,51 @@
 import { useCustom } from '@refinedev/core'
-import type { Dashboard, QueryResult } from '@openplait/core'
-import {
-  ActivityIcon,
-  ArrowUpRightIcon,
-  BotIcon,
-  ChevronDownIcon,
-  CircleAlertIcon,
-  Clock3Icon,
-  CoinsIcon,
-  RefreshCwIcon,
-  RouteIcon,
-  ZapIcon,
-} from 'lucide-react'
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { ActivityIcon, ArrowUpRightIcon, Clock3Icon, CoinsIcon, RefreshCwIcon, RouteIcon } from 'lucide-react'
 import { Link } from 'react-router'
 import { ResourceSkeleton } from '@/components/ResourceSkeleton'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { API_URL } from './api'
+import { compactNumber, frameRows, metricNumber, trendData, type AnalyticsResponse } from './analytics-data'
+import { AreaChart } from './components/tremor/AreaChart'
+import { BarList } from './components/tremor/BarList'
+import { DonutChart } from './components/tremor/DonutChart'
 import { normalizeLingxiLitUrl } from './lingxilit-url'
-
-type OpenPlaitResponse = {
-  dashboard: Dashboard
-  observedAt: string
-  results: { summary: QueryResult; trend: QueryResult; models: QueryResult; recentRuns: QueryResult }
-}
-type FrameRow = Record<string, unknown>
-
-const STATUS: Record<string, { label: string; color: string; className: string }> = {
-  completed: { label: '完成', color: 'var(--primary)', className: 'bg-primary' },
-  failed: { label: '失败', color: 'var(--destructive)', className: 'bg-destructive' },
-  cancelled: { label: '取消', color: 'var(--chart-4)', className: 'bg-chart-4' },
-  running: { label: '运行中', color: 'var(--chart-2)', className: 'bg-chart-2' },
-}
-
-function rows(result: QueryResult | undefined): FrameRow[] {
-  const frame = result?.frames[0]
-  if (!frame) return []
-  return Array.from({ length: frame.length }, (_, index) => Object.fromEntries(
-    frame.fields.map((field) => [field.name, field.values[index]]),
-  ))
-}
-
-function number(row: FrameRow, key: string): number {
-  const value = Number(row[key])
-  return Number.isFinite(value) ? value : 0
-}
-
-function compact(value: number): string {
-  return new Intl.NumberFormat('zh-CN', { notation: 'compact', maximumFractionDigits: 1 }).format(value)
-}
+import { PageHeading } from './pages'
+import { RecordAvatar, StatusBadge } from './record-components'
+import { formatValue } from './record-presentation'
 
 function duration(value: number): string {
   return value >= 60_000 ? `${(value / 60_000).toFixed(1)} 分` : value >= 1_000 ? `${(value / 1_000).toFixed(1)} 秒` : `${Math.round(value)} ms`
 }
 
-function ObservabilityError({ retry }: { retry: () => void }) {
-  return <Card className="grid min-h-80 place-items-center border-dashed"><CardContent className="flex max-w-md flex-col items-center gap-4 text-center">
-    <CircleAlertIcon className="size-7 text-destructive" aria-hidden="true" />
-    <div><h2 className="font-heading font-semibold">无法读取可观测数据</h2><p className="mt-1 text-sm text-muted-foreground">运行账本暂不可用，OpenLIT 的遥测采集不受此页面影响。</p></div>
-    <Button variant="outline" onClick={retry}><RefreshCwIcon />重新加载</Button>
-  </CardContent></Card>
-}
-
 export function ObservabilityPage() {
-  const query = useCustom<OpenPlaitResponse>({
-    url: `${API_URL}/control/platform/observability`,
-    method: 'get',
-    queryOptions: { refetchInterval: 30_000 },
-  })
+  const query = useCustom<AnalyticsResponse>({ url: `${API_URL}/control/platform/observability`, method: 'get', queryOptions: { refetchInterval: 30_000 } })
   const payload = query.query.data?.data
-  if (query.query.isLoading && !payload) return <ResourceSkeleton variant="detail" label="正在读取 AI 可观测数据" />
-  if (query.query.isError || !payload) return <ObservabilityError retry={() => void query.query.refetch()} />
-
-  const summary = rows(payload.results.summary)[0] ?? {}
-  const trend = rows(payload.results.trend).map((row) => ({
-    ...row,
-    time: new Date(String(row.time)).getTime(),
-    runs: number(row, 'runs'),
-    failures: number(row, 'failures'),
-  }))
-  const models = rows(payload.results.models).map((row) => ({
-    model: String(row.model), runs: number(row, 'runs'), tokens: number(row, 'tokens'),
-  }))
-  const recentRuns = rows(payload.results.recentRuns)
-  const statusData = [
-    { name: '完成', value: number(summary, 'successes'), color: STATUS.completed.color },
-    { name: '失败/取消', value: number(summary, 'failures'), color: STATUS.failed.color },
-    { name: '运行中', value: number(summary, 'active'), color: STATUS.running.color },
-  ].filter((item) => item.value > 0)
-  const observedAt = new Date(payload.observedAt)
+  if (query.query.isLoading && !payload) return <ResourceSkeleton variant="detail" label="正在读取 AI 分析数据" />
+  if (query.query.isError || !payload) return <Card role="alert"><CardHeader><CardTitle>AI 分析暂不可用</CardTitle><CardDescription>暂时无法读取运行账本，请稍后重试。</CardDescription></CardHeader><CardContent><Button variant="outline" onClick={() => void query.query.refetch()}>重新加载</Button></CardContent></Card>
+  const summary = frameRows(payload.results.summary)[0] ?? {}
+  const runs = metricNumber(summary, 'runs')
+  const models = frameRows(payload.results.models).map((row) => ({ name: String(row.model), value: metricNumber(row, 'tokens') }))
+  const recent = frameRows(payload.results.recentRuns)
+  const results = [{ name: '已完成', value: metricNumber(summary, 'successes') }, { name: '失败或取消', value: metricNumber(summary, 'failures') }, { name: '运行中', value: metricNumber(summary, 'active') }]
   const openLitUrl = normalizeLingxiLitUrl(import.meta.env.VITE_LINGXILIT_URL)
-
-  return <main className="space-y-5">
-    <header className="flex flex-col items-start justify-between gap-4 xl:flex-row xl:items-end">
-      <div>
-        <p className="mb-2 flex items-center gap-2 text-xs font-semibold tracking-[0.16em] text-primary"><span className="h-0.5 w-5 rounded-full bg-primary" />OPENPLAIT · 24H</p>
-        <h1 className="font-heading text-3xl font-semibold tracking-tight sm:text-4xl">AI 可观测</h1>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">用图表先判断运行量、可靠性和模型消耗；需要追查时再展开单次运行。</p>
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-xs text-muted-foreground"><span className="me-2 inline-block size-2 rounded-full bg-primary" />更新于 {observedAt.toLocaleTimeString('zh-CN', { hour12: false })}</span>
-        <Button variant="outline" size="sm" onClick={() => void query.query.refetch()} disabled={query.query.isFetching}><RefreshCwIcon className={query.query.isFetching ? 'animate-spin' : ''} />刷新</Button>
-        {openLitUrl && <Button asChild variant="outline" size="sm"><a href={openLitUrl} target="_blank" rel="noopener noreferrer">OpenLIT<ArrowUpRightIcon /></a></Button>}
-      </div>
-    </header>
-
-    <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="过去 24 小时摘要">
-      {[
-        { label: '运行', value: compact(number(summary, 'runs')), note: `${compact(number(summary, 'active'))} 个正在运行`, icon: ActivityIcon },
-        { label: '成功率', value: `${number(summary, 'success_rate').toFixed(1)}%`, note: `${compact(number(summary, 'failures'))} 个失败或取消`, icon: RouteIcon },
-        { label: '平均耗时', value: duration(number(summary, 'average_duration_ms')), note: '从开始到结束', icon: Clock3Icon },
-        { label: 'Token', value: compact(number(summary, 'tokens')), note: '输入与输出合计', icon: CoinsIcon },
-      ].map(({ label, value, note, icon: Icon }) => <Card key={label} className="gap-3 py-4"><CardHeader className="flex-row items-center justify-between px-4"><CardDescription>{label}</CardDescription><span className="grid size-8 place-items-center rounded-lg bg-primary/10 text-primary"><Icon className="size-4" aria-hidden="true" /></span></CardHeader><CardContent className="px-4"><strong className="font-heading text-2xl font-semibold tabular-nums tracking-tight">{value}</strong><p className="mt-1 text-xs text-muted-foreground">{note}</p></CardContent></Card>)}
-    </section>
-
-    <section className="grid gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(18rem,1fr)]">
-      <Card className="min-w-0">
-        <CardHeader><CardTitle>运行趋势</CardTitle><CardDescription>每小时启动量与失败量</CardDescription></CardHeader>
-        <CardContent><div className="h-72 min-w-0" role="img" aria-label="过去 24 小时 Agent 运行与失败趋势">
-          <ResponsiveContainer width="100%" height="100%" minWidth={0}>
-            <AreaChart data={trend} accessibilityLayer margin={{ top: 8, right: 8, bottom: 0, left: -20 }}>
-              <defs><linearGradient id="observability-runs" x1="0" x2="0" y1="0" y2="1"><stop offset="5%" stopColor="var(--primary)" stopOpacity={0.28} /><stop offset="95%" stopColor="var(--primary)" stopOpacity={0} /></linearGradient></defs>
-              <CartesianGrid vertical={false} stroke="var(--border)" strokeDasharray="3 5" />
-              <XAxis dataKey="time" type="number" scale="time" domain={['dataMin', 'dataMax']} tickFormatter={(value) => new Date(Number(value)).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })} tickLine={false} axisLine={false} fontSize={11} minTickGap={28} />
-              <YAxis allowDecimals={false} tickLine={false} axisLine={false} fontSize={11} />
-              <Tooltip labelFormatter={(value) => new Date(Number(value)).toLocaleString('zh-CN', { hour12: false })} contentStyle={{ borderRadius: 10, borderColor: 'var(--border)', background: 'var(--popover)', color: 'var(--popover-foreground)', fontSize: 12 }} />
-              <Area type="monotone" dataKey="runs" name="运行" stroke="var(--primary)" strokeWidth={2} fill="url(#observability-runs)" dot={false} activeDot={{ r: 3 }} />
-              <Area type="monotone" dataKey="failures" name="失败/取消" stroke="var(--destructive)" strokeWidth={1.5} fill="transparent" dot={false} />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div></CardContent>
-      </Card>
-
-      <Card className="min-w-0">
-        <CardHeader><CardTitle>运行结果</CardTitle><CardDescription>过去 24 小时状态构成</CardDescription></CardHeader>
-        <CardContent className="grid place-items-center"><div className="relative h-48 w-full" role="img" aria-label="运行结果环形图">
-          {statusData.length ? <ResponsiveContainer width="100%" height="100%" minWidth={0}><PieChart accessibilityLayer><Pie data={statusData} dataKey="value" nameKey="name" innerRadius={54} outerRadius={76} paddingAngle={3} stroke="none">{statusData.map((item) => <Cell key={item.name} fill={item.color} />)}</Pie><Tooltip contentStyle={{ borderRadius: 10, borderColor: 'var(--border)', background: 'var(--popover)', color: 'var(--popover-foreground)', fontSize: 12 }} /></PieChart></ResponsiveContainer> : <div className="grid h-full place-items-center text-sm text-muted-foreground">暂无运行</div>}
-          <div className="pointer-events-none absolute inset-0 grid place-items-center text-center"><span><strong className="block text-xl tabular-nums">{compact(number(summary, 'runs'))}</strong><small className="text-muted-foreground">运行</small></span></div>
-        </div><div className="flex flex-wrap justify-center gap-3 text-xs text-muted-foreground">{statusData.map((item) => <span key={item.name} className="flex items-center gap-1.5"><span className="size-2 rounded-full" style={{ background: item.color }} />{item.name} {item.value}</span>)}</div></CardContent>
-      </Card>
-    </section>
-
-    <Card className="min-w-0">
-      <CardHeader><CardTitle>模型用量</CardTitle><CardDescription>按 Token 排序；条形长度直接显示主要消耗来源</CardDescription></CardHeader>
-      <CardContent>{models.length ? <div className="h-64 min-w-0" role="img" aria-label="模型 Token 用量横向条形图"><ResponsiveContainer width="100%" height="100%" minWidth={0}><BarChart data={models} layout="vertical" accessibilityLayer margin={{ left: 8, right: 20 }}><CartesianGrid horizontal={false} stroke="var(--border)" strokeDasharray="3 5" /><XAxis type="number" tickFormatter={(value) => compact(Number(value))} tickLine={false} axisLine={false} fontSize={11} /><YAxis type="category" dataKey="model" width={120} tickLine={false} axisLine={false} fontSize={11} tickFormatter={(value) => String(value).slice(0, 18)} /><Tooltip formatter={(value) => [compact(Number(value)), 'Token']} cursor={{ fill: 'var(--muted)', opacity: 0.45 }} contentStyle={{ borderRadius: 10, borderColor: 'var(--border)', background: 'var(--popover)', color: 'var(--popover-foreground)', fontSize: 12 }} /><Bar dataKey="tokens" name="Token" fill="var(--primary)" radius={[0, 5, 5, 0]} maxBarSize={22} /></BarChart></ResponsiveContainer></div> : <div className="grid h-40 place-items-center text-sm text-muted-foreground">暂无模型用量</div>}</CardContent>
-    </Card>
-
-    <section aria-labelledby="recent-runs-title">
-      <div className="mb-3 flex items-end justify-between gap-4"><div><h2 id="recent-runs-title" className="font-heading text-lg font-semibold">最近运行</h2><p className="mt-1 text-sm text-muted-foreground">默认收起，展开查看一次运行的诊断摘要。</p></div><Badge variant="outline">{recentRuns.length} 条</Badge></div>
-      <div className="space-y-2">
-        {recentRuns.map((run) => {
-          const state = STATUS[String(run.status)] ?? { label: String(run.status), className: 'bg-muted-foreground' }
-          return <details key={String(run.id)} className="group rounded-xl border bg-card open:shadow-sm">
-            <summary className="grid min-h-14 cursor-pointer list-none grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-xl px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:grid-cols-[auto_minmax(10rem,1fr)_minmax(8rem,0.7fr)_auto_auto_auto]">
-              <span className={`size-2 rounded-full ${state.className}`} aria-hidden="true" />
-              <span className="min-w-0"><strong className="block truncate text-sm">{String(run.agent)}</strong><small className="block truncate text-muted-foreground">{String(run.model)}</small></span>
-              <Badge variant="outline" className="hidden sm:inline-flex">{state.label}</Badge>
-              <span className="hidden text-end text-xs tabular-nums text-muted-foreground sm:block">{duration(number(run, 'duration_ms'))}</span>
-              <time className="hidden text-end text-xs text-muted-foreground sm:block" dateTime={String(run.timestamp)}>{new Date(String(run.timestamp)).toLocaleString('zh-CN', { hour12: false })}</time>
-              <ChevronDownIcon className="size-4 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden="true" />
-            </summary>
-            <div className="border-t px-4 py-4">
-              <dl className="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-                <div><dt className="text-xs text-muted-foreground">Token</dt><dd className="mt-1 font-medium tabular-nums">{compact(number(run, 'tokens'))}</dd></div>
-                <div><dt className="text-xs text-muted-foreground">工具调用</dt><dd className="mt-1 font-medium tabular-nums">{number(run, 'tool_calls')}</dd></div>
-                <div><dt className="text-xs text-muted-foreground">公司</dt><dd className="mt-1 truncate font-mono text-xs">{String(run.company ?? '—')}</dd></div>
-                <div><dt className="text-xs text-muted-foreground">运行 ID</dt><dd className="mt-1 truncate font-mono text-xs" title={String(run.id)}>{String(run.id)}</dd></div>
-              </dl>
-              {Boolean(run.summary) && <div className="mt-4 rounded-lg bg-muted/55 p-3"><p className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground"><BotIcon className="size-3.5" />运行摘要</p><p className="text-sm leading-6">{String(run.summary)}</p></div>}
-              {Boolean(run.error) && <div className="mt-3 rounded-lg bg-destructive/8 p-3 text-destructive"><p className="mb-1 flex items-center gap-1.5 text-xs font-medium"><ZapIcon className="size-3.5" />错误</p><p className="font-mono text-xs leading-5">{String(run.error)}</p></div>}
-              <div className="mt-4"><Button asChild variant="outline" size="sm"><Link to={`/resources/agent-runs/${encodeURIComponent(String(run.id))}`}>查看完整记录<ArrowUpRightIcon /></Link></Button></div>
-            </div>
-          </details>
-        })}
-        {!recentRuns.length && <Card className="grid min-h-36 place-items-center border-dashed text-sm text-muted-foreground">暂无运行记录</Card>}
-      </div>
-    </section>
-  </main>
+  return <div className="space-y-6">
+    <PageHeading title="AI 分析" description="从运行质量到模型消耗，持续了解 AI 团队的表现。" actions={[
+      <Button key="refresh" variant="outline" disabled={query.query.isFetching} onClick={() => void query.query.refetch()}><RefreshCwIcon />刷新数据</Button>,
+      ...(openLitUrl ? [<Button key="openlit" asChild><a href={openLitUrl} target="_blank" rel="noopener noreferrer">深度诊断<ArrowUpRightIcon /></a></Button>] : []),
+    ]} />
+    <div className="admin-overview-tabs"><Link to="/">运营总览</Link><span aria-current="page">AI 分析</span><Link to="/releases">发布动态</Link><span className="ms-auto text-xs! text-muted-foreground">过去 24 小时</span></div>
+    <section className="admin-kpi-grid" aria-label="过去 24 小时指标">{[
+      { label: '运行总量', value: compactNumber(runs), note: `${compactNumber(metricNumber(summary, 'active'))} 个正在执行`, icon: ActivityIcon, color: 'blue' },
+      { label: '运行成功率', value: runs ? `${metricNumber(summary, 'success_rate').toFixed(1)}%` : '—', note: `${compactNumber(metricNumber(summary, 'failures'))} 个失败或取消`, icon: RouteIcon, color: 'emerald' },
+      { label: '平均完成耗时', value: duration(metricNumber(summary, 'average_duration_ms')), note: '从开始执行到任务结束', icon: Clock3Icon, color: 'amber' },
+      { label: 'Token 消耗', value: compactNumber(metricNumber(summary, 'tokens')), note: '输入与输出 Token 合计', icon: CoinsIcon, color: 'violet' },
+    ].map(({ label, value, note, icon: Icon, color }) => <Card key={label} className="admin-kpi"><CardContent><div className="flex items-center justify-between"><p className="text-sm text-muted-foreground">{label}</p><span className="admin-kpi-icon" data-color={color}><Icon className="size-5" /></span></div><p className="admin-kpi-value">{value}</p><p className="text-xs text-muted-foreground">{note}</p></CardContent></Card>)}</section>
+    <div className="grid gap-5 xl:grid-cols-[minmax(0,2fr)_minmax(18rem,1fr)]"><Card className="min-w-0"><CardHeader className="flex flex-row items-start justify-between"><div><CardTitle>运行趋势</CardTitle><CardDescription className="mt-1">按小时查看运行量与失败量</CardDescription></div><Badge variant="outline">24 小时</Badge></CardHeader><CardContent><AreaChart className="h-72" data={trendData(payload.results.trend)} index="time" categories={['运行', '失败']} colors={['blue', 'pink']} allowDecimals={false} valueFormatter={compactNumber} tickGap={32} aria-label="每小时的运行与失败数量" /></CardContent></Card>
+      <Card><CardHeader><CardTitle>运行结果分布</CardTitle><CardDescription>完成、失败与执行中的占比</CardDescription></CardHeader><CardContent><div className="relative mx-auto size-44">{runs ? <DonutChart className="size-44" data={results} category="name" value="value" colors={['emerald', 'pink', 'blue']} aria-label={results.map((item) => `${item.name} ${item.value}`).join('，')} /> : <div className="size-44 rounded-full border-[18px] border-muted" />}<div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center"><strong className="text-2xl tabular-nums">{compactNumber(runs)}</strong><span className="text-xs text-muted-foreground">总运行量</span></div></div><ul className="mt-5 space-y-3">{results.map((item, index) => <li key={item.name} className="flex justify-between text-sm"><span className="flex items-center gap-2"><span className={`size-2 rounded-full ${['bg-emerald-500', 'bg-pink-500', 'bg-blue-500'][index]}`} />{item.name}</span><strong>{compactNumber(item.value)}</strong></li>)}</ul></CardContent></Card></div>
+    <Card><CardHeader><CardTitle>模型用量排行</CardTitle><CardDescription>按 Token 消耗排序，识别主要用量来源</CardDescription></CardHeader><CardContent>{models.length ? <BarList data={models} valueFormatter={(value) => `${compactNumber(value)} Token`} aria-label="各模型 Token 消耗" /> : <div className="py-12 text-center text-sm text-muted-foreground">此时间段暂无模型用量</div>}</CardContent></Card>
+    <Card className="overflow-hidden"><CardHeader className="flex flex-row items-center justify-between"><div><CardTitle>最近运行</CardTitle><CardDescription className="mt-1">查看状态、耗时与用量，进一步追踪单次运行</CardDescription></div><Button asChild variant="outline" size="sm"><Link to="/resources/agent-runs">全部运行<ArrowUpRightIcon /></Link></Button></CardHeader><CardContent><Table className="min-w-[44rem]"><TableHeader><TableRow><TableHead>Agent / 模型</TableHead><TableHead>状态</TableHead><TableHead>Token</TableHead><TableHead>耗时</TableHead><TableHead>开始时间</TableHead><TableHead className="text-end">详情</TableHead></TableRow></TableHeader><TableBody>{recent.map((run) => <TableRow key={String(run.id)}><TableCell><div className="flex items-center gap-3"><RecordAvatar record={{ id: String(run.id), name: String(run.agent) }} /><div><p className="font-medium">{String(run.agent)}</p><p className="text-xs text-muted-foreground">{String(run.model)}</p></div></div></TableCell><TableCell><StatusBadge value={run.status} /></TableCell><TableCell>{compactNumber(metricNumber(run, 'tokens'))}</TableCell><TableCell>{duration(metricNumber(run, 'duration_ms'))}</TableCell><TableCell className="text-muted-foreground">{formatValue(run.timestamp, 'started_at')}</TableCell><TableCell className="text-end"><Button variant="ghost" asChild size="icon"><Link to={`/resources/agent-runs/${encodeURIComponent(String(run.id))}`} aria-label={`查看 ${String(run.agent)} 的运行`}><ArrowUpRightIcon /></Link></Button></TableCell></TableRow>)}</TableBody></Table>{!recent.length && <p className="py-12 text-center text-sm text-muted-foreground">此时间段暂无运行记录</p>}<p className="mt-4 text-xs text-muted-foreground">更新于 {formatValue(payload.observedAt, 'updated_at')} · 每 30 秒刷新</p></CardContent></Card>
+  </div>
 }

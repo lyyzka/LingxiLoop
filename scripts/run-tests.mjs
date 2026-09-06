@@ -17,7 +17,7 @@ const testsByScope = {
     'server/src/__tests__/storage-provider.test.ts',
     'server/src/__tests__/wukong-client.test.ts',
   ],
-  admin: ['admin/src/lingxilit-url.test.ts'],
+  admin: ['admin/src/lingxilit-url.test.ts', 'admin/src/record-presentation.test.ts'],
   web: [
     'src/api/transport.test.ts',
     'src/features/presentations/presentationFeature.test.ts',

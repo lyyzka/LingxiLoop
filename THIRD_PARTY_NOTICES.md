@@ -1,26 +1,26 @@
 # Third-Party Notices
 
-## Production topology references
+## Shadcn Dashboard
 
-The Refine production overview adapts the 2.5D isometric canvas language from
-FossFLOW commit `59d51ec5a0be809522bc7b53cd70a50fc8dffbe6` and the read-only health-overlay
-model from Rackpad commit `05b75b85f3cd168bc95cd3ff8439a20d7c2cb04c`:
+The admin workspace layout, metric cards and resource directory composition
+adapt Shadcn Dashboard at commit `6f99c0b04b7169f9ef12dc99946bc4faaeb40b9b`:
+https://github.com/shadcndashboard/shadcndashboard
 
-- https://github.com/victortassinari/FossFLOW
-- https://github.com/Kobii-git/rackpad
+MIT License, Copyright (c) 2026 Shadcn Dashboard. The complete license is
+distributed at `admin/public/licenses/shadcndashboard.txt`.
+Template sample business data is not included in the production application.
 
-Both references are MIT licensed. No editor or React Flow runtime is bundled;
-the production map is implemented with the project's existing React, SVG and CSS.
+## Tremor
 
-## Dokploy
+The admin workspace uses the source-distributed Tremor AreaChart, DonutChart
+and BarList components and their chart utilities from commit
+`ca4d588f47820ff3d514d37fa4ee08a4222dec11`:
+https://github.com/tremorlabs/tremor
 
-The Refine release dashboard adapts Dokploy's centralized deployment table
-component from commit `261ebb2317c324ae38f90bcacdd888ae06a04590`:
-https://github.com/Dokploy/dokploy/blob/261ebb2317c324ae38f90bcacdd888ae06a04590/apps/dokploy/components/dashboard/deployments/show-deployments-table.tsx
-
-The adapted source is retained in `admin/src/dokploy-deployment-board.tsx`
-under the Apache License, Version 2.0. Copyright 2026-present Dokploy
-Technology, Inc.
+The components in `admin/src/components/tremor` are adapted for the existing
+Lucide icons, class utilities, Recharts 3, Chinese category names and keyboard
+accessibility. The upstream Apache-2.0 license and included notices are
+distributed at `admin/public/licenses/tremor.txt`.
 
 ## Kuma Mieru
 

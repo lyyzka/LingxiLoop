@@ -1,5 +1,5 @@
 import { useCustom } from '@refinedev/core'
-import { CheckCircle2Icon, KeyRoundIcon, MailCheckIcon, ShieldCheckIcon } from 'lucide-react'
+import { CheckCircle2Icon, KeyRoundIcon, LockKeyholeIcon, MailCheckIcon, SaveIcon, ShieldCheckIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { ResourceSkeleton } from '@/components/ResourceSkeleton'
 import { Badge } from '@/components/ui/badge'
@@ -34,7 +34,7 @@ const EDITABLE_FIELDS = [
 ] as const
 
 export function AuthSettingsPage() {
-  const settings = useCustom<AuthSettings>({ url: `${API_URL}/control/auth-settings`, method: 'get' })
+  const settings = useCustom<AuthSettings>({ url: `${API_URL}/control/auth-settings`, method: 'get', queryOptions: { refetchOnWindowFocus: false } })
   const [form, setForm] = useState<AuthSettings | null>(null)
   const [pending, setPending] = useState(false)
 
@@ -76,33 +76,34 @@ export function AuthSettingsPage() {
   }
 
   return <div className="space-y-6">
-    <PageHeading title="身份认证" description="管理 Better Auth 的运行参数并检查关键安全依赖。" />
-    <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+    <PageHeading title="身份与安全" description="管理登录体验、会话有效期与访问保护策略。" />
+    <div className="admin-overview-tabs"><a href="#auth-parameters">会话与验证</a><a href="#auth-security">安全策略</a></div>
+    <section className="admin-kpi-grid" aria-label="身份认证状态">
       <StatusCard icon={MailCheckIcon} label="邮件服务" ready={form.secrets.smtp} detail="阿里企业邮箱 SMTP" />
       <StatusCard icon={ShieldCheckIcon} label="人机验证" ready={form.secrets.turnstile} detail="Cloudflare Turnstile" />
       <StatusCard icon={KeyRoundIcon} label="邮箱验证" ready={form.locked.requireEmailVerification} detail="Email OTP" />
       <StatusCard icon={CheckCircle2Icon} label="默认角色" ready detail={form.locked.defaultRole} />
     </section>
-    <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,0.7fr)]">
-      <Card>
-        <CardHeader><CardTitle>运行参数</CardTitle><CardDescription>数值经过服务端范围校验；保存后无需重新部署 Worker。</CardDescription></CardHeader>
-        <CardContent><form onSubmit={(event) => void save(event)}><FieldGroup>
+    <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,1.4fr)_minmax(20rem,1fr)]">
+      <Card id="auth-parameters">
+        <CardHeader className="border-b"><CardTitle>会话与验证</CardTitle><CardDescription>设置用户登录后的有效期，以及认证请求的访问频率。</CardDescription></CardHeader>
+        <CardContent><form onSubmit={(event) => void save(event)}><fieldset disabled={pending}><FieldGroup>
           {EDITABLE_FIELDS.map((field) => <Field key={field.name}>
             <FieldLabel htmlFor={`auth-${field.name}`}>{field.label}</FieldLabel>
-            <Input id={`auth-${field.name}`} type="number" min={field.min} max={field.max} step={1} required value={form[field.name]} onChange={(event) => setForm({ ...form, [field.name]: Number(event.target.value) })} />
+            <Input className="max-w-sm" id={`auth-${field.name}`} type="number" min={field.min} max={field.max} step={1} required value={form[field.name]} onChange={(event) => setForm({ ...form, [field.name]: Number(event.target.value) })} />
             <FieldDescription>{field.description}</FieldDescription>
           </Field>)}
-          <Button type="submit" disabled={pending}>{pending ? '保存中…' : '保存配置'}</Button>
-        </FieldGroup></form></CardContent>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-5"><p className="text-xs text-muted-foreground">变更将写入审计记录</p><Button type="submit" disabled={pending}><SaveIcon />{pending ? '保存中…' : '保存更改'}</Button></div>
+        </FieldGroup></fieldset></form></CardContent>
       </Card>
-      <Card>
-        <CardHeader><CardTitle>安全锁定项</CardTitle><CardDescription>这些契约不可从控制面关闭，避免误操作削弱注册安全。</CardDescription></CardHeader>
+      <Card id="auth-security">
+        <CardHeader><span className="mb-2 grid size-11 place-items-center rounded-xl bg-primary/10 text-primary"><LockKeyholeIcon className="size-5" /></span><CardTitle>始终开启的安全保护</CardTitle><CardDescription>平台统一保护策略，确保账号注册与登录安全。</CardDescription></CardHeader>
         <CardContent className="space-y-4 text-sm">
           <LockedRow label="注册默认角色" value={form.locked.defaultRole} />
           <LockedRow label="邮箱验证" value="必须完成" />
           <LockedRow label="验证码提供方" value={form.locked.captchaProvider} />
-          <div><p className="font-medium">Turnstile 保护端点</p><div className="mt-2 flex flex-wrap gap-2">{form.locked.captchaEndpoints.map((endpoint) => <Badge key={endpoint} variant="secondary" className="font-mono">{endpoint}</Badge>)}</div></div>
-          <p className="rounded-xl bg-muted p-3 text-xs leading-5 text-muted-foreground">密钥继续通过 Wrangler Secret 管理；控制面只返回是否已配置，不读取或回显 Secret。</p>
+          <details className="rounded-xl border p-3"><summary className="cursor-pointer text-sm font-medium">查看人机验证保护范围</summary><div className="mt-3 flex flex-wrap gap-2">{form.locked.captchaEndpoints.map((endpoint) => <Badge key={endpoint} variant="secondary" className="max-w-full break-all whitespace-normal font-mono">{endpoint}</Badge>)}</div></details>
+          <p className="rounded-xl bg-muted p-4 text-xs leading-6 text-muted-foreground">凭据由平台统一安全管理。此处展示配置状态，更新密钥请联系运维负责人。</p>
         </CardContent>
       </Card>
     </div>
@@ -110,7 +111,7 @@ export function AuthSettingsPage() {
 }
 
 function StatusCard({ icon: Icon, label, ready, detail }: { icon: React.ComponentType<{ className?: string }>; label: string; ready: boolean; detail: string }) {
-  return <Card size="sm"><CardContent className="flex items-start justify-between gap-3"><div><p className="text-sm font-medium">{label}</p><p className="mt-1 text-xs text-muted-foreground">{detail}</p></div><span className="grid size-9 place-items-center rounded-xl bg-muted"><Icon className="size-4" /></span><Badge variant={ready ? 'secondary' : 'destructive'}>{ready ? '已就绪' : '未配置'}</Badge></CardContent></Card>
+  return <Card className="admin-kpi"><CardContent><div className="mb-4 flex items-center justify-between gap-2"><span className="admin-kpi-icon" data-color={ready ? 'blue' : 'amber'}><Icon className="size-5" /></span><Badge variant="outline" className="admin-status-badge" data-tone={ready ? 'success' : 'warning'}>{ready ? '已就绪' : '未配置'}</Badge></div><p className="font-semibold">{label}</p><p className="mt-1 text-xs text-muted-foreground">{detail}</p></CardContent></Card>
 }
 
 function LockedRow({ label, value }: { label: string; value: string }) {
