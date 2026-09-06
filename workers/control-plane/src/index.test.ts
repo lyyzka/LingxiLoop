@@ -49,6 +49,41 @@ describe('control-plane trust boundaries', () => {
     expect(response.status).toBe(401)
   })
 
+  it('issues a one-time Sigillo SSO code only for the approved provider', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO user(id,name,email,emailVerified,createdAt,updatedAt) VALUES(?,?,?,1,?,?)`)
+        .bind('sigillo-user', 'Sigillo User', 'sigillo@example.com', now, now),
+      env.DB.prepare(`INSERT INTO account(id,accountId,providerId,issuer,userId,password,createdAt,updatedAt) VALUES(?,?,'credential','local:credential',?,?,?,?)`)
+        .bind('sigillo-account', 'sigillo-user', 'sigillo-user', await hashPassword('password123'), now, now),
+    ])
+    fetchMock.activate()
+    fetchMock.disableNetConnect()
+    fetchMock.get('https://challenges.cloudflare.com').intercept({ path: '/turnstile/v0/siteverify', method: 'POST' }).reply(200, { success: true })
+    try {
+      const signIn = await SELF.fetch('https://admin.example.com/api/auth/sign-in/email', {
+        method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://admin.example.com', 'x-captcha-response': 'XXXX.DUMMY.TOKEN.XXXX' },
+        body: JSON.stringify({ email: 'sigillo@example.com', password: 'password123' }),
+      })
+      const returnTo = 'https://sigillo-provider.example/sign-in/sso?return_to=https%3A%2F%2Fsigillo-provider.example%2Fsign-in'
+      const issued = await SELF.fetch(`https://admin.example.com/api/auth/sso/sigillo?return_to=${encodeURIComponent(returnTo)}`, {
+        headers: { cookie: signIn.headers.get('set-cookie') ?? '' }, redirect: 'manual',
+      })
+      expect(issued.status).toBe(302)
+      const code = new URL(issued.headers.get('location')!).searchParams.get('code')
+      expect(code).toBeTruthy()
+      const exchanged = await SELF.fetch('https://admin.example.com/api/auth/sso/sigillo/exchange', {
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-sigillo-sso-secret': 'test-sigillo-sso-secret' }, body: JSON.stringify({ code }),
+      })
+      expect(await exchanged.json()).toEqual({ userId: 'sigillo-user', email: 'sigillo@example.com', name: 'Sigillo User', returnTo })
+      const replay = await SELF.fetch('https://admin.example.com/api/auth/sso/sigillo/exchange', {
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-sigillo-sso-secret': 'test-sigillo-sso-secret' }, body: JSON.stringify({ code }),
+      })
+      expect(replay.status).toBe(401)
+      fetchMock.assertNoPendingInterceptors()
+    } finally { fetchMock.deactivate() }
+  })
+
   it('proxies websocket tickets instead of sending them to Better Auth', async () => {
     const now = Math.floor(Date.now() / 1000)
     await env.DB.batch([

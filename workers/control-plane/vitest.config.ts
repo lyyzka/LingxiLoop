@@ -22,6 +22,8 @@ export default defineWorkersConfig(async () => ({
             OPENSHIP_IMAGE_TARGETS: 'server:proj_test-a:svc_app-a,wukongim:proj_test-a:svc_wukong,open-notebook:proj_test-b:svc_notebook,gateway:proj_test-b:svc_gateway',
             ALIYUN_OTP_EMAIL_PASSWORD: 'test-email-password',
             TURNSTILE_SECRET_KEY: '1x0000000000000000000000000000000AA',
+            SIGILLO_SSO_SECRET: 'test-sigillo-sso-secret',
+            SIGILLO_PROVIDER_URL: 'https://sigillo-provider.example',
           },
         },
       },

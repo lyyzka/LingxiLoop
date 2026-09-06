@@ -16,6 +16,8 @@ type Secrets = {
   OPENSHIP_IMAGE_TARGETS: string
   ALIYUN_OTP_EMAIL_PASSWORD: string
   TURNSTILE_SECRET_KEY: string
+  SIGILLO_SSO_SECRET: string
+  SIGILLO_PROVIDER_URL: string
   CF_ACCESS_CLIENT_ID?: string
   CF_ACCESS_CLIENT_SECRET?: string
 }
@@ -272,6 +274,51 @@ app.post('/api/auth/sign-up/email', async (c) => {
     }
   }
   return response
+})
+
+app.get('/api/auth/sso/sigillo', async (c) => {
+  const returnTo = c.req.query('return_to')
+  if (!returnTo) return c.json({ error: 'return_to required' }, 400)
+  let target: URL
+  try { target = new URL(returnTo) } catch { return c.json({ error: 'invalid return_to' }, 400) }
+  if (target.origin !== c.env.SIGILLO_PROVIDER_URL || target.pathname !== '/sign-in/sso') {
+    return c.json({ error: 'unapproved return_to' }, 400)
+  }
+
+  await attachSession(c, 'database')
+  const session = c.get('session')
+  if (!session) {
+    const login = new URL('/', c.req.url)
+    login.searchParams.set('returnTo', `${new URL(c.req.url).pathname}${new URL(c.req.url).search}`)
+    return c.redirect(login.toString(), 302)
+  }
+
+  const code = crypto.randomUUID().replaceAll('-', '')
+  const now = Date.now()
+  await c.env.DB.prepare(
+    `INSERT INTO sigillo_sso_code(code_hash,user_id,email,name,return_to,expires_at,created_at) VALUES(?,?,?,?,?,?,?)`,
+  ).bind(await sha256(code), session.user.id, session.user.email, session.user.name, target.toString(), now + 60_000, now).run()
+  target.searchParams.set('code', code)
+  return c.redirect(target.toString(), 302)
+})
+
+app.post('/api/auth/sso/sigillo/exchange', async (c) => {
+  if (!await secretMatches(c.env.SIGILLO_SSO_SECRET, c.req.header('x-sigillo-sso-secret') ?? '')) {
+    return c.json({ error: 'unauthorized' }, 401)
+  }
+  const input = await c.req.json<{ code?: string }>().catch((): { code?: string } => ({}))
+  const code = input.code
+  if (!code) return c.json({ error: 'code required' }, 400)
+  const hash = await sha256(code)
+  const row = await c.env.DB.prepare(
+    `SELECT user_id,email,name,return_to,expires_at,used_at FROM sigillo_sso_code WHERE code_hash=?`,
+  ).bind(hash).first<{ user_id: string; email: string; name: string; return_to: string; expires_at: number; used_at: number | null }>()
+  if (!row || row.used_at || row.expires_at <= Date.now()) return c.json({ error: 'invalid code' }, 401)
+  const consumed = await c.env.DB.prepare(
+    `UPDATE sigillo_sso_code SET used_at=? WHERE code_hash=? AND used_at IS NULL AND expires_at>?`,
+  ).bind(Date.now(), hash, Date.now()).run()
+  if (consumed.meta.changes !== 1) return c.json({ error: 'invalid code' }, 401)
+  return c.json({ userId: row.user_id, email: row.email, name: row.name, returnTo: row.return_to })
 })
 
 app.all('/api/auth/*', (c) => c.get('auth').handler(c.req.raw))
