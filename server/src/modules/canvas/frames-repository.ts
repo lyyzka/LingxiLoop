@@ -43,7 +43,8 @@ export function markAssignmentFrame(db: Queryable, canvasId: string, agentId: st
   return db.query(
     `UPDATE canvas_agent_assignments SET active_frame_id=$3,cursor_x=$4,cursor_y=$5,
        ${working ? "status='working',started_at=COALESCE(started_at,NOW())," : ''}updated_at=NOW()
-      WHERE canvas_id=$1 AND agent_id=$2`,
+      WHERE canvas_id=$1 AND agent_id=$2
+        AND status NOT IN ('completed','failed','cancelled')`,
     [canvasId, agentId, frame.id, frame.x + frame.width / 2, frame.y + 28],
   )
 }

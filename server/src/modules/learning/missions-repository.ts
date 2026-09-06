@@ -301,9 +301,9 @@ export async function updateLearningMissionStepRecord(
         AND mission.company_id=step.company_id AND mission.project_id=step.project_id AND mission.id=step.mission_id
         AND mission.conversation_id=$3
         AND ($6<>'COMPLETED'
-          OR ($8 IS NOT NULL AND EXISTS(SELECT 1 FROM evidence_records evidence
+          OR ($8::text IS NOT NULL AND EXISTS(SELECT 1 FROM evidence_records evidence
             WHERE evidence.id=$8 AND evidence.company_id=$1 AND evidence.project_id=$2))
-          OR ($9 IS NOT NULL AND EXISTS(SELECT 1 FROM learning_attempts attempt
+          OR ($9::text IS NOT NULL AND EXISTS(SELECT 1 FROM learning_attempts attempt
             WHERE attempt.id=$9 AND attempt.company_id=$1 AND attempt.project_id=$2
               AND attempt.learner_id=mission.learner_id)))`,
     [args.companyId,args.projectId,args.channelId,args.missionId,args.stepId,args.status,
