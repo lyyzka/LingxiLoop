@@ -1,6 +1,6 @@
 # LingxiLoop
 
-The old Agent OS and Eval harness have been removed. Agent execution is paused until the independently developed LingxiOS and harness npm packages are published; no replacement SDK or compatibility adapter is installed yet. Chat, files, and product APIs remain available.
+The old Agent OS is retired. The Web process owns authenticated LingxiOS ingress and control operations; the Worker is the only process that claims LingxiOS work. The server pins a vendored LingxiOS release artifact so clean builds do not depend on an unpublished registry version.
 
 LingxiLoop is a Web learning-collaboration product with direct messages, Study Rooms, and Labs.
 
@@ -34,7 +34,7 @@ npm run dev:preview
 
 Open `http://localhost:5180`. For direct process development, run `npm run dev:all`. Electron can be run locally with `npm run electron:dev`; every package command is fixed to `--publish never`.
 
-PostgreSQL starts from [`0001_v1_baseline.sql`](server/src/db/migrations/0001_v1_baseline.sql) and evolves only through new numbered migrations. `npm run db:migrate` takes an advisory lock, verifies recorded names and checksums, and applies each pending file in its own transaction. It refuses a non-empty database without migration history; operations must rebuild such a legacy environment as an empty database. Web and Worker only verify that migrations are current. Historical runtime tables remain in the migration chain until the published npm architecture defines its replacement schema; this cleanup does not install a guessed schema.
+PostgreSQL starts from [`0001_v1_baseline.sql`](server/src/db/migrations/0001_v1_baseline.sql) and evolves only through new numbered migrations. `npm run db:migrate` takes an advisory lock, verifies recorded names and checksums, and applies each pending file in its own transaction. It refuses a non-empty database without migration history. Migration `0007_install_lingxios.sql` installs the pinned package schema and moves new Agent OS approvals to its namespaced work table; application startup never executes package DDL dynamically. Web and Worker only verify that migrations are current.
 
 For the packaged service topology:
 

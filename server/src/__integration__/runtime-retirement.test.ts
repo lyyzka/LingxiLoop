@@ -36,13 +36,22 @@ test('committed messages remain idempotent and attachments ingest without old Ag
     [companyId, JSON.stringify({ members: ['test-owner', agentId], channelType: 2 }), agentId],
   )
   const ingestions: unknown[] = []
+  const wakes: unknown[] = []
+  const flushes: string[] = []
+  let failFlush = true
   const application = new WukongWebhookApplication({
     transaction: (work) => withTransaction(pool, work),
     verify: () => true,
     isKnowledgeAttachment: () => true,
     createKnowledgeJob: async (_db, input) => {
       ingestions.push(input)
-      return { sourceId: 'attachment-source', deferAgentWake: false }
+      return { sourceId: 'attachment-source', deferAgentWake: true }
+    },
+    enqueueAgentWakes: async (_db, input) => { wakes.push(input); return 1 },
+    flushAgentWakes: async (eventId) => {
+      flushes.push(eventId)
+      if (failFlush) { failFlush = false; throw new Error('injected post-commit runtime outage') }
+      return 0
     },
   })
   const event = {
@@ -53,16 +62,16 @@ test('committed messages remain idempotent and attachments ingest without old Ag
       data: { key: `attachments/${companyId}/notes.pdf`, mime: 'application/pdf', size: 128, name: 'notes.pdf' },
     },
   }
-  assert.deepEqual(await application.process(event), {
-    ok: true, recipients: [agentId], deferAgentWake: false,
-    agentRuntimeAvailable: false, knowledgeSourceId: 'attachment-source',
-  })
+  await assert.rejects(application.process(event), /injected post-commit runtime outage/)
   assert.deepEqual(await application.process(event), { ok: true, duplicate: true })
   assert.deepEqual(ingestions, [{
     companyId, projectId, conversationId: 'retirement-room', clientMsgNo: 'retirement-message',
     createdBy: 'test-owner', title: 'notes.pdf', mime: 'application/pdf', size: 128,
-    storageKey: `attachments/${companyId}/notes.pdf`, recipients: [],
+    storageKey: `attachments/${companyId}/notes.pdf`, recipients: [{ agentId, reason: 'knowledge_ready' }],
   }])
+  assert.deepEqual(wakes, [{ eventId: 'retirement-event', companyId, channelId: 'retirement-room',
+    clientMsgNo: 'retirement-message', payload: event.payload, recipients: [agentId], knowledgeSourceId: 'attachment-source' }])
+  assert.deepEqual(flushes, ['retirement-event', 'retirement-event'])
   assert.deepEqual((await pool.query(`SELECT COUNT(*)::int AS count FROM agent_work_items`)).rows, [{ count: 0 }])
   await assert.rejects(application.process({ ...event, raw: Buffer.from('different') }), /different payload/)
   await assert.rejects(application.process({ ...event, eventId: 'outsider', fromUid: 'outsider' }), /not a bound channel member/)

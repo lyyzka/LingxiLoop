@@ -1,6 +1,6 @@
 # Release and rollback
 
-Agent execution and the old Eval release gate are removed pending published LingxiOS/harness npm packages. Existing live Agent OS services have not been changed by this local cleanup.
+The server image contains the pinned LingxiOS package and its Python runner. Release migration must complete before Web or Worker starts; only App B runs the Worker. This repository change does not itself alter the live OpenShip environment.
 
 Pushes to `main` deploy only after lint, all TypeScript checks, builds, unit/integration tests pass. No browser-test runner is installed or invoked by this workflow.
 
@@ -34,6 +34,6 @@ determine edit success. Active rooms replay the durable snapshot/log cursor ever
 seconds, including after missed notifications; retained failed deltas prevent eviction.
 Process loss can discard unconfirmed deltas, so a client must retain its unsaved state.
 
-## Runtime replacement
+## LingxiOS runtime
 
-The old Host Bridge and its dedicated action connection pool have been removed. Only the product database pool remains. Integrate the published npm packages and their schema before restoring Agent execution or runtime evaluation gates.
+Migration `0007_install_lingxios.sql` installs the fixed namespaced schema and approval foreign key. App B must provide the model token-cost rates, mount the persistent kernel-home volume, and retain the checked-in CPU, memory and PID bounds. The image supplies Python 3 and Bubblewrap; Worker readiness verifies the namespace sandbox before it accepts work. Rollback never reverses the schema migration.

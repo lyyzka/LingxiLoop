@@ -2,6 +2,7 @@ import { pool } from '../../db/pool.js'
 import type { Queryable } from '../../db/queryable.js'
 import { withTransaction } from '../../db/transaction.js'
 import { inc } from '../../metrics.js'
+import { releaseKnowledgeAgentWakes } from '../../agent-runtime/ingress-repository.js'
 import type { WorkerTaskHandle } from '../../runtime/lifecycle.js'
 import { storage } from '../../storage.js'
 import { createPermissionService, knowledgeSourceVisibilityScope } from '../access/public.js'
@@ -200,14 +201,20 @@ function normalizedStatus(status: string | null | undefined): KnowledgeSourceSta
 }
 
 async function releaseDeferredWake(sourceId: string, failure?: string): Promise<void> {
-  const status = await withTransaction(pool, (db) => releaseDeferredWakeState(db, sourceId, failure))
+  const status = await withTransaction(pool, async (db) => {
+    const result = await releaseDeferredWakeState(db, sourceId, failure)
+    await releaseKnowledgeAgentWakes(db, sourceId)
+    return result
+  })
   if (status !== 'none') inc('knowledge.attachment.agent_wake', { status })
 }
 
 export async function cancelKnowledgeSourceJob(sourceId: string, reason: string): Promise<void> {
   const status = await withTransaction(pool, async (db) => {
     await cancelIngestionJob(db, sourceId, reason)
-    return releaseDeferredWakeState(db, sourceId, reason)
+    const result = await releaseDeferredWakeState(db, sourceId, reason)
+    await releaseKnowledgeAgentWakes(db, sourceId)
+    return result
   })
   if (status !== 'none') inc('knowledge.attachment.agent_wake', { status })
 }

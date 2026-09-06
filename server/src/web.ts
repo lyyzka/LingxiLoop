@@ -17,12 +17,14 @@ import { wukongClient } from './im/wukong.js'
 import { Lifecycle, type ServiceHandle } from './runtime/lifecycle.js'
 import { openNotebookEmbeddingRouter } from './modules/knowledge/embedding-proxy.js'
 import { errorHandler } from './http/errors.js'
+import { lingxiOSControl } from './agent-runtime/runtime.js'
 
 export async function startWebProcess(): Promise<ServiceHandle> {
   // Construct every mandatory infrastructure adapter before exposing HTTP.
   // Missing WuKongIM configuration is a startup error, never a latent fallback.
   initializeNativeStorage()
   wukongClient()
+  const agentControl = await lingxiOSControl()
   const app = express()
   // gzip responses ≥1kb to keep control-plane and asset traffic compact. SSE
   // must stay uncompressed: compression buffers event-stream chunks, which
@@ -156,6 +158,7 @@ export async function startWebProcess(): Promise<ServiceHandle> {
   const lifecycle = new Lifecycle()
   lifecycle.addDisposer('postgres', () => closeDatabasePools())
   lifecycle.addDisposer('redis', () => { sub.disconnect(); redis.disconnect() })
+  lifecycle.addDisposer('lingxios-control', () => agentControl.stop())
   lifecycle.addDisposer('http', () => {
     if (!server.listening) return
     return new Promise<void>((resolveClose, rejectClose) => {

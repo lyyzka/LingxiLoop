@@ -25,7 +25,17 @@ x-runtime: &runtime
     WUKONG_WEBHOOK_SECRET: ${WUKONG_WEBHOOK_SECRET:?WUKONG_WEBHOOK_SECRET is required}
     OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY is required}
     OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
-    OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-mini}
+    OPENAI_MODEL: ${OPENAI_MODEL:-deepseek-ai/DeepSeek-V4-Flash}
+    AGENT_OS_HOMES_ROOT: /var/lib/lingxios/homes
+    AGENT_OS_PYTHON: /usr/bin/python3
+    AGENT_OS_MAX_CONCURRENT_RUNS: ${AGENT_OS_MAX_CONCURRENT_RUNS:-2}
+    AGENT_OS_MAX_MODEL_CALLS: ${AGENT_OS_MAX_MODEL_CALLS:-12}
+    AGENT_OS_MAX_MODEL_TOKENS: ${AGENT_OS_MAX_MODEL_TOKENS:-1000000}
+    AGENT_OS_MAX_MODEL_COST_MICROS: ${AGENT_OS_MAX_MODEL_COST_MICROS:-10000000}
+    AGENT_OS_MAX_WORK_MS: ${AGENT_OS_MAX_WORK_MS:-1800000}
+    AGENT_OS_INPUT_COST_MICROS_PER_MILLION: ${AGENT_OS_INPUT_COST_MICROS_PER_MILLION:?AGENT_OS_INPUT_COST_MICROS_PER_MILLION is required}
+    AGENT_OS_OUTPUT_COST_MICROS_PER_MILLION: ${AGENT_OS_OUTPUT_COST_MICROS_PER_MILLION:?AGENT_OS_OUTPUT_COST_MICROS_PER_MILLION is required}
+    LINGXIOS_CONTAINER_ISOLATED: "true"
     OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:?OPENAI_EMBEDDING_MODEL is required}
     OPENAI_IMAGE_MODEL: ${OPENAI_IMAGE_MODEL:-}
     OTEL_DEPLOYMENT_ENVIRONMENT: production
@@ -89,6 +99,11 @@ services:
     depends_on:
       db-migrate:
         condition: service_completed_successfully
+    volumes:
+      - lingxios-homes:/var/lib/lingxios/homes
+    read_only: true
+    tmpfs: [/tmp]
+    pids_limit: 128
     cpus: "0.75"
     mem_limit: 512m
 
@@ -110,3 +125,6 @@ services:
     cpus: "0.25"
     mem_limit: 64m
     logging: *logging
+
+volumes:
+  lingxios-homes: {}

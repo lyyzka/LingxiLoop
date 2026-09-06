@@ -42,6 +42,8 @@ test('Worker composition has injectable startup and connection shutdown boundari
   const service = await startWorkerProcess({
     initializeStorage: () => { events.push('storage') },
     prepare: async () => { events.push('prepare') },
+    startAgentRuntime: async () => { events.push('start:agent-runtime'); return { stop: () => { events.push('stop:agent-runtime') } } },
+    startAgentIngress: () => { events.push('start:agent-ingress'); return { stop: () => { events.push('stop:agent-ingress') } } },
     tasks: [{
       name: 'fixture',
       concurrency: 'queue-claim',
@@ -59,8 +61,12 @@ test('Worker composition has injectable startup and connection shutdown boundari
   assert.deepEqual(events, [
     'storage',
     'prepare',
+    'start:agent-runtime',
+    'start:agent-ingress',
     'start:fixture',
     'stop:fixture',
+    'stop:agent-ingress',
+    'stop:agent-runtime',
     'stop:redis',
     'stop:postgres',
   ])
@@ -124,6 +130,25 @@ test('OpenShip workers inherit the complete runtime environment', async () => {
   assert.match(compose, /db-migrate:[\s\S]*?restart: on-failure/)
   assert.match(compose, /start_period: 10m/)
   assert.match(compose, /pull_policy: always/)
+  assert.match(compose, /AGENT_OS_INPUT_COST_MICROS_PER_MILLION: \$\{AGENT_OS_INPUT_COST_MICROS_PER_MILLION:\?/)
+  assert.match(compose, /lingxios-homes:\/var\/lib\/lingxios\/homes/)
+  assert.match(compose, /pids_limit: 128/)
+  const image = await readFile(new URL('../../docker/lingxiloop-server.Dockerfile', import.meta.url), 'utf8')
+  assert.match(image, /node:22-bookworm-slim/)
+  assert.match(image, /python3[\s\\]+bubblewrap/)
+})
+
+test('the authenticated product router owns the LingxiOS control surface', async () => {
+  const router = await readFile(new URL('../im/router.ts', import.meta.url), 'utf8')
+  for (const route of [
+    "get('/approvals/:id'",
+    "post('/approvals/:id/resolve'",
+    "post('/approvals/:id/reconcile'",
+    "get('/channels/:id/agents/:agentId/runs/:runId'",
+    "delete('/channels/:id/agents/:agentId/runs/:runId'",
+  ]) assert.ok(router.includes(route))
+  assert.match(router, /await identity\(req\)/)
+  assert.match(router, /action: 'agent_run:control'/)
 })
 
 test('Open Notebook restarts only after SurrealDB is healthy', async () => {

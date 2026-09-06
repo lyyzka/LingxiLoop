@@ -13,6 +13,8 @@ const legacyCleanupUrl = new URL('../db/migrations/0002_remove_legacy_identity.s
 const affinityUrl = new URL('../db/migrations/0003_agent_os_session_affinity.sql', import.meta.url)
 const personalOwnerUrl = new URL('../db/migrations/0004_backfill_personal_owner_participants.sql', import.meta.url)
 const lingxiOSResetUrl = new URL('../db/migrations/0005_lingxios_v2_reset.sql', import.meta.url)
+const observableEvalUrl = new URL('../db/migrations/0006_observable_live_eval.sql', import.meta.url)
+const lingxiOSInstallUrl = new URL('../db/migrations/0007_install_lingxios.sql', import.meta.url)
 
 async function withDatabase(run: (database: Pool, connectionString: string) => Promise<void>): Promise<void> {
   const source = new URL(process.env.INTEGRATION_DATABASE_URL!)
@@ -45,7 +47,7 @@ async function withMigrations(run: (url: URL, directory: string) => Promise<void
 
 test('an empty database reaches the latest schema once and repeated migration is a no-op', async () => {
   await withDatabase(async (database) => {
-    assert.deepEqual(await migrateDatabase(database), ['0001_v1_baseline', '0002_remove_legacy_identity', '0003_agent_os_session_affinity', '0004_backfill_personal_owner_participants', '0005_lingxios_v2_reset', '0006_observable_live_eval'])
+    assert.deepEqual(await migrateDatabase(database), ['0001_v1_baseline', '0002_remove_legacy_identity', '0003_agent_os_session_affinity', '0004_backfill_personal_owner_participants', '0005_lingxios_v2_reset', '0006_observable_live_eval', '0007_install_lingxios'])
     assert.deepEqual(await migrateDatabase(database), [])
     await assertMigrationsCurrent(database)
     const { rows } = await database.query('SELECT version,name FROM schema_migrations ORDER BY version')
@@ -56,12 +58,22 @@ test('an empty database reaches the latest schema once and repeated migration is
       { version: 4, name: 'backfill_personal_owner_participants' },
       { version: 5, name: 'lingxios_v2_reset' },
       { version: 6, name: 'observable_live_eval' },
+      { version: 7, name: 'install_lingxios' },
     ])
     const { rows: evalSchema } = await database.query(`SELECT
       to_regclass('public.eval_jobs') AS jobs,
       to_regclass('public.eval_gate_policies') AS policies,
       EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='eval_cases' AND column_name='scenario_key') AS scenario_key`)
     assert.deepEqual(evalSchema, [{ jobs: 'eval_jobs', policies: 'eval_gate_policies', scenario_key: true }])
+    const { rows: runtimeSchema } = await database.query(`SELECT
+      (SELECT version FROM lingxios.schema_version WHERE singleton) AS version,
+      (SELECT target_namespace.nspname FROM pg_constraint constraint_row
+        JOIN pg_class target ON target.oid=constraint_row.confrelid
+        JOIN pg_namespace target_namespace ON target_namespace.oid=target.relnamespace
+        WHERE constraint_row.conname='approvals_work_id_fkey') AS approval_namespace,
+      EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public'
+        AND table_name='approvals' AND column_name='legacy_work_id') AS legacy_work_id`)
+    assert.deepEqual(runtimeSchema, [{ version: 4, approval_namespace: 'lingxios', legacy_work_id: true }])
   })
 })
 
@@ -165,6 +177,13 @@ test('the LingxiOS v2 reset clears resumable runtime state and preserves durable
           (SELECT COUNT(*)::int FROM agent_events WHERE id='reset-event') AS events`,
       )
       assert.deepEqual(runtimeState, [{ sessions: 0, leases: 0, routes: 0, workers: 0, runs: 1, events: 1 }])
+      await copyFile(observableEvalUrl, join(directory, '0006_observable_live_eval.sql'))
+      await copyFile(lingxiOSInstallUrl, join(directory, '0007_install_lingxios.sql'))
+      assert.deepEqual(await migrateDatabase(database, migrationsUrl), ['0006_observable_live_eval', '0007_install_lingxios'])
+      const { rows: migratedApproval } = await database.query(
+        `SELECT work_id,legacy_work_id,status FROM approvals WHERE id='reset-approval'`,
+      )
+      assert.deepEqual(migratedApproval, [{ work_id: null, legacy_work_id: 'reset-active', status: 'CANCELLED' }])
     })
   })
 })
@@ -211,11 +230,11 @@ test('concurrent migrators serialize and apply each migration once', async () =>
     try {
       const results = await Promise.all([migrateDatabase(database), migrateDatabase(second)])
       assert.deepEqual(results.map((result) => [...result]).sort((a, b) => b.length - a.length), [
-        ['0001_v1_baseline', '0002_remove_legacy_identity', '0003_agent_os_session_affinity', '0004_backfill_personal_owner_participants', '0005_lingxios_v2_reset', '0006_observable_live_eval'],
+        ['0001_v1_baseline', '0002_remove_legacy_identity', '0003_agent_os_session_affinity', '0004_backfill_personal_owner_participants', '0005_lingxios_v2_reset', '0006_observable_live_eval', '0007_install_lingxios'],
         [],
       ])
       const { rows } = await database.query('SELECT COUNT(*)::int AS count FROM schema_migrations')
-      assert.deepEqual(rows, [{ count: 6 }])
+      assert.deepEqual(rows, [{ count: 7 }])
     } finally {
       await second.end()
     }

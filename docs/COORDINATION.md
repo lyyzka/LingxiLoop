@@ -1,6 +1,6 @@
 # Product coordination
 
-Agent execution, wake queues, and the old Host Bridge are paused pending the published LingxiOS and harness packages. The IM webhook still validates and deduplicates committed messages and ingests attachments, but creates no Agent work or assistant preview.
+Committed WuKong messages persist a LingxiOS wake intent in the webhook transaction. `receive()` runs after commit; a durable outbox retries failures and converges on the package's deterministic work identity. Knowledge attachments remain deferred until ingestion reaches a terminal state. Web exposes only authenticated product approval/control routes, while the Worker exclusively claims namespaced LingxiOS work.
 
 Company invitation acceptance commits membership, audit and one tenant-scoped
 member-onboarding effect in the same PostgreSQL transaction. The Worker claims

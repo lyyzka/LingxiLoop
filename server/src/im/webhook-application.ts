@@ -32,6 +32,11 @@ export interface WukongWebhookInfrastructure {
   verify(raw: Buffer, signature?: string, token?: string): boolean
   isKnowledgeAttachment(mime: string, size: number): boolean
   createKnowledgeJob(db: Queryable, input: KnowledgeJobInput): Promise<{ deferAgentWake: boolean; sourceId: string }>
+  enqueueAgentWakes(db: Queryable, input: {
+    eventId: string; companyId: string; channelId: string; clientMsgNo: string
+    payload: LingxiMessageV1; recipients: string[]; knowledgeSourceId?: string
+  }): Promise<number>
+  flushAgentWakes(eventId: string): Promise<number>
 }
 
 export interface WukongCommittedEvent {
@@ -57,7 +62,7 @@ export class WukongWebhookApplication {
 
   async process(input: WukongCommittedEvent): Promise<Record<string, unknown>> {
     const payloadHash = createHash('sha256').update(input.raw).digest('hex')
-    return this.infrastructure.transaction(async (db) => {
+    const result = await this.infrastructure.transaction(async (db) => {
       const receipt = await lockWebhookReceipt(db, {
         eventId: input.eventId,
         eventType: input.eventType,
@@ -79,7 +84,10 @@ export class WukongWebhookApplication {
       if (!binding) throw Object.assign(new Error('WuKong channel is not bound yet; retry webhook'), { status: 503 })
       const profileMembers = Array.isArray(binding.profile.members) ? binding.profile.members.map(String) : []
       const members = await webhookMembers(db, { companyId: binding.company_id, memberIds: profileMembers })
-      if (!members.some((member) => member.id === input.fromUid)) {
+      const calendarDispatch = input.fromUid === 'calendar' && input.payload.kind === 'system'
+        && typeof input.payload.data?.calendarEventId === 'string'
+        && typeof input.payload.data?.scheduledFor === 'string'
+      if (!members.some((member) => member.id === input.fromUid) && !calendarDispatch) {
         throw new Error('message author is not a bound channel member')
       }
       const teacherRoom = await teacherRoomForWebhook(db, {
@@ -126,6 +134,7 @@ export class WukongWebhookApplication {
         agentIds: recipients,
       })) throw new Error('Pulse can only be invoked from its registered teacher room')
       let knowledgeSourceId: string | undefined
+      let deferAgentWake = false
       if (input.payload.kind === 'attachment' && !teacherRoom) {
         const attachment = record(input.payload.data)
         const mime = String(attachment.mime ?? '').toLowerCase()
@@ -151,19 +160,32 @@ export class WukongWebhookApplication {
             ...(input.payload.replyToClientMsgNo
               ? { threadRootClientMsgNo: input.payload.replyToClientMsgNo }
               : {}),
-            recipients: [],
+            recipients: recipients.map(agentId => ({ agentId, reason: 'knowledge_ready' })),
           })
           knowledgeSourceId = ingestion.sourceId
+          deferAgentWake = ingestion.deferAgentWake
         }
       }
+      const queued = await this.infrastructure.enqueueAgentWakes(db, {
+        eventId: input.eventId,
+        companyId: binding.company_id,
+        channelId: input.channelId,
+        clientMsgNo: input.clientMsgNo,
+        payload: input.payload,
+        recipients,
+        ...(knowledgeSourceId ? { knowledgeSourceId } : {}),
+      })
       await completeWebhookReceipt(db, input.eventId)
       return {
         ok: true,
         recipients,
-        deferAgentWake: false,
-        agentRuntimeAvailable: false,
+        deferAgentWake,
+        agentRuntimeAvailable: true,
+        queued,
         ...(knowledgeSourceId ? { knowledgeSourceId } : {}),
       }
     })
+    await this.infrastructure.flushAgentWakes(input.eventId)
+    return result
   }
 }

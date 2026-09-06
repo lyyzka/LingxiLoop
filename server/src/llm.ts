@@ -1,7 +1,7 @@
 import type OpenAI from 'openai'
 import { env } from './env.js'
 import { createOpenAIClient } from './llm-client.js'
-import { recordLlmCall, type LlmCallContext, type LlmUsage } from './llm-ledger.js'
+import { type LlmCallContext, type LlmUsage, recordLlmCall } from './llm-ledger.js'
 
 let testOverride: (() => OpenAI | Promise<OpenAI>) | null = null
 export function __setLlmClientOverrideForTesting(override: typeof testOverride): void {
@@ -55,10 +55,11 @@ export async function createChatCompletion(
   request: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming,
   options?: OpenAI.RequestOptions,
 ): Promise<OpenAI.Chat.Completions.ChatCompletion> {
+  const providerRequest = { reasoning_effort: 'high' as const, ...request }
   return tracked(
     context,
     request.model,
-    async (provider) => provider.chat.completions.create(request, options),
+    async (provider) => provider.chat.completions.create(providerRequest, options),
     (response) => response.usage ?? null,
   )
 }

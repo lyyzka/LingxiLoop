@@ -21,7 +21,7 @@
 # OrbStack auto-loads into its K8s.
 
 # ─── stage 1: install runtime node deps (prod only) ─────────────────
-ARG NODE_BASE_IMAGE=docker.m.daocloud.io/library/node:20-bookworm-slim
+ARG NODE_BASE_IMAGE=docker.m.daocloud.io/library/node:22-bookworm-slim
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 ARG APT_MIRROR=http://mirrors.aliyun.com
 
@@ -29,6 +29,7 @@ FROM ${NODE_BASE_IMAGE} AS deps
 ARG NPM_REGISTRY
 WORKDIR /app
 COPY server/package.json server/package-lock.json ./
+COPY server/vendor ./vendor
 RUN npm ci --registry="${NPM_REGISTRY}" --omit=dev --no-audit --no-fund --prefer-offline
 
 # ─── stage 2: build the web SPA bundle ──────────────────────────────
@@ -76,6 +77,8 @@ RUN sed -i "s|http://deb.debian.org|${APT_MIRROR}|g; s|https://deb.debian.org|${
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
        tini \
        ca-certificates \
+       python3 \
+       bubblewrap \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

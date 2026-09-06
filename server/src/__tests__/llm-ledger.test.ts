@@ -1,13 +1,17 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { __setLlmClientOverrideForTesting, createChatCompletion } from '../llm.js'
-import { __setLlmLedgerOverrideForTesting } from '../llm-ledger.js'
+import { __setLlmLedgerOverrideForTesting, recordLlmCall } from '../llm-ledger.js'
 
 test('every product LLM completion records the authoritative call ledger', async () => {
   const records: Array<Record<string, unknown>> = []
+  let providerRequest: Record<string, unknown> | undefined
   __setLlmLedgerOverrideForTesting(async (record) => { records.push(record as unknown as Record<string, unknown>) })
   __setLlmClientOverrideForTesting(() => ({
-    chat: { completions: { create: async () => ({ choices: [{ message: { content: 'ok' } }], usage: { prompt_tokens: 7, completion_tokens: 3 } }) } },
+    chat: { completions: { create: async (request: Record<string, unknown>) => {
+      providerRequest = request
+      return { choices: [{ message: { content: 'ok' } }], usage: { prompt_tokens: 7, completion_tokens: 3 } }
+    } } },
   }) as never)
   try {
     await createChatCompletion({ purpose: 'test', companyId: 'company-1', agentId: 'agent-1' }, {
@@ -17,6 +21,7 @@ test('every product LLM completion records the authoritative call ledger', async
     assert.deepEqual(records[0]?.context, { purpose: 'test', companyId: 'company-1', agentId: 'agent-1' })
     assert.equal(records[0]?.status, 'succeeded')
     assert.deepEqual(records[0]?.usage, { prompt_tokens: 7, completion_tokens: 3 })
+    assert.equal(providerRequest?.reasoning_effort, 'high')
   } finally {
     __setLlmClientOverrideForTesting(null)
     __setLlmLedgerOverrideForTesting(null)
@@ -72,4 +77,19 @@ test('a missing authoritative ledger record fails the product call', async () =>
     __setLlmClientOverrideForTesting(null)
     __setLlmLedgerOverrideForTesting(null)
   }
+})
+
+test('caller-supplied call identity makes uncertain ledger retries idempotent', async () => {
+  const writes: Array<{ sql: string; params: readonly unknown[] }> = []
+  const db = { query: async (sql: string, params: readonly unknown[] = []) => {
+    writes.push({ sql, params })
+    return { rows: [], rowCount: 0, command: 'INSERT', oid: 0, fields: [] }
+  } }
+  const record = { context: { purpose: 'agent', companyId: 'company-1' }, model: 'model',
+    latencyMs: 1, status: 'succeeded' as const, costUsd: 0.25 }
+  await recordLlmCall(record, db, 'stable-call')
+  await recordLlmCall(record, db, 'stable-call')
+  assert.deepEqual(writes.map(write => write.params[0]), ['stable-call', 'stable-call'])
+  assert.deepEqual(writes.map(write => write.params[11]), [0.25, 0.25])
+  assert.ok(writes.every(write => /ON CONFLICT \(id\) DO NOTHING/.test(write.sql)))
 })

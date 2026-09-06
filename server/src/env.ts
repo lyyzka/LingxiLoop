@@ -36,7 +36,7 @@ function wukongUserTokenSecret(): string {
     .update('lingxiloop:wukong-user-token:v1')
     .digest('base64url')
 }
-const DEFAULT_MODEL = process.env.OPENAI_MODEL?.trim() || 'gpt-5-mini'
+const DEFAULT_MODEL = process.env.OPENAI_MODEL?.trim() || 'deepseek-ai/DeepSeek-V4-Flash'
 export const env = {
   PORT: Number(process.env.PORT ?? 5181),
   NODE_ENV: process.env.NODE_ENV ?? 'development',

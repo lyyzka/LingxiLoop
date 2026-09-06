@@ -10,12 +10,16 @@ import { imChannelsApplication } from './channels-facade.js'
 import { imMessagesApplication } from './messages-facade.js'
 import { imSessionApplication } from './session-facade.js'
 import {
+  approvalResolutionRequestSchema,
   imHistoryQuerySchema,
   imReactionRequestSchema,
   imReadReceiptsQuerySchema,
   imReadRequestSchema,
   imSendAcceptanceRequestSchema,
+  lingxiOSRunCancelSchema,
+  lingxiOSRunQuerySchema,
 } from './contracts.js'
+import { lingxiOSControl } from '../agent-runtime/runtime.js'
 import {
   isReadReceiptChannelMember,
   listReadReceiptAdvances,
@@ -63,6 +67,63 @@ async function assertChannelPermission(
 imRouter.get('/bootstrap', safe(async (req, res) => {
   const { userId } = await identity(req)
   res.json(await imSessionApplication.bootstrap(userId))
+}))
+
+imRouter.get('/approvals/:id', safe(async (req, res) => {
+  const { userId, companyId } = await identity(req)
+  res.json(await (await lingxiOSControl()).inspectApproval({ companyId, userId, approvalId: String(req.params.id) }))
+}))
+
+imRouter.post('/approvals/:id/resolve', safe(async (req, res) => {
+  const { userId, companyId } = await identity(req)
+  const approvalId = String(req.params.id)
+  const { approved } = requestInput(approvalResolutionRequestSchema, req.body)
+  const app = await lingxiOSControl()
+  if (!approved) { res.json(await app.rejectApproval({ companyId, userId, approvalId })); return }
+  const review = await app.inspectApproval({ companyId, userId, approvalId })
+  const action = review.action.action
+  const resolve = action.startsWith('calendar.') ? app.approveCalendar
+    : action.startsWith('documents.') ? app.approveDocument
+    : action.startsWith('email.') ? app.approveEmail
+    : action.startsWith('presentations.') ? app.approvePresentation
+    : action.startsWith('knowledge.') ? app.approveKnowledge
+    : action.startsWith('teacher.') ? app.approveTeacher
+    : action.startsWith('routines.') ? app.approveRoutine
+    : undefined
+  if (!resolve) throw new Error(`unsupported LingxiOS approval action: ${action}`)
+  res.json(await resolve({ companyId, userId, approvalId }))
+}))
+
+imRouter.post('/approvals/:id/reconcile', safe(async (req, res) => {
+  const { userId, companyId } = await identity(req)
+  res.json(await (await lingxiOSControl()).reconcileKnowledgeApproval({
+    companyId, userId, approvalId: String(req.params.id),
+  }))
+}))
+
+imRouter.get('/channels/:id/agents/:agentId/runs/:runId', safe(async (req, res) => {
+  const { userId, companyId } = await identity(req)
+  const sessionId = String(req.params.id)
+  await assertChannelPermission(userId, companyId, sessionId, 'conversation:read')
+  const runIdentity = { tenantId: companyId, sessionId, agentId: String(req.params.agentId), runId: String(req.params.runId) }
+  const app = await lingxiOSControl()
+  const { afterSeq } = requestInput(lingxiOSRunQuerySchema, req.query)
+  const [outcome, message, delivery, events] = await Promise.all([
+    app.readOutcome(runIdentity), app.readMessage(runIdentity), app.readDelivery(runIdentity), app.readEvents(runIdentity, afterSeq),
+  ])
+  if (!outcome && !message && delivery === null && events.events.length === 0) { res.status(404).json({ error: 'run not found' }); return }
+  res.json({ outcome, message, delivery, ...events })
+}))
+
+imRouter.delete('/channels/:id/agents/:agentId/runs/:runId', safe(async (req, res) => {
+  const { userId, companyId } = await identity(req)
+  const sessionId = String(req.params.id)
+  await permissionService.assertCan({ actorUserId: userId, companyId, action: 'agent_run:control',
+    resource: { type: 'conversation', id: sessionId } })
+  const { threadId } = requestInput(lingxiOSRunCancelSchema, req.body ?? {})
+  const cancelled = await (await lingxiOSControl()).cancel({ tenantId: companyId, principalId: userId, sessionId,
+    agentId: String(req.params.agentId), runId: String(req.params.runId), ...(threadId ? { threadId } : {}) })
+  res.json({ cancelled })
 }))
 
 imRouter.post('/refresh', safe(async (req, res) => {

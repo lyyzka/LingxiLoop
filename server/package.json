@@ -19,6 +19,7 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "ioredis": "^5.10.1",
+    "lingxios": "file:vendor/lingxios-1.1.0-native2.tgz",
     "openai": "^6.37.0",
     "openlit": "1.15.0",
     "pg": "^8.20.0",

@@ -42,6 +42,8 @@ export const imReadReceiptsQuerySchema = z.object({
 })
 
 export const approvalResolutionRequestSchema = z.object({ approved: z.boolean() }).strict()
+export const lingxiOSRunQuerySchema = z.object({ afterSeq: z.coerce.number().int().nonnegative().safe().default(0) }).strict()
+export const lingxiOSRunCancelSchema = z.object({ threadId: z.string().trim().min(1).max(80).optional() }).strict()
 export const approvalSupersedeRequestSchema = z.object({
   args: z.record(z.string(), z.unknown()),
   summary: z.string().trim().min(1).max(500).optional(),

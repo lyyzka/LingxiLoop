@@ -1,6 +1,6 @@
 # OpenShip production deployment
 
-The desired manifest set contains four product projects on two servers. The old Agent OS manifests are removed locally pending the new npm packages; this does not remove existing live OpenShip services. Each role
+The desired manifest set contains four product projects on two servers. The old Agent OS projects are retired; the server image installs the pinned vendored LingxiOS package. Each role
 has an explicit Compose file; production does not use profiles or the local
 MVP Compose stack.
 
@@ -51,7 +51,11 @@ WUKONG_API_URL=http://10.20.0.2:5001
 WUKONG_WS_PUBLIC_URL=wss://im.lingxilearn.cn
 OPEN_NOTEBOOK_URL=http://10.20.0.3:5055
 DATABASE_POOL_MAX=8
+AGENT_OS_INPUT_COST_MICROS_PER_MILLION=<current-model-rate>
+AGENT_OS_OUTPUT_COST_MICROS_PER_MILLION=<current-model-rate>
 ```
+
+App B's Worker persists `/var/lib/lingxios/homes` in its named volume and runs each Python kernel through Bubblewrap with PID, mount, user and network namespaces. The manifest also bounds Worker CPU, memory and process count. Confirm the two model-rate values whenever the configured model or provider pricing changes.
 
 Set `INSTANCE_ID=app-a` or `INSTANCE_ID=app-b` in the matching project. The knowledge project uses this callback origin:
 
@@ -65,8 +69,8 @@ OpenShip secrets. Do not expose or copy them into source files.
 
 ## Verification
 
-After every rollout, require all six OpenShip deployments to reach `ready`,
-all expected production services to report healthy, no drift issue, both Agent
-OS heartbeats to be current, and the public Web/API/IM probes to pass. App A
+After every rollout, require all four OpenShip deployments to reach `ready`,
+all expected production services to report healthy, no drift issue, and the
+public Web/API/IM probes to pass. App A
 must contain only `db-migrate` and `lingxiloop`; App B must contain exactly
 `db-migrate`, `lingxiloop`, `worker`, and `gateway`.

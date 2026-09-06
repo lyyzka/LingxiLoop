@@ -164,7 +164,17 @@ services:
       WUKONG_USER_TOKEN_SECRET: ${WUKONG_USER_TOKEN_SECRET:?WUKONG_USER_TOKEN_SECRET is required in .env}
       OPENAI_API_KEY: ${OPENAI_API_KEY:?OPENAI_API_KEY is required in .env}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
-      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-5-mini}
+      OPENAI_MODEL: ${OPENAI_MODEL:-deepseek-ai/DeepSeek-V4-Flash}
+      AGENT_OS_HOMES_ROOT: /var/lib/lingxios/homes
+      AGENT_OS_PYTHON: /usr/bin/python3
+      AGENT_OS_MAX_CONCURRENT_RUNS: ${AGENT_OS_MAX_CONCURRENT_RUNS:-2}
+      AGENT_OS_MAX_MODEL_CALLS: ${AGENT_OS_MAX_MODEL_CALLS:-12}
+      AGENT_OS_MAX_MODEL_TOKENS: ${AGENT_OS_MAX_MODEL_TOKENS:-1000000}
+      AGENT_OS_MAX_MODEL_COST_MICROS: ${AGENT_OS_MAX_MODEL_COST_MICROS:-10000000}
+      AGENT_OS_MAX_WORK_MS: ${AGENT_OS_MAX_WORK_MS:-1800000}
+      AGENT_OS_INPUT_COST_MICROS_PER_MILLION: ${AGENT_OS_INPUT_COST_MICROS_PER_MILLION:-447000}
+      AGENT_OS_OUTPUT_COST_MICROS_PER_MILLION: ${AGENT_OS_OUTPUT_COST_MICROS_PER_MILLION:-1341000}
+      LINGXIOS_CONTAINER_ISOLATED: "true"
       OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:?OPENAI_EMBEDDING_MODEL is required in .env}
       OPENAI_IMAGE_MODEL: ${OPENAI_IMAGE_MODEL:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
@@ -222,6 +232,13 @@ services:
     environment:
       <<: *lingxiloop-environment
       OTEL_SERVICE_NAME: lingxiloop-worker
+    volumes:
+      - lingxios-homes:/var/lib/lingxios/homes
+    read_only: true
+    tmpfs: [/tmp]
+    pids_limit: 128
+    cpus: "1.0"
+    mem_limit: 768m
     networks: [lingxiloop-mvp, lingxiloop-knowledge-internal]
     logging: *quiet-logging
 
@@ -237,3 +254,4 @@ volumes:
   lingxiloop-wukong-data: {}
   open-notebook-surreal-data: {}
   open-notebook-data: {}
+  lingxios-homes: {}

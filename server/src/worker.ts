@@ -16,8 +16,10 @@ import { startNotificationScheduler } from './modules/notifications/public.js'
 import { startPollExpirationSweeper } from './modules/polls/index.js'
 import { startPresentationStorageGc, startPresentationWorker } from './modules/presentations/public.js'
 import { redis, sub } from './redis.js'
-import { Lifecycle, type ServiceHandle, startWorkerTasks, type WorkerTaskDefinition } from './runtime/lifecycle.js'
+import { Lifecycle, type ServiceHandle, startWorkerTasks, type WorkerTaskDefinition, type WorkerTaskHandle } from './runtime/lifecycle.js'
 import { initializeNativeStorage } from './storage.js'
+import { startLingxiOSWorker } from './agent-runtime/runtime.js'
+import { startAgentIngressRetry } from './agent-runtime/ingress.js'
 
 /**
  * Concurrency is part of each task's contract, rather than an accidental
@@ -60,6 +62,8 @@ export interface WorkerProcessOptions {
   closePostgres?: () => void | Promise<void>
   closeRedis?: () => void | Promise<void>
   initializeStorage?: () => void
+  startAgentRuntime?: () => Promise<WorkerTaskHandle | null>
+  startAgentIngress?: () => WorkerTaskHandle | null
 }
 
 export async function startWorkerProcess(options: WorkerProcessOptions = {}): Promise<ServiceHandle> {
@@ -73,6 +77,8 @@ export async function startWorkerProcess(options: WorkerProcessOptions = {}): Pr
     const initializeStorage = options.initializeStorage ?? initializeNativeStorage
     initializeStorage()
     await prepare()
+    lifecycle.add('lingxios-agent-runtime', await (options.startAgentRuntime ?? startLingxiOSWorker)())
+    lifecycle.add('lingxios-ingress-retry', (options.startAgentIngress ?? startAgentIngressRetry)())
     startWorkerTasks(lifecycle, tasks)
     console.log(`[worker] ready · tasks=${tasks.length}`)
     return lifecycle

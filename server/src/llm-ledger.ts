@@ -36,6 +36,8 @@ async function persistLlmCall(args: {
   status: 'succeeded' | 'failed'
   error?: unknown
   measured?: boolean
+  costUsd?: number
+  costEstimated?: boolean
 }, db: Queryable = pool, id = `llm-${randomUUID()}`): Promise<void> {
   const usage = args.usage
   await db.query(
@@ -43,7 +45,8 @@ async function persistLlmCall(args: {
        id, company_id, agent_id, run_id, conversation_id, purpose, source, model,
        input_tokens, cached_input_tokens, output_tokens, cost_usd, cost_estimated,
        measured, latency_ms, status, error, extras
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,0,TRUE,$12,$13,$14,$15,$16::jsonb)`,
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb)
+     ON CONFLICT (id) DO NOTHING`,
     [
       id,
       args.context.companyId,
@@ -56,6 +59,8 @@ async function persistLlmCall(args: {
       token(usage?.prompt_tokens),
       token(usage?.prompt_tokens_details?.cached_tokens),
       token(usage?.completion_tokens),
+      Math.max(0, args.costUsd ?? 0),
+      args.costEstimated ?? true,
       args.measured ?? Boolean(usage),
       Math.max(0, Math.floor(args.latencyMs)),
       args.status,
