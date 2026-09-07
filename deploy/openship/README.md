@@ -89,8 +89,10 @@ image, environment, OpenShip labels, named home volume, project network,
 restart policy, CPU/memory limits, logging config, and command, then recreates
 only the Worker with the required read-only root, `/tmp` tmpfs, PID limit 128,
 unconfined seccomp, and unmasked system paths. The replacement must log
-`worker started` and pass an in-container Bubblewrap namespace probe before the
-old stopped container is deleted; otherwise the guard rolls back to it. Secret
+`worker started` and remain running without a restart before the old stopped
+container is deleted; otherwise the guard rolls back to it. LingxiOS emits that
+startup record only after its own kernel/Bubblewrap isolation self-check has
+passed, so the guard deliberately does not duplicate the sandbox probe. Secret
 environment values are never emitted to logs or placed on the command line.
 
 Treat `/usr/local/sbin/lingxiloop-worker-runtime-guard` and

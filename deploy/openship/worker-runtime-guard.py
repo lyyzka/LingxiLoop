@@ -173,6 +173,14 @@ def build_run_command(document: dict[str, Any], env_file: str, target: str = TAR
     return args
 
 
+def worker_start_evidence(document: dict[str, Any], logs: str) -> bool:
+    return (
+        bool((document.get("State") or {}).get("Running"))
+        and int(document.get("RestartCount") or 0) == 0
+        and "worker started" in logs
+    )
+
+
 def wait_for_worker(name: str, timeout: float = 30.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -183,14 +191,19 @@ def wait_for_worker(name: str, timeout: float = 30.0) -> None:
         state = document.get("State") or {}
         if state.get("Running"):
             logs = command(["docker", "logs", "--tail", "120", name], check=False)
-            if "worker started" in f"{logs.stdout}\n{logs.stderr}":
-                probe = command([
-                    "docker", "exec", name,
-                    "bwrap", "--die-with-parent", "--unshare-all", "--new-session", "--cap-drop", "ALL",
-                    "--ro-bind", "/usr", "/usr", "--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp",
-                    "--chdir", "/", "--", "/usr/bin/python3", "-I", "-c", "print('isolated')",
-                ], check=False)
-                if probe.returncode == 0 and probe.stdout.strip() == "isolated":
+            if worker_start_evidence(document, f"{logs.stdout}\n{logs.stderr}"):
+                # LingxiOS AgentWorker.start() awaits kernels.check() before it
+                # emits `worker started`.  Re-running an ad-hoc Bubblewrap probe
+                # here would duplicate the sandbox contract and can drift from
+                # the package's real bind set. Require a short stable-running
+                # window instead; RestartCount keeps a crash/restart from passing.
+                time.sleep(2.0)
+                stable = inspect_container(name)
+                if (
+                    stable is not None
+                    and (stable.get("State") or {}).get("Running")
+                    and int(stable.get("RestartCount") or 0) == 0
+                ):
                     return
         if state.get("Status") in {"dead", "removing"}:
             break
@@ -343,6 +356,13 @@ def self_test() -> None:
     ):
         assert required in joined, required
     assert "SECRET=not-placed-on-command-line" not in joined
+    started = json.loads(json.dumps(fixture))
+    started["State"] = {"Running": True}
+    started["RestartCount"] = 0
+    assert worker_start_evidence(started, '{"msg":"worker started"}')
+    assert not worker_start_evidence(started, '{"msg":"starting"}')
+    started["RestartCount"] = 1
+    assert not worker_start_evidence(started, '{"msg":"worker started"}')
     print("worker runtime guard self-test passed")
 
 
