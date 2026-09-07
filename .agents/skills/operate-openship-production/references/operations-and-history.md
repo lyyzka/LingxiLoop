@@ -240,6 +240,7 @@ The QQ recipient still reported no message and the no-reply inbox had no bounce.
 
 ## Known OpenShip behavior
 
+- OpenShip 0.6.9 service-mode deployments discard Compose `read_only`, `tmpfs`, `pids_limit`, and `security_opt`. LingxiOS 2.1 needs unprivileged nested namespaces, so after every App B refresh recreate only its worker with the documented 2026-09-07 runtime settings and preserve its environment, named home volume, project network, and OpenShip labels. Remove this workaround once OpenShip natively preserves those fields.
 - `db-migrate` exits 0 and remains stopped. A health watcher/refresh once tried to redeploy the gone one-shot; confirm exit code before treating absence as failure.
 - `post_projects_by_id_routing_retry` cleared a stale LingxiLit route warning without rebuilding the app.
 - Direct Edge pulls from GHCR can be denied; the mirror is the working path.

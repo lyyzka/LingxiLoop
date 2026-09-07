@@ -1,5 +1,13 @@
 # Current production deployment
 
+## 2026-09-07 LingxiOS 2.1 first-release rollout
+
+GitHub Actions run `34133677067` passed the scoped Server and production-contract checks for commit `3ed1472c4e9d72f0955d0a1bfddf5d81100a6dd5` and rolled all four active LingxiLoop projects to `ready`. The running immutable Server, Gateway, WuKongIM, and Open Notebook images use tag `4d807eac5e285a90a03999d2f476817059c11099`; both database migrations exited `0`.
+
+OpenShip 0.6.9 discarded the worker's Compose `read_only`, `tmpfs`, `pids_limit`, and `security_opt` keys while rebuilding the service, so the first LingxiOS worker repeatedly failed its Bubblewrap namespace check. Operations recreated only `openship-lingxiloop-app-b-worker`, preserving its image, environment, named home volume, project network, and OpenShip labels, while applying a read-only root, `/tmp` tmpfs, PID limit 128, unconfined seccomp, and empty Docker masked/read-only system paths. The in-container Bubblewrap probe passed, the worker logged `worker started`, and its restart count remained zero. This is current runtime state, not an OpenShip-supported manifest guarantee: every future App B refresh will require the same targeted recreation until OpenShip preserves these fields.
+
+The final health scan reports 14/14 healthy workloads, zero outage, zero action-required issues, and two advisory-only updates for the disabled retired AgentOS projects. Public apex, Loop health, auth session, OpenLit, and Uptime returned HTTP 200; the IM WebSocket upgrade returned 101.
+
 ## 2026-09-06 production-source reconciliation
 
 App A/B remained untouched. The production-authoritative values for `OPENAI_MODEL`, `OPEN_NOTEBOOK_PASSWORD`, `OTEL_EXPORTER_OTLP_ENDPOINT`, and `LINGXILIT_PRICING_JSON` were copied into the protected `D:\Documents\OpenShip\webab.txt` backup and its matching Sigillo environment. Hash checks found all 34 shared source-backed settings equal in both running APIs. No manifest, OpenShip environment, or deployment changed.
