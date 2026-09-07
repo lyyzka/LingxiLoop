@@ -30,7 +30,7 @@ test('image fields allow only safe HTTPS or same-origin paths and fall back to a
 
 test('long resource content stays on the authenticated admin proxy', () => {
   assert.equal(resourceContentPath('/admin/resources/documents/document%201/content/body'), '/control/platform/resources/documents/document%201/content/body')
-  assert.deepEqual(['/control/openship/deployments', 'https://example.test/content', '/admin/resources/a/b/content/c?token=bad'].map(resourceContentPath), [undefined, undefined, undefined])
+  assert.deepEqual(['/control/deployments', 'https://example.test/content', '/admin/resources/a/b/content/c?token=bad'].map(resourceContentPath), [undefined, undefined, undefined])
 })
 
 test('detail values use semantic fields and escape user content instead of rendering HTML', () => {

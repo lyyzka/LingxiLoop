@@ -7,7 +7,6 @@ import { AuthSettingsPage } from './auth-settings-page'
 import { AdminLayout, ForbiddenPage, LoginPage, ResourceDetailPage, ResourceListPage, SearchPage } from './pages'
 import { ADMIN_RESOURCES } from './resources'
 
-const ReleaseManagementPage = lazy(() => import('./release-management-page').then((module) => ({ default: module.ReleaseManagementPage })))
 const ServiceStatusPage = lazy(() => import('./status-page').then((module) => ({ default: module.ServiceStatusPage })))
 const ObservabilityPage = lazy(() => import('./observability-page').then((module) => ({ default: module.ObservabilityPage })))
 const DashboardPage = lazy(() => import('./dashboard-page').then((module) => ({ default: module.DashboardPage })))
@@ -33,7 +32,6 @@ export function AdminApp() {
       <Route element={<AdminLayout />}>
         <Route index element={deferredPage(<DashboardPage />)} />
         <Route path="search" element={<SearchPage />} />
-        <Route path="releases" element={deferredPage(<ReleaseManagementPage />)} />
         <Route path="authentication" element={<AuthSettingsPage />} />
         <Route path="status" element={deferredPage(<ServiceStatusPage />)} />
         <Route path="observability" element={deferredPage(<ObservabilityPage />)} />

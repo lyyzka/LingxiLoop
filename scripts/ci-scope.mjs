@@ -81,7 +81,7 @@ export function computeScope(changed = {}, manual = '') {
     ))
   }
   if (gateway || release) {
-    images.push(image('lingxiloop-gateway', 'gateway', 'deploy/openship/gateway.Dockerfile'))
+    images.push(image('lingxiloop-gateway', 'gateway', 'deploy/arcane/lingxiloop-app-b/gateway.Dockerfile'))
   }
 
   return {

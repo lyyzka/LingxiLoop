@@ -28,16 +28,13 @@ describe('control-plane trust boundaries', () => {
 
   it('applies auth/control schema and rejects unauthenticated administration', async () => {
     const tables = await env.DB.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all<{ name: string }>()
-    expect(tables.results.map((row) => row.name)).toEqual(expect.arrayContaining(['user', 'session', 'app_user_links', 'registration_claims', 'release_requests', 'control_audit', 'auth_settings']))
+    expect(tables.results.map((row) => row.name)).toEqual(expect.arrayContaining(['user', 'session', 'app_user_links', 'registration_claims', 'control_audit', 'auth_settings']))
+    expect(tables.results.map((row) => row.name)).not.toContain('release_requests')
     const accountColumns = await env.DB.prepare(`PRAGMA table_info(account)`).all<{ name: string; notnull: number }>()
     expect(accountColumns.results).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'issuer', notnull: 1 })]))
     const authSettings = await env.DB.prepare(`SELECT session_expires_in,otp_expires_in,rate_limit_window,rate_limit_max FROM auth_settings WHERE id=1`).first()
     expect(authSettings).toEqual({ session_expires_in: 604800, otp_expires_in: 300, rate_limit_window: 60, rate_limit_max: 60 })
-    const response = await SELF.fetch('https://lingxiloop-control-plane.yangyangli0426.workers.dev/api/control/releases')
-    expect(response.status).toBe(401)
-    expect((await SELF.fetch('https://admin.example.com/api/control/deployment-dashboard')).status).toBe(401)
-    expect((await SELF.fetch('https://admin.example.com/api/control/production-topology')).status).toBe(401)
-    expect((await SELF.fetch('https://admin.example.com/api/control/eval/jobs', { method: 'POST' })).status).toBe(401)
+    expect((await SELF.fetch('https://admin.example.com/api/control/eval/jobs', { method: 'POST' })).status).toBe(403)
     const authSettingsResponse = await SELF.fetch('https://lingxiloop-control-plane.yangyangli0426.workers.dev/api/control/auth-settings')
     expect(authSettingsResponse.status).toBe(401)
   })
@@ -124,71 +121,6 @@ describe('control-plane trust boundaries', () => {
     } finally { fetchMock.deactivate() }
   })
 
-  it('fans one signed release out to every OpenShip project exactly once', async () => {
-    const commitSha = 'a'.repeat(40)
-    const deployCommitSha = 'b'.repeat(40)
-    const imageDigests = Object.fromEntries(['server', 'wukongim', 'open-notebook', 'gateway']
-      .map((name, index) => [name, `registry/lingxiloop-${name}:${index ? commitSha : 'c'.repeat(40)}`]))
-    const body = JSON.stringify({ commitSha, deployCommitSha, imageDigests })
-    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode('test-release-secret'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
-    const bytes = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(body)))
-    const signature = btoa(String.fromCharCode(...bytes)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
-    fetchMock.activate()
-    fetchMock.disableNetConnect()
-    const openShip = fetchMock.get('https://openship.example.com')
-    openShip.intercept({
-      path: '/api/proxy/api/projects/proj_test-a/services/svc_app-a', method: 'PATCH',
-      body: JSON.stringify({ image: imageDigests.server }),
-    }).reply(200, { success: true })
-    openShip.intercept({
-      path: '/api/proxy/api/projects/proj_test-a/services/svc_wukong', method: 'PATCH',
-      body: JSON.stringify({ image: imageDigests.wukongim }),
-    }).reply(200, { success: true })
-    openShip.intercept({
-      path: '/api/proxy/api/projects/proj_test-b/services/svc_notebook', method: 'PATCH',
-      body: JSON.stringify({ image: imageDigests['open-notebook'] }),
-    }).reply(200, { success: true })
-    openShip.intercept({
-      path: '/api/proxy/api/projects/proj_test-b/services/svc_gateway', method: 'PATCH',
-      body: JSON.stringify({ image: imageDigests.gateway }),
-    }).reply(200, { success: true })
-    openShip.intercept({
-      path: '/api/proxy/api/deployments', method: 'POST',
-      body: JSON.stringify({ projectId: 'proj_test-a', branch: 'main', commitSha: deployCommitSha, environment: 'production' }),
-    }).reply(201, { id: 'dep_proj_test-a' })
-    openShip.intercept({
-      path: '/api/proxy/api/deployments', method: 'POST',
-      body: JSON.stringify({ projectId: 'proj_test-b', branch: 'main', commitSha: deployCommitSha, environment: 'production' }),
-    }).reply(202, {})
-    try {
-      const request = () => SELF.fetch('https://admin.example.com/api/internal/releases', {
-        method: 'POST', headers: { 'content-type': 'application/json', 'x-release-signature': signature }, body,
-      })
-      const first = await request()
-      expect({ status: first.status, body: await first.json() }).toEqual({
-        status: 202,
-        body: {
-          commitSha,
-          status: 'triggered',
-          deployments: [
-            { projectId: 'proj_test-a', deploymentId: 'dep_proj_test-a' },
-            { projectId: 'proj_test-b', accepted: true },
-          ],
-        },
-      })
-      expect((await request()).status).toBe(200)
-      expect(await env.DB.prepare(`SELECT status,openship_deployment_id,error FROM release_requests WHERE commit_sha=?`).bind(commitSha).first()).toEqual({
-        status: 'triggered',
-        openship_deployment_id: JSON.stringify([
-          { projectId: 'proj_test-a', deploymentId: 'dep_proj_test-a' },
-          { projectId: 'proj_test-b', accepted: true },
-        ]),
-        error: null,
-      })
-      fetchMock.assertNoPendingInterceptors()
-    } finally { fetchMock.deactivate() }
-  })
-
   it('rejects cross-site authentication writes and registration without CAPTCHA', async () => {
     const crossSite = await SELF.fetch('https://lingxiloop-control-plane.yangyangli0426.workers.dev/api/auth/sign-in/email', {
       method: 'POST',
@@ -223,31 +155,6 @@ describe('control-plane trust boundaries', () => {
       .reply(200, { config: { title: 'LingxiLoop 服务状态' }, incident: null, publicGroupList: [{ id: 1, name: '公共入口', monitorList: [{ id: 11, name: 'Web' }] }], maintenanceList: [] })
     upstream.intercept({ path: '/api/status-page/heartbeat/lingxiloop' })
       .reply(200, { heartbeatList: { 11: [{ status: 0 }, { status: 1, ping: 26 }] }, uptimeList: { '11_24': 1 } })
-    const openShip = fetchMock.get('https://openship.example.com')
-    openShip.intercept({ path: '/api/proxy/api/deployments?page=1&perPage=30' }).reply(200, {
-      data: [{
-        id: 'dep_test', projectId: 'proj_test-a', projectName: 'app-a', status: 'ready', commitSha: 'a'.repeat(40), commitMessage: 'release', trigger: 'manual',
-        environment: 'production', framework: 'docker-compose', buildDurationMs: 1250, version: 3, createdAt: '2026-09-03T00:00:00.000Z',
-        updatedAt: '2026-09-03T00:00:02.000Z', isActive: true, envVars: { SECRET: 'must-not-leak' }, meta: { composeServices: ['large'] },
-      }, {
-        id: 'dep_legacy', projectId: 'proj_legacy', projectName: 'legacy', status: 'ready', isActive: true,
-      }],
-      total: 119,
-    })
-    openShip.intercept({ path: '/api/proxy/api/issues/health' }).reply(200, {
-      watching: true,
-      data: [{
-        serviceId: 'svc_api', projectName: 'lingxiloop-app-a', serviceName: 'lingxiloop', serverName: '上海-A',
-        state: 'healthy', observedAt: '2026-09-03T00:42:01.016Z', environment: { SECRET: 'must-not-leak' },
-      }, {
-        serviceId: 'svc_worker', projectName: 'lingxiloop-app-b', serviceName: 'worker', serverName: '上海-B',
-        state: 'down', observedAt: '2026-09-03T00:42:00.929Z', containerId: 'must-not-leak',
-      }, {
-        serviceId: 'svc_legacy_worker', projectName: 'lingxiloop-app-a', serviceName: 'worker', serverName: '上海-A', state: 'healthy',
-      }, {
-        serviceId: 'svc_legacy', projectName: 'lingxiloop-legacy', serviceName: 'api', serverName: '上海-A', state: 'healthy',
-      }],
-    })
     try {
       const signIn = await SELF.fetch('https://admin.example.com/api/auth/sign-in/email', {
         method: 'POST',
@@ -264,26 +171,6 @@ describe('control-plane trust boundaries', () => {
         history: { 11: [{ status: 0 }, { status: 1, ping: 26 }] },
         latest: { 11: { status: 1, ping: 26 } },
         uptime: { '11_24': 1 },
-      })
-      const deployments = await SELF.fetch('https://admin.example.com/api/control/deployment-dashboard', { headers: { cookie: signIn.headers.get('set-cookie') ?? '' } })
-      expect(await deployments.json()).toEqual({
-        data: [{
-          id: 'dep_test', projectId: 'proj_test-a', projectName: 'app-a', status: 'ready', commitSha: 'a'.repeat(40), commitMessage: 'release', trigger: 'manual',
-          environment: 'production', framework: 'docker-compose', buildDurationMs: 1250, version: 3, createdAt: '2026-09-03T00:00:00.000Z',
-          updatedAt: '2026-09-03T00:00:02.000Z', isActive: true,
-        }],
-        total: 1,
-      })
-      const topology = await SELF.fetch('https://admin.example.com/api/control/production-topology', { headers: { cookie: signIn.headers.get('set-cookie') ?? '' } })
-      expect(await topology.json()).toEqual({
-        watching: true,
-        observedAt: '2026-09-03T00:42:01.016Z',
-        summary: { services: 2, healthy: 1, attention: 1, projects: 2, servers: 2 },
-        services: [{
-          id: 'svc_api', project: 'lingxiloop-app-a', service: 'lingxiloop', server: '上海-A', state: 'healthy', observedAt: '2026-09-03T00:42:01.016Z',
-        }, {
-          id: 'svc_worker', project: 'lingxiloop-app-b', service: 'worker', server: '上海-B', state: 'down', observedAt: '2026-09-03T00:42:00.929Z',
-        }],
       })
       fetchMock.assertNoPendingInterceptors()
     } finally { fetchMock.deactivate() }

@@ -127,6 +127,12 @@ services:
     cpus: "0.25"
     mem_limit: 64m
     logging: *logging
+    networks: [default, ingress]
 
 volumes:
   lingxios-homes: {}
+
+networks:
+  ingress:
+    external: true
+    name: lingxiloop-ingress

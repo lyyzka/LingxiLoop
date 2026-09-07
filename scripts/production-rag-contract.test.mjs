@@ -3,12 +3,11 @@ import { existsSync, readFileSync } from 'node:fs'
 import test from 'node:test'
 import { computeScope } from './ci-scope.mjs'
 import { updateImageTags } from './update-deployment-images.mjs'
-import { buildReleaseRequest, deploymentImages } from './trigger-openship-release.mjs'
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')
 
 test('production Open Notebook receives only the explicit RAG environment', () => {
-  const compose = read('deploy/openship/knowledge-agent.yml')
+  const compose = read('deploy/arcane/lingxiloop-knowledge-agent/compose.yml')
   const service = compose.slice(compose.indexOf('  open-notebook:'))
 
   assert.doesNotMatch(service, /env_file:/)
@@ -116,15 +115,15 @@ test('removed Open Notebook capabilities cannot be re-enabled by deployment conf
   const files = [
     '.env.example',
     'docker-compose.mvp.yml',
-    'deploy/openship/knowledge-agent.yml',
+    'deploy/arcane/lingxiloop-knowledge-agent/compose.yml',
   ].map(read).join('\n')
 
   assert.doesNotMatch(files, /OPEN_NOTEBOOK_ENCRYPTION_KEY/)
   assert.doesNotMatch(files, /OPEN_NOTEBOOK_(?:CHAT|STRATEGY|ANSWER|FINAL_ANSWER)_MODEL/)
 })
 
-test('OpenShip knowledge services receive writable storage and the control plane URL', () => {
-  const compose = read('deploy/openship/knowledge-agent.yml')
+test('Arcane knowledge services receive writable storage and the control plane URL', () => {
+  const compose = read('deploy/arcane/lingxiloop-knowledge-agent/compose.yml')
 
   assert.match(compose, /surrealdb:[\s\S]*?rocksdb:\/home\/nonroot\/open-notebook\.db/)
   assert.match(compose, /SURREAL_PASS: \$\{OPEN_NOTEBOOK_SURREAL_PASSWORD:\?OPEN_NOTEBOOK_SURREAL_PASSWORD is required}/)
@@ -137,9 +136,9 @@ test('OpenShip knowledge services receive writable storage and the control plane
   assert.doesNotMatch(compose, /LINGXILOOP_INTERNAL_ORIGIN/)
 })
 
-test('OpenShip runs the Worker only on its selected app project', () => {
-  const appA = read('deploy/openship/app-a.yml')
-  const appB = read('deploy/openship/app-b.yml')
+test('Arcane runs the Worker only on its selected app project', () => {
+  const appA = read('deploy/arcane/lingxiloop-app-a/compose.yml')
+  const appB = read('deploy/arcane/lingxiloop-app-b/compose.yml')
 
   assert.match(appA, /10\.20\.0\.2:5181:5181/)
   assert.doesNotMatch(appA, /^ {2}(?:worker|gateway):/m)
@@ -148,17 +147,16 @@ test('OpenShip runs the Worker only on its selected app project', () => {
   assert.match(appB, /gateway:\r?\n {4}image: .*lingxiloop-gateway:[0-9a-f]{40}/)
   assert.match(appB, /127\.0\.0\.1:8080:8080/)
   assert.doesNotMatch(appB, /COMPOSE_PROFILES|profiles:/)
-  assert.match(read('deploy/openship/gateway.Dockerfile'), /FROM accel\.way2api\.fun\/docker\.io\/library\/nginx:alpine[\s\S]*COPY website \/usr\/share\/nginx\/html/)
+  assert.doesNotMatch(read('deploy/arcane/lingxiloop-app-b/gateway.Dockerfile'), /COPY website/)
   assert.doesNotMatch(`${appA}\n${appB}`, /AGENT_OS_URL/)
 })
 
 test('the gateway uses the备案 ingress and the Worker uses its admin domain', () => {
-  const gateway = read('deploy/openship/gateway.conf')
-  const core = read('deploy/openship/core-state.yml')
+  const gateway = read('deploy/arcane/lingxiloop-app-b/gateway.conf')
+  const core = read('deploy/arcane/lingxiloop-core-state/compose.yml')
   const worker = read('workers/control-plane/wrangler.jsonc')
 
   assert.match(gateway, /server 10\.20\.0\.2:5181/)
-  assert.match(gateway, /server_name lingxilearn\.cn www\.lingxilearn\.cn/)
   assert.match(gateway, /server_name loop\.lingxilearn\.cn/)
   assert.match(gateway, /upstream control_plane \{[\s\S]*server admin\.lingxilearn\.cn:443 resolve;[\s\S]*keepalive 32;/)
   assert.match(gateway, /location \/api\/ \{[\s\S]*\$http_x_lingxiloop_gateway[\s\S]*return 418;[\s\S]*proxy_pass https:\/\/control_plane;[\s\S]*proxy_ssl_name admin\.lingxilearn\.cn;[\s\S]*proxy_set_header Connection "";/)
@@ -170,11 +168,27 @@ test('the gateway uses the备案 ingress and the Worker uses its admin domain', 
   assert.match(worker, /"routes": \[\{ "pattern": "admin\.lingxilearn\.cn", "custom_domain": true \}\]/)
   assert.match(worker, /"workers_dev": false/)
   assert.match(worker, /"ORIGIN_BASE_URL": "https:\/\/loop\.lingxilearn\.cn"/)
-  assert.match(worker, /"OPENSHIP_BASE_URL": "https:\/\/ops\.christmas1314\.xyz"/)
   assert.match(worker, /"AUTH_ALLOWED_HOSTS": "loop\.lingxilearn\.cn,admin\.lingxilearn\.cn"/)
-  const imageTargets = worker.match(/"OPENSHIP_IMAGE_TARGETS": "([^"]+)"/)?.[1].split(',') ?? []
-  assert.equal(imageTargets.length, 8)
-  assert.deepEqual(new Set(imageTargets.map((target) => target.split(':')[0])), new Set(['server', 'wukongim', 'open-notebook', 'gateway']))
+})
+
+test('Arcane control plane and ingress keep management sockets private', () => {
+  const manager = read('deploy/arcane/arcane-manager/compose.yml')
+  const agent = read('deploy/arcane/arcane-agent/compose.yml')
+  const alyIngress = read('deploy/arcane/aly-ingress/compose.yml')
+  const appIngress = read('deploy/arcane/server-b-ingress/compose.yml')
+  const appRoutes = read('deploy/arcane/server-b-ingress/dynamic.yml')
+
+  assert.match(manager, /manager:v2\.10\.2/)
+  assert.match(agent, /agent:v2\.10\.2/)
+  assert.match(manager, /127\.0\.0\.1:3552:3552/)
+  assert.match(agent, /EDGE_TRANSPORT: poll/)
+  assert.doesNotMatch(agent, /3553:3553/)
+  assert.match(`${manager}\n${agent}`, /wollomatic\/socket-proxy:1\.13\.1/)
+  assert.doesNotMatch(`${alyIngress}\n${appIngress}`, /docker\.sock|providers\.docker/)
+  assert.match(appIngress, /80:80[\s\S]*443:443/)
+  for (const host of ['lingxilearn.cn', 'www.lingxilearn.cn', 'loop.lingxilearn.cn', 'im.lingxilearn.cn', 'openlit.lingxilearn.cn', 'uptime.lingxilearn.cn']) {
+    assert.match(appRoutes, new RegExp(host.replaceAll('.', '\\.')))
+  }
 })
 
 test('main publishes changed images and rolls out a complete immutable release', () => {
@@ -190,34 +204,20 @@ test('main publishes changed images and rolls out a complete immutable release',
   assert.match(workflow, /control:d1:remote[\s\S]*wrangler versions upload[\s\S]*wrangler versions deploy/)
   assert.match(workflow, /control_migrations == 'true'[\s\S]*control:d1:remote/)
   assert.match(workflow, /update-deployment-images\.mjs "\$GITHUB_SHA" \$\{\{ needs\.changes\.outputs\.packages \}\}/)
-  assert.match(workflow, /rollout:[\s\S]*trigger-openship-release\.mjs/)
-  assert.match(workflow, /RELEASE_COMMIT_SHA: \$\{\{ needs\.update-manifests\.outputs\.commit-sha \}\}/)
+  assert.match(workflow, /rollout:[\s\S]*trigger-arcane-git-sync\.mjs/)
+  assert.match(workflow, /ARCANE_GIT_SYNC_WEBHOOK_URLS: \$\{\{ secrets\.ARCANE_GIT_SYNC_WEBHOOK_URLS \}\}/)
   assert.match(workflow, /VITE_TURNSTILE_SITE_KEY=0x4AAAAAAEk9EZhHYeS3szPO/)
   assert.match(serverImage, /ARG VITE_TURNSTILE_SITE_KEY=""[\s\S]*ENV VITE_TURNSTILE_SITE_KEY=\$\{VITE_TURNSTILE_SITE_KEY\}/)
-  const imageDigests = Object.fromEntries(['server', 'wukongim', 'open-notebook', 'gateway']
-    .map((name, index) => [name, `accel.way2api.fun/ghcr.io/example/lingxiloop-${name}:${index ? 'a'.repeat(40) : 'c'.repeat(40)}`]))
-  const release = buildReleaseRequest('secret', 'a'.repeat(40), 'b'.repeat(40), 'Example/LingxiLoop', imageDigests)
-  assert.deepEqual(JSON.parse(release.body), {
-    commitSha: 'a'.repeat(40),
-    deployCommitSha: 'b'.repeat(40),
-    imageDigests,
-  })
-  assert.deepEqual(deploymentImages(Object.values(imageDigests).map((image) => `image: ${image}`).join('\n')), imageDigests)
-  assert.match(release.signature, /^[\w-]{43}$/)
-  assert.throws(() => buildReleaseRequest('secret', 'a'.repeat(40), 'b'.repeat(40), 'Example/LingxiLoop', {
-    ...imageDigests,
-    gateway: 'registry/lingxiloop-gateway:latest',
-  }), /invalid release images/)
-  assert.doesNotMatch(workflow, /image-digest-|api\/internal\/releases/)
+  assert.doesNotMatch(workflow, /RELEASE_HMAC_SECRET|api\/internal\/releases/)
   assert.doesNotMatch(workflow, /pages deploy|PRODUCTION_SSH|run: .*deploy-production\.sh/)
 })
 
 test('all deployable LingxiLoop images use CI-managed unique tags', () => {
   const manifests = [
-    'deploy/openship/app-a.yml',
-    'deploy/openship/app-b.yml',
-    'deploy/openship/core-state.yml',
-    'deploy/openship/knowledge-agent.yml',
+    'deploy/arcane/lingxiloop-app-a/compose.yml',
+    'deploy/arcane/lingxiloop-app-b/compose.yml',
+    'deploy/arcane/lingxiloop-core-state/compose.yml',
+    'deploy/arcane/lingxiloop-knowledge-agent/compose.yml',
   ].map(read).join('\n')
   const references = [...manifests.matchAll(/image:\s+\S*lingxiloop-[^:\s]+:([^\s]+)/g)]
   assert.equal(references.length, 5)

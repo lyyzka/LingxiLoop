@@ -1,0 +1,19 @@
+http:
+  routers:
+    arcane:
+      rule: Host(`ops.christmas1314.xyz`)
+      entryPoints: [websecure]
+      service: arcane
+      tls: { certResolver: letsencrypt }
+    wegolibrary:
+      rule: Host(`golib.christmas1314.xyz`)
+      entryPoints: [websecure]
+      service: wegolibrary
+      tls: { certResolver: letsencrypt }
+  services:
+    arcane:
+      loadBalancer:
+        servers: [{ url: http://arcane:3552 }]
+    wegolibrary:
+      loadBalancer:
+        servers: [{ url: http://host.docker.internal:18081 }]

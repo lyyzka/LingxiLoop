@@ -119,8 +119,8 @@ jobs:
               - 'server/wukongim/**'
               - 'server/docker/wukongim.Dockerfile'
             gateway:
-              - 'deploy/openship/gateway.conf'
-              - 'deploy/openship/gateway.Dockerfile'
+              - 'deploy/arcane/lingxiloop-app-b/gateway.conf'
+              - 'deploy/arcane/lingxiloop-app-b/gateway.Dockerfile'
               - 'website/**'
             deployment:
               - '.github/workflows/ci.yml'
@@ -281,7 +281,7 @@ jobs:
           if ! git diff --quiet; then
             git config user.name github-actions[bot]
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add deploy/openship/*.yml
+            git add deploy/arcane/*/compose.yml
             git commit -m "deploy: pin images to ${GITHUB_SHA} [skip ci]"
             git push origin HEAD:main
           fi
@@ -327,13 +327,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     environment: production
+    env:
+      ARCANE_GIT_SYNC_WEBHOOK_URLS: ${{ secrets.ARCANE_GIT_SYNC_WEBHOOK_URLS }}
     steps:
       - uses: actions/checkout@v5
         with: { ref: main }
-      - name: Trigger OpenShip production rollout
-        run: node scripts/trigger-openship-release.mjs
-        env:
-          RELEASE_HMAC_SECRET: ${{ secrets.RELEASE_HMAC_SECRET }}
-          RELEASE_COMMIT_SHA: ${{ needs.update-manifests.outputs.commit-sha }}
-          RELEASE_DEPLOY_COMMIT_SHA: ${{ needs.update-manifests.outputs.commit-sha }}
-          RELEASE_REPOSITORY: ${{ github.repository }}
+      - name: Trigger Arcane Git Sync
+        if: env.ARCANE_GIT_SYNC_WEBHOOK_URLS != ''
+        run: node scripts/trigger-arcane-git-sync.mjs

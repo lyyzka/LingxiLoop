@@ -1,10 +1,10 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 
 const manifests = {
-  'deploy/openship/app-a.yml': ['server'],
-  'deploy/openship/app-b.yml': ['server', 'gateway'],
-  'deploy/openship/core-state.yml': ['wukongim'],
-  'deploy/openship/knowledge-agent.yml': ['open-notebook'],
+  'deploy/arcane/lingxiloop-app-a/compose.yml': ['server'],
+  'deploy/arcane/lingxiloop-app-b/compose.yml': ['server', 'gateway'],
+  'deploy/arcane/lingxiloop-core-state/compose.yml': ['wukongim'],
+  'deploy/arcane/lingxiloop-knowledge-agent/compose.yml': ['open-notebook'],
 }
 
 export function updateImageTags(source, sha, packages) {
