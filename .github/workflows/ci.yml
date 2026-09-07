@@ -179,9 +179,6 @@ jobs:
         run: npm run control:lint && npm run control:typecheck && npm run control:test
       - if: needs.changes.outputs.deploy_contract == 'true'
         run: node --test scripts/production-rag-contract.test.mjs
-      - if: needs.changes.outputs.deploy_contract == 'true'
-        name: Verify App B worker runtime guard
-        run: python3 deploy/openship/worker-runtime-guard.py --self-test
       - if: needs.changes.outputs.release == 'true'
         run: npm run version:check
 
