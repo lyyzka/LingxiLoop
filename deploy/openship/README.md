@@ -1,6 +1,6 @@
 # OpenShip production deployment
 
-The desired manifest set contains four product projects on two servers. The old Agent OS projects are retired; the server image installs the pinned vendored LingxiOS package. Each role
+The desired manifest set contains four product projects on two servers. The old Agent OS projects are retired; the server image installs the exact published LingxiOS package from the npm lockfile. Each role
 has an explicit Compose file; production does not use profiles or the local
 MVP Compose stack.
 
@@ -53,6 +53,7 @@ OPEN_NOTEBOOK_URL=http://10.20.0.3:5055
 DATABASE_POOL_MAX=8
 AGENT_OS_INPUT_COST_MICROS_PER_MILLION=<current-model-rate>
 AGENT_OS_OUTPUT_COST_MICROS_PER_MILLION=<current-model-rate>
+WUKONG_USER_TOKEN_SECRET=<shared-secret>
 ```
 
 App B's Worker persists `/var/lib/lingxios/homes` in its named volume and runs each Python kernel through Bubblewrap with PID, mount, user and network namespaces. The manifest also bounds Worker CPU, memory and process count. Confirm the two model-rate values whenever the configured model or provider pricing changes.

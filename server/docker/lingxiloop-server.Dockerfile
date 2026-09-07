@@ -29,7 +29,6 @@ FROM ${NODE_BASE_IMAGE} AS deps
 ARG NPM_REGISTRY
 WORKDIR /app
 COPY server/package.json server/package-lock.json ./
-COPY server/vendor ./vendor
 RUN npm ci --registry="${NPM_REGISTRY}" --omit=dev --no-audit --no-fund --prefer-offline
 
 # ─── stage 2: build the web SPA bundle ──────────────────────────────
