@@ -63,7 +63,7 @@ def test_source_only_migration_is_latest() -> None:
 
 def test_rag_image_has_no_frontend_or_general_command_runtime() -> None:
     dockerfile = read("Dockerfile")
-    target = dockerfile.split("FROM python:3.12-slim-trixie AS lingxiloop-rag", 1)[1]
+    target = dockerfile.split("FROM accel.way2api.fun/docker.io/library/python:3.12-slim-trixie AS lingxiloop-rag", 1)[1]
     target = target.split("FROM runtime-base AS runtime", 1)[0]
     assert "node" not in target.lower()
     assert "frontend" not in target.lower()

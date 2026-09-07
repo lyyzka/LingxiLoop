@@ -789,7 +789,7 @@ def test_rag_image_target_and_supervisor_contract() -> None:
     assert "[program:rag-api]" in supervisor
     assert "[program:rag-worker]" in supervisor
     assert supervisor.count("[program:") == 2
-    rag_target = dockerfile.split("FROM python:3.12-slim-trixie AS lingxiloop-rag", 1)[
+    rag_target = dockerfile.split("FROM accel.way2api.fun/docker.io/library/python:3.12-slim-trixie AS lingxiloop-rag", 1)[
         1
     ].split("FROM runtime-base AS runtime", 1)[0]
     assert "node" not in rag_target.lower()

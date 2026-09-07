@@ -21,7 +21,7 @@
 # OrbStack auto-loads into its K8s.
 
 # ─── stage 1: install runtime node deps (prod only) ─────────────────
-ARG NODE_BASE_IMAGE=docker.m.daocloud.io/library/node:22-bookworm-slim
+ARG NODE_BASE_IMAGE=accel.way2api.fun/docker.io/library/node:22-bookworm-slim
 ARG NPM_REGISTRY=https://registry.npmjs.org
 ARG APT_MIRROR=http://mirrors.aliyun.com
 

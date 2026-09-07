@@ -1,4 +1,4 @@
-FROM alpine:3.21 AS source
+FROM accel.way2api.fun/docker.io/library/alpine:3.21 AS source
 
 ARG WUKONG_COMMIT
 RUN test -n "$WUKONG_COMMIT" \
@@ -10,7 +10,7 @@ RUN test -n "$WUKONG_COMMIT" \
  && git checkout --detach FETCH_HEAD \
  && test "$(git rev-parse HEAD)" = "$WUKONG_COMMIT"
 
-FROM golang:1.25.0 AS builder
+FROM accel.way2api.fun/docker.io/library/golang:1.25.0 AS builder
 
 ARG TARGETOS=linux
 ARG TARGETARCH
@@ -20,7 +20,7 @@ RUN go mod download \
  && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=${TARGETARCH:-$(go env GOARCH)} \
       go build -trimpath -o /out/wukongim ./cmd/wukongim
 
-FROM alpine:3.19
+FROM accel.way2api.fun/docker.io/library/alpine:3.19
 
 RUN apk add --no-cache ca-certificates
 WORKDIR /app

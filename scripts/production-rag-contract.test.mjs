@@ -148,7 +148,7 @@ test('OpenShip runs the Worker only on its selected app project', () => {
   assert.match(appB, /gateway:\r?\n {4}image: .*lingxiloop-gateway:[0-9a-f]{40}/)
   assert.match(appB, /127\.0\.0\.1:8080:8080/)
   assert.doesNotMatch(appB, /COMPOSE_PROFILES|profiles:/)
-  assert.match(read('deploy/openship/gateway.Dockerfile'), /FROM nginx:alpine[\s\S]*COPY website \/usr\/share\/nginx\/html/)
+  assert.match(read('deploy/openship/gateway.Dockerfile'), /FROM accel\.way2api\.fun\/docker\.io\/library\/nginx:alpine[\s\S]*COPY website \/usr\/share\/nginx\/html/)
   assert.doesNotMatch(`${appA}\n${appB}`, /AGENT_OS_URL/)
 })
 

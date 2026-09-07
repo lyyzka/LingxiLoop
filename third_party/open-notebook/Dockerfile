@@ -5,7 +5,7 @@
 # npm retry logic, ...) apply to both variants at once.
 
 # Stage 1: Frontend builder
-FROM node:22-slim AS frontend-builder
+FROM accel.way2api.fun/docker.io/library/node:22-slim AS frontend-builder
 WORKDIR /app/frontend
 
 # Copy dependency files first to leverage cache
@@ -28,7 +28,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # Stage 2: Shared backend builder base
-FROM python:3.12-slim-trixie AS backend-builder-base
+FROM accel.way2api.fun/docker.io/library/python:3.12-slim-trixie AS backend-builder-base
 
 # Install build dependencies (uv downloads pre-built wheels for most packages)
 RUN apt-get update && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
@@ -36,7 +36,7 @@ RUN apt-get update && apt-get -o Acquire::Retries=5 install -y --no-install-reco
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv using the official method
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+COPY --from=accel.way2api.fun/ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
 
@@ -76,10 +76,10 @@ RUN mkdir -p /app/tiktoken-cache && \
     .venv/bin/python -c "import tiktoken; tiktoken.get_encoding('o200k_base')"
 
 # Stage 3: SurrealDB binary (pinned to v2 to match docker-compose.yml; used by the single target only)
-FROM surrealdb/surrealdb:v2 AS surreal-binary
+FROM accel.way2api.fun/docker.io/surrealdb/surrealdb:v2 AS surreal-binary
 
 # Stage 4: Shared runtime base (everything common to both variants)
-FROM python:3.12-slim-trixie AS runtime-base
+FROM accel.way2api.fun/docker.io/library/python:3.12-slim-trixie AS runtime-base
 
 # Install only runtime system dependencies (no build tools)
 # Add Node.js 22.x LTS for running the frontend
@@ -169,7 +169,7 @@ RUN cat /app/supervisord.surrealdb.conf >> /etc/supervisor/conf.d/supervisord.co
 # Stage 6: LingxiLoop production RAG image.  It has no Node runtime, frontend
 # artifacts, full API routers, chat graphs, podcast code, or non-RAG command
 # modules.  SurrealDB remains an external service.
-FROM python:3.12-slim-trixie AS lingxiloop-rag
+FROM accel.way2api.fun/docker.io/library/python:3.12-slim-trixie AS lingxiloop-rag
 
 RUN apt-get update && apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
     supervisor \
