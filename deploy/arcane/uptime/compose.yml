@@ -2,7 +2,7 @@ name: uptime
 
 services:
   uptime-kuma:
-    image: louislam/uptime-kuma:2.3.2
+    image: accel.way2api.fun/docker.io/louislam/uptime-kuma:2.3.2
     restart: unless-stopped
     volumes:
       - uptime-data:/app/data

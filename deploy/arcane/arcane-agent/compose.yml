@@ -9,11 +9,11 @@ services:
       - -listenip=0.0.0.0
       - -allowfrom=arcane-edge-agent
       - -allowhealthcheck
-      - -allowGET=(/v[d.]+)?/(_ping|events|version|info|containers|exec|images|networks|volumes|distribution|swarm|nodes|services|tasks|secrets|configs)(/.*)?
-      - -allowHEAD=(/v[d.]+)?/(_ping|version)(/.*)?
-      - -allowPOST=(/v[d.]+)?/(containers|exec|images|networks|volumes|commit|build|session|grpc|auth|swarm|nodes|services|secrets|configs)(/.*)?
-      - -allowPUT=(/v[d.]+)?/containers(/.*)?
-      - -allowDELETE=(/v[d.]+)?/(containers|images|networks|volumes|nodes|services|secrets|configs)(/.*)?
+      - -allowGET=(/v[0-9.]+)?/(_ping|events|version|info|containers|exec|images|networks|volumes|distribution|swarm|nodes|services|tasks|secrets|configs)(/.*)?
+      - -allowHEAD=(/v[0-9.]+)?/(_ping|version)(/.*)?
+      - -allowPOST=(/v[0-9.]+)?/(containers|exec|images|networks|volumes|commit|build|session|grpc|auth|swarm|nodes|services|secrets|configs)(/.*)?
+      - -allowPUT=(/v[0-9.]+)?/containers(/.*)?
+      - -allowDELETE=(/v[0-9.]+)?/(containers|images|networks|volumes|nodes|services|secrets|configs)(/.*)?
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     read_only: true
