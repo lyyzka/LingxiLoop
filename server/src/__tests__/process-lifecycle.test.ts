@@ -123,7 +123,7 @@ test('OpenShip workers inherit the complete runtime environment', async () => {
     'utf8',
   )
   assert.match(compose, /WUKONG_WEBHOOK_SECRET: \$\{WUKONG_WEBHOOK_SECRET:\?/)
-  assert.doesNotMatch(compose, /WUKONG_USER_TOKEN_SECRET/)
+  assert.match(compose, /WUKONG_USER_TOKEN_SECRET: \$\{WUKONG_USER_TOKEN_SECRET:\?/)
   assert.match(compose, /lingxiloop:\r?\n {4}<<: \*runtime\r?\n {4}environment: \*runtime-environment/)
   assert.match(compose, /worker:\r?\n {4}<<: \*runtime\r?\n {4}environment: \*runtime-environment/)
   assert.match(compose, /db-migrate:\r?\n {4}<<: \*runtime\r?\n {4}environment:\r?\n {6}NODE_ENV: production\r?\n {6}DATABASE_POOL_MAX:[^\n]+\n {6}DATABASE_URL:/)
@@ -132,6 +132,7 @@ test('OpenShip workers inherit the complete runtime environment', async () => {
   assert.match(compose, /pull_policy: always/)
   assert.match(compose, /AGENT_OS_INPUT_COST_MICROS_PER_MILLION: \$\{AGENT_OS_INPUT_COST_MICROS_PER_MILLION:\?/)
   assert.match(compose, /lingxios-homes:\/var\/lib\/lingxios\/homes/)
+  assert.match(compose, /security_opt: \["seccomp=unconfined", "systempaths=unconfined"\]/)
   assert.match(compose, /pids_limit: 128/)
   const image = await readFile(new URL('../../docker/lingxiloop-server.Dockerfile', import.meta.url), 'utf8')
   assert.match(image, /node:22-bookworm-slim/)

@@ -104,6 +104,7 @@ services:
       - lingxios-homes:/var/lib/lingxios/homes
     read_only: true
     tmpfs: [/tmp]
+    security_opt: ["seccomp=unconfined", "systempaths=unconfined"]
     pids_limit: 128
     cpus: "0.75"
     mem_limit: 512m
