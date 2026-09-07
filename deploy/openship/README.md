@@ -68,6 +68,36 @@ The knowledge project uses the same origin for its embedding proxy. Store
 database URLs, tokens, model keys, R2 credentials, and registry credentials as
 OpenShip secrets. Do not expose or copy them into source files.
 
+## App B worker runtime guard
+
+OpenShip 0.6.9 does not model the Worker's Compose `read_only`, `tmpfs`,
+`pids_limit`, or `security_opt` settings. A normal App B refresh can therefore
+replace a valid Worker with a container that cannot create the Bubblewrap
+namespaces required by LingxiOS. Keep those fields in `app-b.yml` as the desired
+deployment contract, and run the host-managed guard on Server B until the
+deployer preserves them natively.
+
+Install or refresh the guard from a checked-out copy of this repository:
+
+```sh
+sudo deploy/openship/install-worker-runtime-guard.sh
+```
+
+The guard watches only `openship-lingxiloop-app-b-worker`. If OpenShip starts a
+non-compliant replacement, the guard copies that container's current immutable
+image, environment, OpenShip labels, named home volume, project network,
+restart policy, CPU/memory limits, logging config, and command, then recreates
+only the Worker with the required read-only root, `/tmp` tmpfs, PID limit 128,
+unconfined seccomp, and unmasked system paths. The replacement must log
+`worker started` and pass an in-container Bubblewrap namespace probe before the
+old stopped container is deleted; otherwise the guard rolls back to it. Secret
+environment values are never emitted to logs or placed on the command line.
+
+Treat `/usr/local/sbin/lingxiloop-worker-runtime-guard` and
+`/etc/systemd/system/lingxiloop-worker-runtime-guard.service` as Server B
+host-managed production assets. Remove the guard only after a real OpenShip
+refresh has been proven to retain all four Worker runtime invariants.
+
 ## Verification
 
 After every rollout, require all four OpenShip deployments to reach `ready`,
@@ -75,3 +105,5 @@ all expected production services to report healthy, no drift issue, and the
 public Web/API/IM probes to pass. App A
 must contain only `db-migrate` and `lingxiloop`; App B must contain exactly
 `db-migrate`, `lingxiloop`, `worker`, and `gateway`.
+Additionally require `lingxiloop-worker-runtime-guard.service` to be active and
+`/usr/local/sbin/lingxiloop-worker-runtime-guard --check` to exit zero on Server B.
