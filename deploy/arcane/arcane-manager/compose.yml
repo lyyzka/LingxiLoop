@@ -47,7 +47,7 @@ services:
       - /opt/arcane/projects:/app/data/projects
       - /opt/apps/wegolibrary:/opt/apps/wegolibrary
     healthcheck:
-      test: [CMD-SHELL, "curl -fsS http://localhost:3552/api/health >/dev/null || exit 1"]
+      test: [CMD, ./arcane, health]
       interval: 10s
       timeout: 3s
       retries: 12

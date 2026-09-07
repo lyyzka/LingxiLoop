@@ -16,4 +16,4 @@ http:
         servers: [{ url: http://arcane:3552 }]
     wegolibrary:
       loadBalancer:
-        servers: [{ url: http://host.docker.internal:18081 }]
+        servers: [{ url: http://frontend:80 }]

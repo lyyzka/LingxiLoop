@@ -2,7 +2,7 @@ name: server-b-ingress
 
 services:
   traefik:
-    image: traefik:v3.7.1
+    image: accel.way2api.fun/docker.io/library/traefik:v3.7.1
     container_name: lingxiloop-traefik
     command:
       - --providers.file.directory=/etc/traefik/dynamic

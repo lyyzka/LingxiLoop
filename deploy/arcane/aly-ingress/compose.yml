@@ -2,7 +2,7 @@ name: aly-ingress
 
 services:
   traefik:
-    image: traefik:v3.7.1
+    image: accel.way2api.fun/docker.io/library/traefik:v3.7.1
     container_name: aly-traefik
     command:
       - --providers.file.directory=/etc/traefik/dynamic
@@ -24,7 +24,7 @@ services:
     volumes:
       - ./dynamic.yml:/etc/traefik/dynamic/routes.yml:ro
       - traefik-acme:/letsencrypt
-    networks: [default, arcane-manager]
+    networks: [default, arcane-manager, wegolibrary]
     restart: unless-stopped
 
 volumes:
@@ -34,3 +34,6 @@ networks:
   arcane-manager:
     external: true
     name: arcane-manager_default
+  wegolibrary:
+    external: true
+    name: wegolibrary_default

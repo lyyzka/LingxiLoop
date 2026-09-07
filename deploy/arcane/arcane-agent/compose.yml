@@ -2,7 +2,7 @@ name: arcane-agent
 
 services:
   docker-socket-proxy:
-    image: wollomatic/socket-proxy:1.13.1
+    image: accel.way2api.fun/docker.io/wollomatic/socket-proxy:1.13.1
     container_name: arcane-agent-docker-proxy
     user: "0:0"
     command:
@@ -27,7 +27,7 @@ services:
     restart: unless-stopped
 
   arcane-edge-agent:
-    image: ghcr.io/getarcaneapp/agent:v2.10.2
+    image: accel.way2api.fun/ghcr.io/getarcaneapp/agent:v2.10.2
     container_name: arcane-edge-agent
     depends_on:
       docker-socket-proxy:
