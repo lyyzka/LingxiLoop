@@ -1,12 +1,46 @@
 import { createHash } from 'node:crypto'
 import { readFile, readdir } from 'node:fs/promises'
 import type { Pool, PoolClient } from 'pg'
+import { packageResources, releaseVersions } from 'lingxios'
 import { ensurePersonalPlans } from '../modules/entitlements/public.js'
 import { pool } from './pool.js'
 
 const MIGRATIONS_URL = new URL('./migrations/', import.meta.url)
 const MIGRATION_FILE = /^(\d{4})_([a-z0-9][a-z0-9_-]*)\.sql$/
 const LOCK_KEY = 1_282_006_534
+const NATIVE_INSTALL_VERSION = 10
+const retiredTables = ['approvals','agent_events','agent_runs','agent_host_actions','agent_os_session_leases',
+  'agent_os_session_routes','agent_os_workers','agent_os_sessions','agent_work_items','agent_workspace',
+  'agent_memory_evidence','agent_autonomy_rules','agent_action_executions','agent_tasks','agent_triages','tool_calls',
+  'agent_handoffs','agent_routine_runs']
+
+async function assertRetiredRuntimeEmpty(client: PoolClient): Promise<void> {
+  const { rows } = await client.query<{ schemaname: string; tablename: string }>(
+    `SELECT schemaname,tablename FROM pg_tables WHERE (schemaname='public' AND tablename=ANY($1::text[]))
+      OR (schemaname='lingxios' AND tablename<>'schema_version') ORDER BY schemaname,tablename`, [retiredTables],
+  )
+  for (const row of rows) {
+    const name = [row.schemaname,row.tablename].map(part => `"${part.replaceAll('"','""')}"`).join('.')
+    await client.query(`LOCK TABLE ${name} IN ACCESS EXCLUSIVE MODE`)
+    const result = await client.query(`SELECT 1 FROM ${name} LIMIT 1`)
+    if (result.rows.length) throw new Error('native LingxiOS installation requires an empty retired runtime; rebuild a fresh database after stopping old workers')
+  }
+}
+
+async function runtimeSchema() {
+  const sql = await readFile(packageResources().schema, 'utf8')
+  return { sql, hash: createHash('sha256').update(sql).digest('hex') }
+}
+
+async function assertRuntimeCurrent(client: PoolClient): Promise<void> {
+  const schema = await runtimeSchema()
+  const { rows } = await client.query(`SELECT runtime_version,schema_version,protocol_version,schema_sha256,
+    (SELECT version FROM lingxios.schema_version WHERE singleton) AS actual_schema FROM public.lingxios_installation WHERE singleton`)
+  const row = rows[0]
+  if (!row || row.runtime_version !== releaseVersions.runtime || row.schema_version !== releaseVersions.schema
+    || row.actual_schema !== releaseVersions.schema || row.protocol_version !== releaseVersions.controlPlane
+    || row.schema_sha256 !== schema.hash) throw new Error('installed LingxiOS package/schema mismatch; install a matching package and run the explicit database installation')
+}
 
 interface Migration {
   version: number
@@ -122,22 +156,39 @@ export async function migrateDatabase(
 
     const applied = await appliedMigrations(client)
     validateApplied(migrations, applied)
-    for (const migration of migrations.slice(applied.length)) {
+    const installsRuntime = migrations.some(migration => migration.version === NATIVE_INSTALL_VERSION && migration.name === 'lingxios_native_runtime')
+    const cutover = installsRuntime && applied.length < NATIVE_INSTALL_VERSION
+    if (cutover) {
       await client.query('BEGIN')
       try {
+        await client.query("SET LOCAL lock_timeout='5s'")
+        await assertRetiredRuntimeEmpty(client)
+      } catch (error) { await client.query('ROLLBACK'); throw error }
+    }
+    for (const migration of migrations.slice(applied.length)) {
+      if (!cutover) await client.query('BEGIN')
+      try {
         await client.query(migration.sql)
+        if (installsRuntime && migration.version === NATIVE_INSTALL_VERSION) {
+          const schema = await runtimeSchema()
+          await client.query(schema.sql)
+          await client.query(`INSERT INTO public.lingxios_installation(runtime_version,schema_version,protocol_version,schema_sha256)
+            VALUES($1,$2,$3,$4)`, [releaseVersions.runtime,releaseVersions.schema,releaseVersions.controlPlane,schema.hash])
+        }
         await client.query('SET search_path TO public')
         await client.query(
           'INSERT INTO public.schema_migrations(version,name,checksum) VALUES($1,$2,$3)',
           [migration.version, migration.name, migration.checksum],
         )
-        await client.query('COMMIT')
+        if (!cutover) await client.query('COMMIT')
         appliedNow.push(`${String(migration.version).padStart(4, '0')}_${migration.name}`)
       } catch (error) {
         await client.query('ROLLBACK')
         throw new Error(`migration ${migration.version}_${migration.name} failed`, { cause: error })
       }
     }
+    if (cutover) await client.query('COMMIT')
+    if (installsRuntime) await assertRuntimeCurrent(client)
     await client.query('BEGIN')
     try {
       await client.query('SET search_path TO public')
@@ -171,6 +222,9 @@ export async function assertMigrationsCurrent(
     validateApplied(migrations, applied)
     if (applied.length !== migrations.length) {
       throw new Error(`database has ${applied.length} migration(s), but ${migrations.length} are required; run \`npm run db:migrate\``)
+    }
+    if (migrations.some(migration => migration.version === NATIVE_INSTALL_VERSION && migration.name === 'lingxios_native_runtime')) {
+      await assertRuntimeCurrent(client)
     }
   } finally {
     client.release()

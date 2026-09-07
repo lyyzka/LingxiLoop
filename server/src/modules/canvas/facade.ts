@@ -4,9 +4,11 @@ import { missingAgentChannelMessageIds } from '../../im/public.js'
 import { CH_CANVAS, publish } from '../../redis.js'
 import { createCanvasApplication } from './application.js'
 import { acquireCanvasSharedFence, releaseCanvasSharedFence } from './repository.js'
+import { createCanvasExecution } from './execution.js'
 
 const canvasApplication = createCanvasApplication({
   db: pool,
+  execution: createCanvasExecution(async () => (await import('../../agent-runtime/runtime.js')).lingxiOSControl()),
   transaction: (work) => withTransaction(pool, work),
   withCanvasFence: async (canvasId, work) => {
     const client = await pool.connect()

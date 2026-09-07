@@ -36,11 +36,12 @@ function isMissingChannelMembership(error: unknown): boolean {
 }
 
 export class WukongClient {
-  constructor(readonly config: WukongConfig) {}
+  constructor(readonly config: WukongConfig, private readonly signal?: AbortSignal) {}
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const response = await fetch(`${this.config.apiUrl.replace(/\/$/, '')}${path}`, {
       ...init,
+      signal: AbortSignal.any([AbortSignal.timeout(15_000), ...[this.signal, init.signal].filter((signal): signal is AbortSignal => !!signal)]),
       headers: {
         'content-type': 'application/json',
         token: this.config.apiToken,
@@ -164,12 +165,14 @@ export class WukongClient {
     loginUid = '',
     beforeMessageSeq = 0,
     repairProfile?: ImChannelProfile,
+    signal?: AbortSignal,
   ): Promise<ImMessage[]> {
     if (!Number.isSafeInteger(limit) || limit <= 0) throw new Error('message sync limit must be a positive safe integer')
     if (!Number.isSafeInteger(beforeMessageSeq) || beforeMessageSeq < 0) {
       throw new Error('message sync cursor must be a non-negative safe integer')
     }
     const requestMessages = () => this.request<unknown>('/channel/messagesync', {
+      signal,
       method: 'POST', body: JSON.stringify({
         login_uid: loginUid,
         channel_id: channelId,
@@ -234,7 +237,7 @@ function requiredConfig(name: 'WUKONG_API_URL' | 'WUKONG_WS_URL' | 'WUKONG_API_T
   return value
 }
 
-export function wukongClient(): WukongClient {
+export function wukongClient(signal?: AbortSignal): WukongClient {
   if (!singleton) {
     singleton = new WukongClient({
       apiUrl: requiredConfig('WUKONG_API_URL'),
@@ -243,7 +246,7 @@ export function wukongClient(): WukongClient {
       webhookSecret: requiredConfig('WUKONG_WEBHOOK_SECRET'),
     })
   }
-  return singleton
+  return signal ? new WukongClient(singleton.config, signal) : singleton
 }
 
 export function _setWukongClientForTests(client: WukongClient | null): void { singleton = client }

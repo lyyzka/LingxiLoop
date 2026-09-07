@@ -1,3 +1,4 @@
+import { readRunReference } from 'lingxios'
 import type { Queryable } from '../../db/queryable.js'
 import type {
   CreateEvidenceClaimInput,
@@ -70,7 +71,8 @@ export async function evidenceTargetExists(
   db: Queryable,
   scope: { companyId: string; projectId: string; targetKind: EvidenceLinkInput['targetKind']; targetId: string },
 ): Promise<boolean> {
-  const statements: Record<EvidenceLinkInput['targetKind'], string> = {
+  if (scope.targetKind === 'AGENT_RUN') return modelRunBelongsToProject(db, scope.companyId, scope.projectId, scope.targetId)
+  const statements: Record<Exclude<EvidenceLinkInput['targetKind'], 'AGENT_RUN'>, string> = {
     DOMAIN_EVENT: `SELECT 1 FROM domain_events WHERE company_id=$1 AND project_id=$2 AND id=$3`,
     LEARNING_ATTEMPT: `SELECT 1 FROM learning_attempts WHERE company_id=$1 AND project_id=$2 AND id=$3`,
     LEARNING_EVALUATION: `SELECT 1 FROM learning_evaluations WHERE company_id=$1 AND project_id=$2 AND id=$3`,
@@ -79,8 +81,6 @@ export async function evidenceTargetExists(
       WHERE report.company_id=$1 AND canvas.project_id=$2 AND report.id=$3`,
     AUDIT_EVENT: `SELECT 1 FROM audit_events
       WHERE company_id=$1 AND detail->>'projectId'=$2 AND id::text=$3`,
-    AGENT_RUN: `SELECT 1 FROM agent_runs
-      WHERE company_id=$1 AND $2::text IS NOT NULL AND id=$3`,
     EVIDENCE_RECORD: `SELECT 1 FROM evidence_records WHERE company_id=$1 AND project_id=$2 AND id=$3`,
   }
   const { rows } = await db.query(statements[scope.targetKind], [
@@ -103,12 +103,15 @@ export async function insertEvidenceLink(
   )
 }
 
-export async function modelRunBelongsToCompany(
+export async function modelRunBelongsToProject(
   db: Queryable,
   companyId: string,
+  projectId: string,
   modelRunId: string,
 ): Promise<boolean> {
-  const { rows } = await db.query(`SELECT 1 FROM agent_runs WHERE company_id=$1 AND id=$2`, [companyId, modelRunId])
+  const run = await readRunReference(db, companyId, modelRunId)
+  if (!run) return false
+  const { rows } = await db.query(`SELECT 1 FROM conversations WHERE company_id=$1 AND project_id=$2 AND id=$3`, [companyId, projectId, run.sessionId])
   return Boolean(rows[0])
 }
 

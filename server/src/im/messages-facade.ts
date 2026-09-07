@@ -4,7 +4,8 @@ import { ImMessagesApplication } from './messages-application.js'
 import { publishReadReceiptAdvance, recordReadReceiptAdvance } from './read-receipts.js'
 import { wukongClient } from './wukong.js'
 
-export const imMessagesApplication = new ImMessagesApplication({
+export function createImMessagesApplication(signal?: AbortSignal) {
+  return new ImMessagesApplication({
   db: pool,
   withConnection: async (work) => {
     const client = await pool.connect()
@@ -14,13 +15,15 @@ export const imMessagesApplication = new ImMessagesApplication({
       client.release()
     }
   },
-  syncMessages: (...args) => wukongClient().syncMessages(...args),
-  listConversations: (...args) => wukongClient().listConversations(...args),
-  clearUnread: (...args) => wukongClient().clearUnread(...args),
+  syncMessages: (...args) => wukongClient(signal).syncMessages(...args),
+  listConversations: (...args) => wukongClient(signal).listConversations(...args),
+  clearUnread: (...args) => wukongClient(signal).clearUnread(...args),
   reactions: wukongReactions,
   toggleReaction: toggleWukongReaction,
-  sendMessage: (...args) => wukongClient().sendMessage(...args),
-  setUnread: (...args) => wukongClient().setUnread(...args),
+  sendMessage: (...args) => wukongClient(signal).sendMessage(...args),
+  setUnread: (...args) => wukongClient(signal).setUnread(...args),
   recordReadReceipt: recordReadReceiptAdvance,
   publishReadReceipt: publishReadReceiptAdvance,
 })
+}
+export const imMessagesApplication = createImMessagesApplication()

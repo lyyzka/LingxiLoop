@@ -10,8 +10,9 @@ export async function postMembershipSystemMessage(args: {
   actorId: string
   kind: MembershipKind
   participantId: string
+  clientNonce?: string
 }): Promise<{ messageId: string; sequence: number }> {
-  const clientNonce = `membership:${randomUUID()}`
+  const clientNonce = args.clientNonce ?? `membership:${randomUUID()}`
   const body = JSON.stringify({
     kind: args.kind,
     participantId: args.participantId,

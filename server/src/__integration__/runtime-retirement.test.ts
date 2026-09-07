@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { releaseVersions } from 'lingxios'
+import { lingxiOSControl } from '../agent-runtime/runtime.js'
 import { createServer, type Server } from 'node:http'
 import { after, before, beforeEach, test } from 'node:test'
 import { pool } from '../db/pool.js'
@@ -72,7 +74,7 @@ test('committed messages remain idempotent and attachments ingest without old Ag
   assert.deepEqual(wakes, [{ eventId: 'retirement-event', companyId, channelId: 'retirement-room',
     clientMsgNo: 'retirement-message', payload: event.payload, recipients: [agentId], knowledgeSourceId: 'attachment-source' }])
   assert.deepEqual(flushes, ['retirement-event', 'retirement-event'])
-  assert.deepEqual((await pool.query(`SELECT COUNT(*)::int AS count FROM agent_work_items`)).rows, [{ count: 0 }])
+  assert.deepEqual((await pool.query(`SELECT to_regclass('public.agent_work_items') AS retired_queue`)).rows, [{ retired_queue: null }])
   await assert.rejects(application.process({ ...event, raw: Buffer.from('different') }), /different payload/)
   await assert.rejects(application.process({ ...event, eventId: 'outsider', fromUid: 'outsider' }), /not a bound channel member/)
 
@@ -81,10 +83,13 @@ test('committed messages remain idempotent and attachments ingest without old Ag
   assert.equal(canvas.status, 201)
   const { id } = await canvas.json() as { id: string }
   const assignment = await fetch(`${baseUrl}/api/canvases/${id}/assignments`, {
-    method: 'POST', headers, body: JSON.stringify({ agentId, assignment: 'Do not queue retired work' }),
+    method: 'POST', headers, body: JSON.stringify({ agentId, assignment: 'Use the native published runtime queue' }),
   })
-  assert.equal(assignment.status, 503)
-  assert.deepEqual((await pool.query(`SELECT COUNT(*)::int AS count FROM agent_work_items`)).rows, [{ count: 0 }])
+  assert.equal(assignment.status, 200)
+  assert.deepEqual((await pool.query(`SELECT to_regclass('public.agent_work_items') AS retired_queue`)).rows, [{ retired_queue: null }])
+  const runs = await (await lingxiOSControl()).listRuns({ tenantId: companyId,sessionId: 'retirement-room',agentId,principalId: 'test-owner' })
+  assert.equal(runs.items[0]?.kind,'canvas_worker')
+  assert.equal(runs.items[0]?.status,'queued')
   const meta = await fetch(`${baseUrl}/api/meta`)
-  assert.equal((await meta.json() as { reasoningRuntime: unknown }).reasoningRuntime, null)
+  assert.deepEqual((await meta.json() as { reasoningRuntime: unknown }).reasoningRuntime, { name: 'lingxios',...releaseVersions })
 })

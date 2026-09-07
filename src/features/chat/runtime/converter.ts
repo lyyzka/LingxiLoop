@@ -14,6 +14,8 @@ import type {
   LingxiReactionMetadata,
 } from './model'
 import { resolveMessagePresentation } from './model'
+import { readHarness, harnessParts, harnessStatus } from './harness'
+import type { RunView } from 'lingxios/ui'
 
 type JsonObject = Record<string, unknown>
 
@@ -333,13 +335,14 @@ function toolActivityPart(id: string, data: JsonObject, body: string): ThreadAss
   }, running ? undefined : { status })
 }
 
-function baseParts(envelope: ImEnvelope): ThreadAssistantMessagePart[] {
+function baseParts(envelope: ImEnvelope, harness?: RunView): ThreadAssistantMessagePart[] {
   const { payload } = envelope
   const data = object(payload.data)
   const id = messageId(envelope)
   const textPart = payload.body ? [{ type: 'text' as const, text: payload.body }] : []
   switch (payload.kind) {
     case 'text': {
+      if (harness) return harnessParts(harness)
       if (typeof payload.refs?.runId !== 'string') return [{ type: 'text', text: payload.body ?? '' }]
       return [
         { type: 'text', text: payload.body ?? '' },
@@ -421,11 +424,12 @@ function baseParts(envelope: ImEnvelope): ThreadAssistantMessagePart[] {
   }
 }
 
-function structuredParts(envelope: ImEnvelope): ThreadAssistantMessagePart[] {
-  return baseParts(envelope)
+function structuredParts(envelope: ImEnvelope, harness?: RunView): ThreadAssistantMessagePart[] {
+  return baseParts(envelope,harness)
 }
 
-function assistantStatus(envelope: ImEnvelope): MessageStatus {
+function assistantStatus(envelope: ImEnvelope, harness?: RunView): MessageStatus {
+  if (harness) return harnessStatus(harness)
   if (envelope.payload.kind === 'approval') {
     const approval = object(object(envelope.payload.data).approval ?? envelope.payload.data)
     if (string(approval.status, 'PENDING') === 'PENDING') return { type: 'requires-action', reason: 'tool-calls' }
@@ -467,8 +471,10 @@ export function convertEnvelope(envelope: ImEnvelope, context: MessageConversion
   if (!KNOWN_KINDS.has(envelope.payload.kind)) {
     throw new Error(`Unsupported WuKong message kind: ${String(envelope.payload.kind)}`)
   }
-  const content = structuredParts(envelope)
+  const harness = context.participants[envelope.fromUid]?.kind === 'agent' ? readHarness(envelope) : undefined
+  const content = structuredParts(envelope,harness)
   const metadata = buildMetadata(envelope, context, content)
+  if (harness) metadata.harness = harness
   const role = metadata.senderKind === 'system' && object(envelope.payload.data).type !== 'teacher_briefing'
     ? 'system'
     : metadata.isMine && (envelope.payload.kind === 'text' || envelope.payload.kind === 'attachment')
@@ -492,7 +498,7 @@ export function convertEnvelope(envelope: ImEnvelope, context: MessageConversion
     ...common,
     role,
     content,
-    status: assistantStatus(envelope),
+    status: assistantStatus(envelope,harness),
     metadata: {
       unstable_state: null,
       unstable_annotations: [],

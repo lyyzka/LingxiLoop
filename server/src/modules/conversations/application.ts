@@ -55,7 +55,7 @@ export interface ConversationInfrastructure {
     actorId: string
     kind: 'joined' | 'left'
     participantId: string
-  }): Promise<{ messageId: string; sequence: number }>
+  }): Promise<{ messageId: string; sequence: number } | { queued: true }>
   clearReplyHold(agentId: string, conversationId: string): Promise<void>
   searchMessages(input: {
     companyId: string
@@ -322,7 +322,7 @@ export class ConversationsApplication {
       return next
     })
     await this.infrastructure.syncChannel(profile)
-    let membershipMessage: { messageId: string; sequence: number } | undefined
+    let membershipMessage: { messageId: string; sequence: number } | { queued: true } | undefined
     if (!alreadyIn) {
       membershipMessage = await this.infrastructure.postMembershipMessage({
         conversationId, companyId: scope.companyId, actorId: scope.userId,
@@ -332,7 +332,8 @@ export class ConversationsApplication {
     return {
       ok: true as const,
       members: profile.members,
-      ...(membershipMessage ? { systemMessageId: membershipMessage.messageId } : {}),
+      ...(membershipMessage && 'messageId' in membershipMessage ? { systemMessageId: membershipMessage.messageId } : {}),
+      ...(membershipMessage && 'queued' in membershipMessage ? { publication: 'queued' as const } : {}),
       ...(alreadyIn ? { alreadyIn: true as const } : {}),
     }
   }
@@ -368,7 +369,7 @@ export class ConversationsApplication {
     return {
       ok: true as const,
       members: profile.members,
-      ...(membershipMessage ? { systemMessageId: membershipMessage.messageId } : {}),
+      ...(membershipMessage && 'messageId' in membershipMessage ? { systemMessageId: membershipMessage.messageId } : {}),
     }
   }
 

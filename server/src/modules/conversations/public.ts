@@ -1,4 +1,5 @@
 import { conversationsApplication } from './facade.js'
+export { conversationTools } from './agent-tools.js'
 
 export function authorizeConversationForDocumentShare(args: {
   companyId: string

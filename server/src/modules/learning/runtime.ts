@@ -5,6 +5,8 @@
  * Persistence remains private to capability repositories behind this surface.
  */
 import type { AgentActionContext, AgentAction } from '../../agents/contracts.js'
+import { createHash } from 'node:crypto'
+import { NoEffectError, type WorkItem } from 'lingxios'
 import { pool } from '../../db/pool.js'
 import type { Queryable } from '../../db/queryable.js'
 import { withTransaction } from '../../db/transaction.js'
@@ -18,7 +20,6 @@ import {
   preferredLearningMissionCoordinator,
   proposeLearningEvaluation,
   recordLearningAttempt,
-  startLearningMission,
   updateLearningMissionStep,
 } from './application.js'
 import type {
@@ -88,6 +89,16 @@ export function submitActivity(input: {
 }
 
 type RuntimeRoomScope = { companyId: string; channelId: string }
+
+export async function assertMissionCoordinatorRun(db: Queryable, work: Omit<WorkItem, 'leaseToken'>) {
+  const missionId = work.meta?.missionId
+  const { rows } = await db.query<{ id: string }>(`SELECT id FROM learning_missions WHERE id=$1 AND company_id=$2
+    AND coordinator_agent_id=$3 AND learner_id=$4 AND conversation_id=$5 AND status IN ('PLANNING','ACTIVE','COMPLETED')`,
+    [missionId,work.tenantId,work.agentId,work.principalId,work.sessionId])
+  if (!rows[0] || work.id !== `mission-coordinator-${createHash('sha256').update(rows[0].id).digest('hex').slice(0,24)}`) {
+    throw new NoEffectError('Mission coordinator or learner scope was revoked', 'forbidden')
+  }
+}
 
 export function addMissionSteps(
   work: RuntimeRoomScope,
@@ -194,50 +205,6 @@ async function syncLearningMessages(input: {
     fromUid: message.fromUid,
     authoredByAgent: Boolean(message.payload.refs?.agentId),
   }))
-}
-
-export function startMission(
-  work: AgentActionContext,
-  input: {
-    goal: string
-    successCriteria: string
-    missionKind?: 'STUDY'|'RESEARCH'|'PROJECT'
-    sourceClientMsgNo?: string
-    explicit?: boolean
-  },
-) {
-  return startLearningMission(pool, (run) => withTransaction(pool, run), {
-    syncMessages: syncLearningMessages,
-    publishMission: async ({ channelId, channelType, senderId, mission, projectId, courseId }) => {
-      await wukongClient().sendMessage(channelId, channelType, senderId, {
-        version: 1,
-        kind: 'learning_mission',
-        clientMsgNo: `learning-mission-${mission.id}`,
-        body: mission.goal,
-        refs: { agentId: senderId },
-        data: {
-          missionId: mission.id,
-          projectId,
-          ...(courseId ? { courseId } : {}),
-          goal: mission.goal,
-          successCriteria: mission.successCriteria,
-          kind: mission.kind,
-          coordinatorAgentId: mission.coordinatorAgentId,
-          status: mission.status,
-          suppressAgentWake: true,
-        },
-      })
-    },
-    metric: inc,
-  }, {
-    workId: work.id,
-    companyId: work.companyId,
-    agentId: work.agentId,
-    channelId: work.channelId,
-    triggerClientMsgNo: work.triggerClientMsgNo,
-    ...(work.threadRootClientMsgNo ? { threadRootClientMsgNo: work.threadRootClientMsgNo } : {}),
-    ...input,
-  })
 }
 
 export function recordAttempt(

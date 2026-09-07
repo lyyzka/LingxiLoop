@@ -226,11 +226,10 @@ export const approvePresentationOutlineRequestSchema = z.object({
   idempotencyKey: identifierSchema.optional(),
 }).strict()
 
-export const revisePresentationOutlineRequestSchema = z.object({
+const reviseOutlineFields = z.object({
   feedback: boundedText(4_000).optional(),
   targetSlideCount: z.number().int().min(3).max(40).optional(),
   expectedRevision: z.number().int().nonnegative(),
-  idempotencyKey: identifierSchema,
 }).strict().superRefine((value, ctx) => {
   if (!value.feedback && value.targetSlideCount == null) {
     ctx.addIssue({
@@ -241,12 +240,13 @@ export const revisePresentationOutlineRequestSchema = z.object({
   }
 })
 
-export const revisePresentationRequestSchema = z.object({
+export const revisePresentationOutlineRequestSchema = reviseOutlineFields.safeExtend({ idempotencyKey: identifierSchema })
+
+const reviseFields = z.object({
   instruction: boundedText(4_000),
   scope: z.enum(['page', 'section', 'deck']),
   pageIds: z.array(identifierSchema).max(40).optional(),
   sectionIds: z.array(identifierSchema).max(20).optional(),
-  idempotencyKey: identifierSchema,
 }).strict().superRefine((value, ctx) => {
   if (value.scope === 'page' && !value.pageIds?.length) {
     ctx.addIssue({ code: 'custom', message: 'pageIds are required for page revision', path: ['pageIds'] })
@@ -255,6 +255,16 @@ export const revisePresentationRequestSchema = z.object({
     ctx.addIssue({ code: 'custom', message: 'sectionIds are required for section revision', path: ['sectionIds'] })
   }
 })
+
+export const revisePresentationRequestSchema = reviseFields.safeExtend({ idempotencyKey: identifierSchema })
+
+export const agentPresentationSchemas = {
+  create: createPresentationRequestSchema.omit({ idempotencyKey: true }),
+  get: z.object({ presentationId: identifierSchema }).strict(),
+  approve_outline: approvePresentationOutlineRequestSchema.omit({ idempotencyKey: true }).extend({ presentationId: identifierSchema }),
+  revise_outline: reviseOutlineFields.safeExtend({ presentationId: identifierSchema }),
+  revise: reviseFields.safeExtend({ presentationId: identifierSchema }),
+}
 
 export const retryPresentationRequestSchema = z.object({
   idempotencyKey: identifierSchema,

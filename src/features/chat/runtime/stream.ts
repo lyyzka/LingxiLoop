@@ -52,6 +52,10 @@ export function applyAssistantStreamChunks(
   if (chunks.length === 0) throw new Error('Assistant stream event contains no chunks')
   let parts = [...current]
   for (const [chunkIndex, chunk] of chunks.entries()) {
+    if (chunk.type === 'data') {
+      if (chunk.path.length || !Array.isArray(chunk.data)) throw new Error('Invalid assistant stream data')
+      continue
+    }
     if (chunk.type === 'step-start') {
       if (chunk.path.length !== 0 || !chunk.messageId) throw new Error('Invalid assistant stream step-start')
       continue

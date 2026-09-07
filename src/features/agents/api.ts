@@ -3,9 +3,7 @@ import { http } from '@/api/core/http'
 import type {
   AgentInput,
   ApiAutonomy,
-  ApiAutonomyRule,
   CoworkerActivity,
-  ApiLearnedMemory,
   ApiParticipant,
 } from './contracts'
 
@@ -47,14 +45,4 @@ export const agentsApi = {
     http<{ approvalId: string; supersedesApprovalId: string }>(`/im/approvals/${encodeURIComponent(approvalId)}/supersede`, {
       method: 'POST', body: JSON.stringify(input),
     }),
-  getLearnedMemories: () => http<ApiLearnedMemory[]>('/coworker/memories'),
-  updateLearnedMemory: (input: { agentId: string; path: string; body: string }) =>
-    http<ApiLearnedMemory>('/coworker/memories', { method: 'PATCH', body: JSON.stringify(input) }),
-  forgetLearnedMemory: (agentId: string, path: string) =>
-    http<{ ok: boolean }>(`/coworker/memories?agentId=${encodeURIComponent(agentId)}&path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
-  getAutonomyRules: () => http<ApiAutonomyRule[]>('/coworker/autonomy-rules'),
-  putAutonomyRule: (input: { agentId: string; scope: string; operation: string; mode: 'allow' | 'ask' | 'deny' }) =>
-    http<ApiAutonomyRule>('/coworker/autonomy-rules', { method: 'PUT', body: JSON.stringify(input) }),
-  deleteAutonomyRule: (id: string) =>
-    http<{ ok: boolean }>(`/coworker/autonomy-rules/${encodeURIComponent(id)}`, { method: 'DELETE' })
 }

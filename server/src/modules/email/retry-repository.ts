@@ -28,6 +28,7 @@ export async function claimDueEmailRetries(
             email.body, email.auto_submitted, email.retry_attempts
        FROM email_messages email
       WHERE email.direction = 'out'
+        AND email.native_action_id IS NULL
         AND email.transport_status = 'failed'
         AND email.next_retry_at IS NOT NULL
         AND email.next_retry_at <= NOW()

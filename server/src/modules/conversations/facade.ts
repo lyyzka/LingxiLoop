@@ -6,9 +6,9 @@ import { wukongClient } from '../../im/wukong.js'
 import { searchMemberMessages } from '../../im/public.js'
 import { isTeacherRoom } from '../learning/public.js'
 import { CH_CONVO_UPDATED, CH_TYPING, publish } from '../../redis.js'
-import { ConversationsApplication } from './application.js'
+import { ConversationsApplication, type ConversationInfrastructure } from './application.js'
 
-export const conversationsApplication = new ConversationsApplication(pool, {
+export const conversationInfrastructure: ConversationInfrastructure = {
   transaction: (work) => withTransaction(pool, work),
   syncChannel: (profile) => wukongClient().upsertChannel(profile),
   publishUpdated: (event) => publish(CH_CONVO_UPDATED, event),
@@ -17,4 +17,5 @@ export const conversationsApplication = new ConversationsApplication(pool, {
   postMembershipMessage: postMembershipSystemMessage,
   clearReplyHold: async (agentId, conversationId) => { await clearHold(agentId, `reply:${conversationId}`) },
   searchMessages: (input) => searchMemberMessages({ ...input, query: input.query }),
-})
+}
+export const conversationsApplication = new ConversationsApplication(pool, conversationInfrastructure)

@@ -12,7 +12,6 @@ import { LearningApplicationError } from './errors.js'
 import {
   activeLearningMissionId,
   countPendingLearningEvaluations,
-  enqueueLearningMissionCoordinatorWork,
   findEligibleLearningMissionCoordinator,
   findLearningCanvasEvidence,
   findLearningDocumentEvidence,
@@ -151,6 +150,10 @@ async function requireLearningRoomState(db: Queryable, scope: LearningAgentRoomS
 }
 
 export interface LearningMissionInfrastructure {
+  enqueueCoordinator(db: Queryable, input: {
+    id: string; companyId: string; coordinatorAgentId: string; channelId: string;
+    threadRootClientMsgNo: string; missionId: string; authorizationUserId: string
+  }): Promise<void>
   syncMessages(input: {
     channelId: string
     channelType: number
@@ -226,7 +229,7 @@ export async function startLearningMission(
       createdBy: input.agentId,
     })
     if (stored.inserted && coordinatorAgentId !== input.agentId) {
-      await enqueueLearningMissionCoordinatorWork(client, {
+      await infrastructure.enqueueCoordinator(client, {
         id: `mission-coordinator-${createHash('sha256').update(stored.id).digest('hex').slice(0, 24)}`,
         companyId: room.companyId,
         coordinatorAgentId,

@@ -64,25 +64,6 @@ export async function findTeacherScopeBinding(
   return rows[0]
 }
 
-export async function findTeacherApprovalTriggerAuthor(
-  db: Queryable,
-  input: {
-    companyId: string
-    agentId: string
-    channelId: string
-    approvalId: string
-  },
-): Promise<string | undefined> {
-  const { rows } = await db.query<{ actor_id: string | null }>(
-    `SELECT COALESCE(approval.resolved_by,approval.requested_by) AS actor_id
-       FROM approvals approval
-      WHERE approval.id=$2 AND approval.company_id=$1 AND approval.agent_id=$3
-        AND approval.channel_id=$4 AND approval.source='AGENT_OS'`,
-    [input.companyId, input.approvalId, input.agentId, input.channelId],
-  )
-  return rows[0]?.actor_id || undefined
-}
-
 export async function pauseTeacherDigestForMissingTeacher(
   db: Queryable,
   companyId: string,
@@ -91,7 +72,7 @@ export async function pauseTeacherDigestForMissingTeacher(
 ): Promise<void> {
   await db.query(
     `UPDATE agent_routines
-        SET status='paused',next_run_at=NULL,updated_at=NOW()
+        SET status='paused',next_run_at=NULL,version=version+1,updated_at=NOW()
       WHERE company_id=$1 AND agent_id=$2 AND channel_id=$3
         AND kind='teacher_project_digest'`,
     [companyId, agentId, channelId],

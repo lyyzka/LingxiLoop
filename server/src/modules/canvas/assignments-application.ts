@@ -4,6 +4,7 @@ import { parseCanvasActivityKind } from '../../../../src/lib/canvasEventKinds.js
 import { assertCanvasDependencyDAG, canvasAgentColor, canvasWorkArea } from '../../canvas/orchestration.js'
 import type { Queryable } from '../../db/queryable.js'
 import type { CanvasEvent } from '../../redis.js'
+import type { CanvasExecution } from './execution.js'
 import type {
   CanvasActivity,
   CanvasActorKind,
@@ -12,27 +13,22 @@ import type {
   CanvasSnapshot,
 } from './contracts.js'
 import {
-  appendAssignmentSteer,
-  appendIdempotentAssignmentSteer,
   assignmentExists,
   availableCanvasMemberIds,
   canvasAssignmentPublicationRows,
   canvasById,
   canvasFrameIds,
   deleteAssignmentDependencies,
-  detachAssignmentWork,
   findActivity,
   insertActivity,
   insertAssignment,
   insertAssignmentDependency,
-  insertCanvasWork,
   listAssignments,
   lockAssignment,
   lockCanvas,
   participantNames,
   resetAssignment,
   setAssignmentVerifier,
-  steerCanvasWork,
   stopCanvasAssignmentState,
   touchCanvas,
   updateAssignmentText,
@@ -62,11 +58,6 @@ export interface CanvasHandoffResult {
   activity: CanvasActivity
 }
 
-function canvasAuthorizationUserId(canvas: CanvasRow): string {
-  if (!canvas.authorization_user_id) throw new Error('Canvas has no persisted human authorization principal')
-  return canvas.authorization_user_id
-}
-
 export function toAssignment(row: AssignmentRow, dependencies: string[] = []): CanvasAgentAssignment {
   return {
     id: row.id,
@@ -89,8 +80,8 @@ export function toAssignment(row: AssignmentRow, dependencies: string[] = []): C
     dependsOnAgentIds: dependencies,
     executionRole: row.execution_role,
     verifiesAssignmentId: row.verifies_assignment_id,
-    progressFingerprint: row.progress_fingerprint,
-    noProgressCount: Number(row.no_progress_count ?? 0),
+    progressFingerprint: null,
+    noProgressCount: 0,
     result: row.result,
     error: row.error,
     startedAt: row.started_at,
@@ -130,7 +121,11 @@ async function assertMembersAvailable(
 export async function insertCanvasMembers(
   db: Queryable,
   input: { canvas: CanvasRow; members: CanvasMemberInput[]; existing: AssignmentRow[] },
+  execution: CanvasExecution,
 ): Promise<AssignmentRow[]> {
+  if (input.members.length + input.existing.length > 32) throw new Error('Canvas supports at most 32 assignments')
+  input = { ...input, members: input.members.map(member => ({ ...member,
+    dependsOnAgentIds: [...new Set([...(member.dependsOnAgentIds ?? []), ...(member.verifiesAgentId ? [member.verifiesAgentId] : [])])] })) }
   await assertMembersAvailable(db, input.canvas.company_id, input.members)
   const existingIds = new Set(input.existing.map((row) => row.agent_id))
   if (input.members.some((member) => existingIds.has(member.agentId))) {
@@ -178,24 +173,15 @@ export async function insertCanvasMembers(
     }
   }
   for (const row of created) {
-    await insertCanvasWork(db, {
-      id: row.work_id!,
-      companyId: input.canvas.company_id,
-      authorizationUserId: canvasAuthorizationUserId(input.canvas),
-      agentId: row.agent_id,
-      channelId: input.canvas.conversation_id,
-      triggerClientMsgNo: input.canvas.trigger_client_msg_no,
-      status: row.status === 'queued' ? 'queued' : 'blocked',
-      canvasId: input.canvas.id,
-      assignmentId: row.id,
-      executionRole: row.execution_role,
-    })
+    const member = input.members.find(member => member.agentId === row.agent_id)!
+    await execution.enqueue(db, input.canvas, row, (member.dependsOnAgentIds ?? []).map(id => all.find(parent => parent.agent_id === id)!.work_id!))
   }
   return created
 }
 
 export interface CanvasAssignmentsApplicationContext {
   db: Queryable
+  execution: CanvasExecution
   transaction: Transaction
   withCanvasFence<T>(canvasId: string, work: (db: Queryable) => Promise<T>): Promise<T>
   getCanvasSnapshot(companyId: string, actorId: string, canvasId: string): Promise<CanvasSnapshot>
@@ -204,7 +190,7 @@ export interface CanvasAssignmentsApplicationContext {
 }
 
 export function createCanvasAssignmentsApplication(context: CanvasAssignmentsApplicationContext) {
-  const { db, transaction, withCanvasFence, getCanvasSnapshot, publishCanvas, logActivity } = context
+  const { db, transaction, execution, withCanvasFence, getCanvasSnapshot, publishCanvas, logActivity } = context
 
   async function publishAssignments(companyId: string, canvasId: string): Promise<void> {
     const rows = await canvasAssignmentPublicationRows(db, companyId, canvasId)
@@ -234,7 +220,7 @@ export function createCanvasAssignmentsApplication(context: CanvasAssignmentsApp
         throw new Error('only a canvas participant may recruit agents')
       }
       const existing = await listAssignments(transactionDb, canvas.id)
-      await insertCanvasMembers(transactionDb, { canvas, members: input.members, existing })
+      await insertCanvasMembers(transactionDb, { canvas, members: input.members, existing }, execution)
       await touchCanvas(transactionDb, canvas.id)
     })
     const snapshot = await getCanvasSnapshot(input.companyId, input.actorId, input.canvasId)
@@ -266,40 +252,21 @@ export function createCanvasAssignmentsApplication(context: CanvasAssignmentsApp
       if (!existing) {
         const all = await listAssignments(transactionDb, canvas.id)
         await insertCanvasMembers(transactionDb, {
-          canvas,
+          canvas: input.actorKind === 'user' ? { ...canvas, authorization_user_id: input.actorId } : canvas,
           members: [{ agentId: input.agentId, assignment }],
           existing: all,
-        })
+        }, execution)
       } else {
         const terminal = ['completed', 'failed', 'cancelled'].includes(existing.status)
-        const steerId = randomUUID()
-        const steered = terminal ? null : await appendAssignmentSteer(transactionDb, {
-          companyId: input.companyId,
-          assignmentId: existing.id,
-          actorId: steerId,
-          text: assignment,
-        })
+        const steered = terminal ? false : await execution.revise(transactionDb, canvas, existing, assignment)
         action = 'assignment_updated'
         if (steered) {
           await updateAssignmentText(transactionDb, existing.id, assignment)
         } else {
           const workId = `canvas-work-${randomUUID()}`
-          await detachAssignmentWork(transactionDb, existing.id)
           await deleteAssignmentDependencies(transactionDb, existing.id)
-          await resetAssignment(transactionDb, { assignmentId: existing.id, assignment, workId })
-          await insertCanvasWork(transactionDb, {
-            id: workId,
-            companyId: canvas.company_id,
-            authorizationUserId: canvasAuthorizationUserId(canvas),
-            agentId: input.agentId,
-            channelId: canvas.conversation_id,
-            triggerClientMsgNo: canvas.trigger_client_msg_no,
-            status: 'queued',
-            canvasId: canvas.id,
-            assignmentId: existing.id,
-            executionRole: existing.execution_role,
-            workTriggerClientMsgNo: `canvas-dialog:${canvas.id}:${steerId}`,
-          })
+          const reset = await resetAssignment(transactionDb, { assignmentId: existing.id, assignment, workId })
+          await execution.enqueue(transactionDb, input.actorKind === 'user' ? { ...canvas, authorization_user_id: input.actorId } : canvas, reset, [])
         }
       }
       await touchCanvas(transactionDb, canvas.id)
@@ -365,35 +332,15 @@ export function createCanvasAssignmentsApplication(context: CanvasAssignmentsApp
           canvas,
           members: [{ agentId: input.toAgentId, assignment: task }],
           existing: all,
-        }))[0]
+        }, execution))[0]
       } else {
         const terminal = ['completed', 'failed', 'cancelled'].includes(target.status)
-        const steerId = `handoff-steer-${createHash('sha256').update(input.idempotencyKey).digest('hex').slice(0, 28)}`
-        const steered = terminal ? null : await appendIdempotentAssignmentSteer(transactionDb, {
-          assignmentId: target.id,
-          canvasId: canvas.id,
-          agentId: input.toAgentId,
-          steerId,
-          text: handoffSteerText,
-        })
+        const steered = terminal ? false : await execution.revise(transactionDb, canvas, target, handoffSteerText)
         if (!steered) {
           const workId = `canvas-handoff-${createHash('sha256').update(input.idempotencyKey).digest('hex').slice(0, 28)}`
-          await detachAssignmentWork(transactionDb, target.id)
           await deleteAssignmentDependencies(transactionDb, target.id)
           target = await resetAssignment(transactionDb, { assignmentId: target.id, assignment: task, workId })
-          await insertCanvasWork(transactionDb, {
-            id: workId,
-            companyId: canvas.company_id,
-            authorizationUserId: canvasAuthorizationUserId(canvas),
-            agentId: input.toAgentId,
-            channelId: canvas.conversation_id,
-            triggerClientMsgNo: canvas.trigger_client_msg_no,
-            status: 'queued',
-            canvasId: canvas.id,
-            assignmentId: target.id,
-            executionRole: target.execution_role,
-            workTriggerClientMsgNo: `canvas-handoff:${canvas.id}:${activityId}`,
-          })
+          await execution.enqueue(transactionDb, canvas, target, [])
         } else {
           target = await updateAssignmentTextReturning(transactionDb, target.id, task)
         }
@@ -443,14 +390,12 @@ export function createCanvasAssignmentsApplication(context: CanvasAssignmentsApp
   }): Promise<void> {
     const text = input.text.trim().slice(0, 4_000)
     if (!text) throw new Error('steer text is required')
-    const workId = await steerCanvasWork(db, {
-      companyId: input.companyId,
-      canvasId: input.canvasId,
-      agentId: input.agentId,
-      steerId: randomUUID(),
-      text,
+    const changed = await transaction(async db => {
+      const canvas = await lockCanvas(db, input.companyId, input.canvasId)
+      const assignment = await lockAssignment(db, input.canvasId, input.agentId)
+      return canvas && assignment && await execution.revise(db, canvas, assignment, text)
     })
-    if (!workId) throw new Error('active canvas assignment not found')
+    if (!changed) throw new Error('active canvas assignment not found')
   }
 
   async function stopCanvasAssignment(input: {
@@ -460,7 +405,13 @@ export function createCanvasAssignmentsApplication(context: CanvasAssignmentsApp
   }): Promise<void> {
     const activity = toActivity(await withCanvasFence(
       input.canvasId,
-      (transactionDb) => stopCanvasAssignmentState(transactionDb, input),
+      async transactionDb => {
+        const canvas = await lockCanvas(transactionDb, input.companyId, input.canvasId)
+        const assignment = await lockAssignment(transactionDb, input.canvasId, input.agentId)
+        if (!canvas || !assignment) throw new Error('active canvas assignment not found')
+        await execution.cancel(transactionDb, canvas, assignment.work_id)
+        return stopCanvasAssignmentState(transactionDb, input)
+      },
     ))
     await publishAssignments(input.companyId, input.canvasId)
     await publishCanvas(input.companyId, { kind: 'activity.created', canvasId: input.canvasId, activity })

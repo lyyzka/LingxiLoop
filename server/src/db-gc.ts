@@ -1,38 +1,4 @@
-/**
- * Database row-retention garbage collector.
- *
- * The high-volume telemetry tables grow without bound: agent_log gets a
- * breadcrumb row for every idle/agenda/scan wake across the whole fleet
- * (~800k rows/day at Aug-2026 scale), agent_events mirrors every run's
- * observability trail, and ws_tickets are single-use auth tickets that
- * were never reaped after expiry. By Aug 2026 that was 50 GB of a 64 GB
- * database and the Cloud SQL disk was auto-growing ~1.3 GB/day.
- *
- * Readers only ever look at recent rows (`lingxiloop log` reads the last
- * ≤100 per agent; observability drill-down and maintenance look
- * at bounded windows), so old rows are pure dead weight.
- *
- * Strategy: a periodic sweep deletes rows past a per-table retention
- * window, in small ctid batches so locks stay short and vacuums keep up.
- * These tables have no standalone index on their time column (only
- * composite (agent_id, created_at) style), so batches select victims by
- * partial seq scan — cheap in practice because old rows cluster at the
- * heap's start on append-mostly tables. Each batch runs under its own
- * statement_timeout so a pathological scan can't wedge the worker; a
- * timed-out batch just retries next tick.
- *
- * Deleting agent_runs cascades to its remaining agent_events (FK ON
- * DELETE CASCADE); agent_events is swept first with the same window so
- * the cascade only ever touches a handful of stragglers.
- *
- * Note: PostgreSQL returns freed space to the table's free-space map,
- * not to the OS — the Cloud SQL disk will not shrink (it can't anyway),
- * but it stops growing once the backlog is cleared.
- *
- * Multi-replica safety: deletes are idempotent; two replicas racing on
- * the same batch means one of them deletes 0 rows. Disabling: set
- * DB_GC_INTERVAL_MS=0 (whole worker) or a table's retention env to 0.
- */
+/** Bounded retention for product logs and expired WebSocket tickets. Runtime retention is owned by LingxiOS. */
 import { pool } from './db/pool.js'
 import { env } from './env.js'
 import type { WorkerTaskHandle } from './runtime/lifecycle.js'
@@ -54,8 +20,6 @@ function targets(): SweepTarget[] {
     // the extra day is just diagnostic slack.
     { table: 'ws_tickets',   pkCol: 'token_hash', timeCol: 'expires_at', days: env.DB_GC_WS_TICKETS_DAYS },
     { table: 'agent_log',    pkCol: 'id',         timeCol: 'created_at', days: env.DB_GC_AGENT_LOG_DAYS },
-    { table: 'agent_events', pkCol: 'id',         timeCol: 'created_at', days: env.DB_GC_AGENT_EVENTS_DAYS },
-    { table: 'agent_runs',   pkCol: 'id',         timeCol: 'started_at', days: env.DB_GC_AGENT_RUNS_DAYS },
   ]
 }
 

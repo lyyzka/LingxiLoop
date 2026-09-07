@@ -1,4 +1,4 @@
 import type { EvalTarget } from '../src/contracts.js'
 
-// Integration boundary only. No AgentOS implementation is linked in this phase.
+// Generic integration boundary only. No LingxiOS implementation is linked here.
 export type AgentOSTargetAdapter = EvalTarget

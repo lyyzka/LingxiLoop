@@ -12,6 +12,7 @@ export {
   sendCalendarReminderEmail,
 } from './facade.js'
 export { EmailApplicationError } from './application.js'
+export { emailTools } from './agent-tools.js'
 export type {
   AgentEmailCommandIdentity,
   AgentEmailContact,

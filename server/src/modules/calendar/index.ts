@@ -5,6 +5,8 @@ export {
   tickCalendar,
 } from './facade.js'
 export { nextOccurrenceOnOrAfter } from './scheduler.js'
+export { calendarTools } from './agent-tools.js'
+export { resolveCalendarAgentRequest } from './agent-ingress.js'
 export type {
   CalendarDispatchPayload,
   CalendarDispatchResult,

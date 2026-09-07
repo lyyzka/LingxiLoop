@@ -585,18 +585,7 @@ export async function deleteKnowledgeSource(
     userId: actorUserId,
   })
   if (!source) throw new Error('source not found')
-  const wakeStatus = await withTransaction(pool, async (db) => {
-    if (!await softDeleteTenantSource(db, {
-      sourceId,
-      companyId,
-      projectId,
-      userId: actorUserId,
-    })) {
-      throw new Error('source not found')
-    }
-    await cancelIngestionJob(db, sourceId, '资料已在摄取完成前被删除')
-    return releaseDeferredWakeState(db, sourceId, '资料已在摄取完成前被删除')
-  })
+  const wakeStatus = await withTransaction(pool, db => deleteKnowledgeSourceState(db, { sourceId,companyId,projectId,userId: actorUserId }))
   if (wakeStatus !== 'none') inc('knowledge.attachment.agent_wake', { status: wakeStatus })
   try {
     if (source.externalSourceId) await openNotebookClient.deleteSource(source.externalSourceId)
@@ -610,6 +599,12 @@ export async function deleteKnowledgeSource(
       console.warn('[knowledge] source deletion deferred until cleanup', error)
     }
   }
+}
+
+export async function deleteKnowledgeSourceState(db: Queryable, input: { sourceId: string; companyId: string; projectId: string; userId: string }) {
+  if (!await softDeleteTenantSource(db, input)) throw new Error('source not found')
+  await cancelIngestionJob(db, input.sourceId, '资料已在摄取完成前被删除')
+  return releaseDeferredWakeState(db, input.sourceId, '资料已在摄取完成前被删除')
 }
 
 export async function getKnowledgeSourceText(

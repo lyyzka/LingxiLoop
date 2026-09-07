@@ -1,3 +1,4 @@
+import { countPendingApprovals } from 'lingxios'
 import type { Queryable } from '../../db/queryable.js'
 
 export interface TeacherProvisioningCourse {
@@ -163,17 +164,6 @@ export async function persistTeacherProvisioning(
      ON CONFLICT(course_id) DO UPDATE SET status='active',closed_at=NULL`,
     [input.courseId, input.companyId, input.roomId],
   )
-  await db.query(
-    `INSERT INTO agent_workspace(agent_id,path,body,company_id,updated_at)
-     VALUES($1,'IDENTITY.md',$2,$3,NOW()),($1,'SOUL.md',$4,$3,NOW())
-     ON CONFLICT(agent_id,path) DO NOTHING`,
-    [
-      input.agentId,
-      `# ${input.displayName}\n\n**Role:** ${input.role}\n`,
-      input.companyId,
-      `# Pulse operating policy\n\n${input.prompt}\n`,
-    ],
-  )
   return { created: rows[0]?.created ?? false }
 }
 
@@ -288,7 +278,7 @@ export async function closeTeacherRoomState(
   )
   await db.query(
     `UPDATE agent_routines routine
-        SET status='paused',next_run_at=NULL,updated_at=NOW()
+        SET status='paused',next_run_at=NULL,version=version+1,updated_at=NOW()
        FROM learning_course_teacher_rooms teacher_room
       WHERE teacher_room.company_id=$1 AND teacher_room.course_id=$2
         AND routine.company_id=teacher_room.company_id
@@ -339,7 +329,7 @@ export async function activateTeacherRoomRoutine(
 ): Promise<void> {
   await db.query(
     `UPDATE agent_routines
-        SET status='active',next_run_at=$3,updated_at=NOW()
+        SET status='active',next_run_at=$3,version=version+1,updated_at=NOW()
       WHERE company_id=$1 AND id=$2`,
     [companyId, routineId, nextRunAt],
   )
@@ -350,14 +340,10 @@ export async function findTeacherAgentSummaryRow(
   companyId: string,
   courseId: string,
 ): Promise<TeacherAgentSummaryRow | undefined> {
-  const { rows } = await db.query<TeacherAgentSummaryRow>(
+  const { rows } = await db.query<Omit<TeacherAgentSummaryRow, 'pending'>>(
     `SELECT project_agent.agent_id,participant.name,course.project_id,
             teacher_room.conversation_id,teacher_room.status AS room_status,
-            course.company_id,
-            (SELECT COUNT(*)::int FROM approvals approval
-              WHERE approval.company_id=course.company_id
-                AND approval.channel_id=teacher_room.conversation_id
-                AND approval.source='AGENT_OS' AND approval.status='PENDING') AS pending
+            course.company_id
        FROM courses course
        JOIN learning_project_teacher_agents project_agent
          ON project_agent.project_id=course.project_id
@@ -370,5 +356,6 @@ export async function findTeacherAgentSummaryRow(
       WHERE course.company_id=$1 AND course.id=$2`,
     [companyId, courseId],
   )
-  return rows[0]
+  const row = rows[0]
+  return row ? { ...row, pending: await countPendingApprovals(db, companyId, row.conversation_id) } : undefined
 }

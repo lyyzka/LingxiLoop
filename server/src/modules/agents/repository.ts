@@ -107,13 +107,7 @@ export async function insertAgent(db: Queryable, args: {
     [args.id, args.input.name, args.input.role, initial, args.input.bio,
       JSON.stringify(args.input.capabilities), args.input.systemPrompt, args.scope.companyId],
   )
-  const identity = `# ${args.input.name}\n\n**Role:** ${args.input.role || 'agent'}\n\n${args.input.bio ? `**Bio:**\n${args.input.bio}\n\n` : ''}_This file is your identity. Edit it as you grow — what you write here_\n_loads into your system prompt on every wake._\n`
-  const soul = `# Soul of ${args.input.name}\n\n## Voice\n\n${args.input.systemPrompt}\n\n## Principles\n\n- Speak like a real person, not like a tech blog.\n- Match the user's language.\n- Save things worth remembering — they outlive any single conversation.\n\n_This file is your voice + values. Edit it freely to evolve who you are._\n`
-  await db.query(
-    `INSERT INTO agent_workspace (agent_id,path,body,company_id,updated_at)
-     VALUES ($1,'IDENTITY.md',$2,$3,NOW()),($1,'SOUL.md',$4,$3,NOW())`,
-    [args.id, identity, args.scope.companyId, soul],
-  )
+
 }
 
 export async function findAgent(db: Queryable, companyId: string, id: string) {

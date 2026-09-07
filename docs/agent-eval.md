@@ -1,6 +1,6 @@
 # Black-box Agent Eval
 
-`eval/` is an independent Node 22.13+ npm package with its own lockfile. It has no product imports, PostgreSQL/Redis dependency, internal harness or runtime fallback. The production-model target calls an explicit OpenAI-compatible API. `eval/targets/agent-os.ts` contains only a type alias; no AgentOS adapter is implemented.
+`eval/` is an independent Node 22.13+ npm package with its own lockfile. It has no product imports, PostgreSQL/Redis dependency, or runtime fallback. The production-model target calls an explicit OpenAI-compatible API. `eval/targets/agent-os.ts` is retained only as a generic target type alias and is not connected to LingxiOS.
 
 ## Configure and run
 
@@ -68,7 +68,7 @@ Paid evaluation is opt-in: add the `run-live-eval` label to a PR from this same 
 
 CI uses `ci-smoke.v1`: one case, one sample, one Candidate call and at most one Autoevals Judge call. There are no provider retries. Autoevals uses `useCoT: false` to omit the requested explanation; this setting is part of the Judge fingerprint, so older baselines need explicit renewal. Provider-internal reasoning may still count toward the configured output-token limit. The full local smoke suite remains available but is not run by this paid workflow.
 
-The optional workflow input `baseline_file` or repository variable `EVAL_BASELINE_FILE` selects a reviewed reference. With neither set, evaluation still produces reports but the release gate fails with `baseline_required`; a reference is never promoted automatically. The smoke score is not comprehensive AgentOS quality evidence.
+The optional workflow input `baseline_file` or repository variable `EVAL_BASELINE_FILE` selects a reviewed reference. With neither set, evaluation still produces reports but the release gate fails with `baseline_required`; a reference is never promoted automatically. The smoke score is not comprehensive product-agent quality evidence.
 
 Actions Job Summary shows scores, gate reasons and the artifact download link. The artifact includes a standalone HTML dashboard (scores, case/grade meters, model/Judge accounting and trace records), JSON, Markdown and JSONL spans, retained for 30 days. Download/unzip and open the HTML locally; it uses no JavaScript, external assets or server. Summary and upload run even when the evaluation gate fails. Configuration failures with no report produce an explicit blocked summary. SQLite and raw datasets are not uploaded.
 
@@ -78,7 +78,7 @@ Cost estimates use the supplied prices, and a configured zero price means a zero
 
 Implement `EvalTarget.identity` and `execute({input, requestId, seed, signal})`, returning `{output, usage?}`. Fingerprint all behavior-affecting adapter configuration without secrets. Respect cancellation, bound output and report usage when known. Expected answers never reach the target. No private runtime events, prompt/context objects, kernel, product model client or control-plane state crosses the contract. A custom launcher passes the adapter to `runJob`; Eval Core needs no change. The current CLI selects only the Candidate API target.
 
-`TelemetryBackend` accepts versioned spans and flush. `runJob` optionally fans out to a backend while persisting local telemetry. Trace/span IDs, parent relationships, Unix-nanosecond timestamps, status and primitive attributes map to OpenTelemetry/OTLP. Run → case → sample contains grader spans; Candidate and Judge calls have separate trace IDs and role attributes, linked to the sample through OpenTelemetry links. Latency, tokens, costs and failure metrics remain separated by role. This is a backend contract, not an OTLP HTTP exporter. A future visualization/exporter consumes it without AgentOS introspection; export failures fail execution.
+`TelemetryBackend` accepts versioned spans and flush. `runJob` optionally fans out to a backend while persisting local telemetry. Trace/span IDs, parent relationships, Unix-nanosecond timestamps, status and primitive attributes map to OpenTelemetry/OTLP. Run → case → sample contains grader spans; Candidate and Judge calls have separate trace IDs and role attributes, linked to the sample through OpenTelemetry links. Latency, tokens, costs and failure metrics remain separated by role. This is a backend contract, not an OTLP HTTP exporter. A future visualization/exporter consumes it without runtime introspection; export failures fail execution.
 
 Artifacts under `eval/.state/reports/` include aggregate/sample JSON, Markdown and JSONL spans. They store output hashes, synthetic IDs and bounded failure codes, never prompts, answers, keys or provider error bodies. Private SQLite under `eval/.state/` retains dataset inputs for replay: protect it with host ACLs, back it up as sensitive data and never upload it publicly. `--db` and `--out` select storage. The static HTML report is included; no separate visualization service is required.
 

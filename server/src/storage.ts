@@ -117,7 +117,7 @@ export class StorageObjectTooLargeError extends Error {
 /** Metadata and bounded reads used at untrusted object-ingestion boundaries. */
 export interface BoundedStorageReader {
   statObject(key: string): Promise<StorageObjectMetadata>
-  readObjectBounded(key: string, maxBytes: number): Promise<Buffer>
+  readObjectBounded(key: string, maxBytes: number, signal?: AbortSignal): Promise<Buffer>
 }
 
 export interface Storage {
@@ -173,13 +173,18 @@ function terminateBody(body: unknown, error: Error): void {
 }
 
 /** Buffer a Node or Web SDK response body without ever retaining more than maxBytes. */
-export async function readStorageBodyBounded(body: unknown, maxBytes: number): Promise<Buffer> {
+export async function readStorageBodyBounded(body: unknown, maxBytes: number, signal?: AbortSignal): Promise<Buffer> {
   validateReadLimit(maxBytes)
+  signal?.throwIfAborted()
   if (!body) throw new Error('object has no body')
+  const abort = () => terminateBody(body, signal?.reason instanceof Error ? signal.reason : new Error('object read aborted'))
+  signal?.addEventListener('abort', abort, { once: true })
+  try {
 
   const chunks: Buffer[] = []
   let total = 0
   const append = (chunk: unknown) => {
+    signal?.throwIfAborted()
     const bytes = bodyChunkBytes(chunk)
     if (bytes.byteLength > maxBytes - total) {
       const error = new StorageObjectTooLargeError(maxBytes)
@@ -192,7 +197,7 @@ export async function readStorageBodyBounded(body: unknown, maxBytes: number): P
 
   if (body instanceof Blob) {
     if (body.size > maxBytes) throw new StorageObjectTooLargeError(maxBytes)
-    return readStorageBodyBounded(body.stream(), maxBytes)
+    return readStorageBodyBounded(body.stream(), maxBytes, signal)
   }
 
   const asyncIterable = body as Partial<AsyncIterable<unknown>>
@@ -204,9 +209,12 @@ export async function readStorageBodyBounded(body: unknown, maxBytes: number): P
   const stream = body as { getReader?: () => ReadableStreamDefaultReader<unknown> }
   if (typeof stream.getReader === 'function') {
     const reader = stream.getReader()
+    const cancel = () => { void reader.cancel(signal?.reason).catch(() => undefined) }
+    signal?.addEventListener('abort', cancel, { once: true })
     try {
       while (true) {
         const { done, value } = await reader.read()
+        signal?.throwIfAborted()
         if (done) break
         append(value)
       }
@@ -214,6 +222,7 @@ export async function readStorageBodyBounded(body: unknown, maxBytes: number): P
       await reader.cancel(error).catch(() => undefined)
       throw error
     } finally {
+      signal?.removeEventListener('abort', cancel)
       reader.releaseLock()
     }
     return Buffer.concat(chunks, total)
@@ -225,6 +234,7 @@ export async function readStorageBodyBounded(body: unknown, maxBytes: number): P
   }
 
   throw new Error('object body is not a supported stream')
+  } finally { signal?.removeEventListener('abort', abort) }
 }
 
 class R2Storage implements Storage, BoundedStorageReader {
@@ -360,17 +370,17 @@ class R2Storage implements Storage, BoundedStorageReader {
     }
   }
 
-  async readObjectBounded(key: string, maxBytes: number): Promise<Buffer> {
+  async readObjectBounded(key: string, maxBytes: number, signal?: AbortSignal): Promise<Buffer> {
     validateReadLimit(maxBytes)
     const normalized = requireStorageKey(key)
-    const response = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: normalized }))
+    const response = await this.client.send(new GetObjectCommand({ Bucket: this.bucket, Key: normalized }), { abortSignal: signal })
     if (!response.Body) throw new Error('object has no body')
     if (response.ContentLength !== undefined && response.ContentLength > maxBytes) {
       const error = new StorageObjectTooLargeError(maxBytes)
       terminateBody(response.Body, error)
       throw error
     }
-    return readStorageBodyBounded(response.Body, maxBytes)
+    return readStorageBodyBounded(response.Body, maxBytes, signal)
   }
 }
 

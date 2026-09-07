@@ -4,6 +4,7 @@ import type { AgentExecutionRole } from '../../agents/contracts.js'
 import type { Queryable } from '../../db/queryable.js'
 import type { CanvasEvent } from '../../redis.js'
 import { createEvidenceRecordInTransaction, createEvidenceWithLinksInTransaction } from '../evidence/public.js'
+import { observeCanvasEvidence } from './evidence.js'
 import type {
   CanvasActivity,
   CanvasActorKind,
@@ -85,6 +86,7 @@ async function submitCanvasReport(input: {
   finding:string;evidenceRefs:CanvasEvidenceRef[];confidence:number;unresolved?:string[];nextStep?:string
   verifiesReportId?:string;disconfirmingChecks?:string[];verdict?:CanvasReportVerdict
   consumedReportIds?:string[];conflictResolution?:unknown[]
+  principalId: string; requestVersion: number; actionId: string; signal?: AbortSignal
 }): Promise<CanvasAssignmentReport> {
   if (!['specialist','verifier','reporter'].includes(input.executionRole)) throw new Error('coordinator work cannot submit an assignment report')
   const confidence=Number(input.confidence)
@@ -100,32 +102,40 @@ async function submitCanvasReport(input: {
       workId: input.workId, companyId: input.companyId, agentId: input.agentId, canvasId: input.canvasId,
     })
     if (!work||work.execution_role!==input.executionRole) throw new Error('report execution role does not match the current durable work item')
+    if (work.principal_id !== input.principalId || Number(work.request_version) !== input.requestVersion) throw new Error('Canvas report request or principal changed')
     if (!work.project_id) throw new Error('Canvas report requires a Project scope')
     await validateEvidenceRefs(client,{companyId:input.companyId,canvasId:input.canvasId,refs:input.evidenceRefs})
     let verifiesReportId:string|null=null
     if (input.executionRole==='verifier') {
-      if (!input.verifiesReportId||!input.verdict) throw new Error('verifier reports require verifiesReportId and verdict')
+      if (!input.verifiesReportId||!input.verdict||!input.disconfirmingChecks?.length) throw new Error('verifier reports require a builder report, verdict and disconfirming checks')
       const source = await reportIdentity(client, input.companyId, input.canvasId, input.verifiesReportId)
       if (!source) throw new Error('verified report is outside the current Canvas')
       if (source.author_agent_id===input.agentId) throw new Error('builder and verifier must be different agents')
+      if (source.execution_role !== 'specialist') throw new Error('verifier must check a specialist report')
       const verifiesAssignmentId = work.canvas_assignment_id
         ? await assignmentVerifierId(client,input.canvasId,work.canvas_assignment_id,input.agentId)
         : null
       if (!verifiesAssignmentId||verifiesAssignmentId!==source.assignment_id) throw new Error('verifier report does not match its assigned builder report')
       verifiesReportId=input.verifiesReportId
-    } else if (input.verifiesReportId||input.verdict) throw new Error('only verifier reports may set verification fields')
+    } else if (input.verifiesReportId||input.verdict||input.disconfirmingChecks?.length) throw new Error('only verifier reports may set verification fields')
     const consumed=(input.consumedReportIds??[]).map(String)
     if (input.executionRole==='reporter') {
       if (!consumed.length) throw new Error('reporter reports must consume at least one persisted report')
       const persisted = await existingReportIds(client,input.companyId,input.canvasId,consumed)
       if (new Set(persisted).size!==new Set(consumed).size) throw new Error('reporter consumed report is outside the current Canvas')
-    } else if (consumed.length) throw new Error('only reporter reports may consume reportIds')
-    const id=`report-${createHash('sha256').update(`${input.workId}:learning_report_v1`).digest('hex').slice(0,28)}`
-    const uniqueRefs = [...new Map(input.evidenceRefs.map((ref) => [`${ref.kind}:${ref.id}`, ref])).values()]
+      const current = await client.query<{ id: string }>('SELECT id FROM canvas_assignment_reports WHERE canvas_id=$1 AND assignment_id IS NOT NULL', [input.canvasId])
+      if (current.rows.some(report => !consumed.includes(report.id))) throw new Error('reporter must consume every current assignment report')
+    } else if (consumed.length || input.conflictResolution?.length) throw new Error('only reporter reports may consume reports or resolve conflicts')
+    const id=`report-${createHash('sha256').update(JSON.stringify([input.workId,input.requestVersion,input.actionId,'learning_report_v1'])).digest('hex').slice(0,28)}`
+    const refs: CanvasEvidenceRef[] = [...input.evidenceRefs, ...consumed.map(id => ({ kind: 'report' as const, id }))]
+    const uniqueRefs = [...new Map(refs.map((ref) => [`${ref.kind}:${ref.id}`, ref])).values()]
+    validateEvidenceRefShape(uniqueRefs)
     const sourceEvidenceIds: string[] = []
     for (const ref of uniqueRefs) {
+      const observation = await observeCanvasEvidence(client, { companyId: input.companyId, projectId: work.project_id,
+        canvasId: input.canvasId, conversationId: work.session_id, principalId: input.principalId, ...(input.signal ? { signal: input.signal } : {}) }, ref)
       const evidenceId = `evidence-${createHash('sha256').update(JSON.stringify([
-        input.companyId, work.project_id, ref.kind, ref.id,
+        input.companyId, work.project_id, ref.kind, ref.id, observation,
       ])).digest('hex')}`
       await createEvidenceRecordInTransaction(client, {
         id: evidenceId,
@@ -134,7 +144,7 @@ async function submitCanvasReport(input: {
         level: 'L1',
         derivation: 'OBSERVED',
         kind: 'CANVAS_SOURCE_REFERENCE',
-        data: { sourceKind: ref.kind, sourceId: ref.id },
+        data: { sourceKind: ref.kind, sourceId: ref.id, observation: JSON.stringify(observation) },
         createdBy: { type: 'SYSTEM' },
       })
       sourceEvidenceIds.push(evidenceId)
@@ -147,7 +157,7 @@ async function submitCanvasReport(input: {
       level: 'L2',
       derivation: 'OBSERVED',
       kind: 'CANVAS_REPORT',
-      data: { reportId: id, canvasId: input.canvasId, executionRole: input.executionRole },
+      data: { reportId: id, canvasId: input.canvasId, executionRole: input.executionRole, workId: input.workId, requestVersion: input.requestVersion },
       createdBy: { type: 'AGENT', id: input.agentId },
     }, sourceEvidenceIds.map((targetId) => ({
       relation: 'DERIVED_FROM' as const,
@@ -162,6 +172,7 @@ async function submitCanvasReport(input: {
       confidence, unresolved: input.unresolved ?? [], nextStep: input.nextStep?.trim() || null,
       verifiesReportId, disconfirmingChecks: input.disconfirmingChecks ?? [], verdict: input.verdict ?? null,
       consumedReportIds: consumed, conflictResolution: input.conflictResolution ?? [],
+      workId: input.workId, requestVersion: input.requestVersion,
     }))
   })
 }

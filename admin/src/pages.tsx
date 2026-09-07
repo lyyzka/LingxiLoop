@@ -232,6 +232,14 @@ function commands(resource: string, record: AdminRecord): Command[] {
     { action: 'archive', label: '归档', path: `/projects/${record.id}/archive`, method: 'POST', destructive: true, reason: true },
   ]
   if (resource === 'agent-routines' && record.status !== 'paused') return [{ action: 'pause', label: '暂停例程', path: `/im/routines/${record.id}/pause`, method: 'POST', destructive: true, reason: true }]
+  if (resource === 'agent-runs') {
+    const diagnostics = record.diagnostics as { failedEvents?: number; failedUsageDeliveries?: number; delivery?: { failed_at?: string | null } } | undefined
+    return ([['message','结果',!!diagnostics?.delivery?.failed_at],['events','事件',!!diagnostics?.failedEvents],['usage','账单',!!diagnostics?.failedUsageDeliveries]] as const)
+      .filter(([, ,failed]) => failed).map(([channel,label]) => ({ action: 'retry', label: `重试${label}投递`,
+        path: `/control/platform/agent-runs/${encodeURIComponent(record.id)}/delivery/${channel}/retry`, method: 'POST', reason: true }))
+  }
+  if (resource === 'agent-deliveries' && record.failed_at) return [{ action: 'retry', label: '重试投递',
+    path: `/control/platform/agent-deliveries/${encodeURIComponent(record.id)}/retry`, method: 'POST', reason: true }]
   return []
 }
 

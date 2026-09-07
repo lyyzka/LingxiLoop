@@ -1,13 +1,13 @@
 import { z } from 'zod'
 
-const capabilitySchema = z.enum(['canvas', 'web', 'files', 'email', 'documents', 'calendar', 'knowledge', 'learning'])
+const capabilitySchema = z.enum(['canvas', 'web', 'files', 'email', 'documents', 'calendar', 'knowledge', 'learning', 'handoffs', 'routines'])
 
 export const createAgentRequestSchema = z.object({
   name: z.string().trim().min(1, 'name required').max(80),
   role: z.string().trim().max(160).default(''),
   systemPrompt: z.string().trim().min(10, 'systemPrompt required (at least 10 chars — describe the agent\'s style)').max(20_000),
   bio: z.string().max(2_000).default(''),
-  capabilities: z.array(capabilitySchema).max(8).default(['canvas', 'web', 'files', 'email', 'documents']),
+  capabilities: z.array(capabilitySchema).max(10).default(['canvas', 'web', 'files', 'email', 'documents']),
 }).strict()
 
 export const updateAgentRequestSchema = createAgentRequestSchema.partial().refine(

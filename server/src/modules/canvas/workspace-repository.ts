@@ -92,8 +92,7 @@ export async function snapshotRows(db: Queryable, canvasId: string) {
       [canvasId],
     ),
     db.query<AssignmentRow>(
-      `SELECT a.*,w.progress_fingerprint,w.no_progress_count
-         FROM canvas_agent_assignments a LEFT JOIN agent_work_items w ON w.id=a.work_id
+      `SELECT a.* FROM canvas_agent_assignments a
         WHERE a.canvas_id=$1 ORDER BY a.created_at ASC`,
       [canvasId],
     ),

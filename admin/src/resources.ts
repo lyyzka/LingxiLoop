@@ -28,15 +28,16 @@ const learning = [
   ['learning-evaluations', '学习评估'], ['evidence-records', '证据'], ['trust-snapshots', '信任快照'],
 ] as const
 const collaboration = [
-  ['participants', '参与者与 Agent'], ['agent-runs', 'Agent 运行'], ['agent-work-items', 'Agent 工作项'],
-  ['approvals', '审批'], ['agent-routines', 'Agent 例程'], ['autonomy-rules', '自主规则'],
-  ['agent-memories', 'Agent 记忆证据'], ['conversations', '会话'], ['email-messages', '邮件'],
+  ['participants', '参与者与 Agent'], ['agent-runs', 'Agent 运行'],
+  ['agent-routines', 'Agent 例程'],
+  ['conversations', '会话'], ['email-messages', '邮件'],
   ['documents', '文档'], ['canvases', '画布'], ['presentations', '演示'],
   ['calendar-events', '日历事件'], ['notification-deliveries', '通知投递'],
   ['knowledge-sources', '知识源'], ['knowledge-jobs', '知识任务'],
 ] as const
 const operations = [
-  ['llm-calls', 'LLM 调用'], ['tool-calls', '工具调用'], ['audit-events', '审计事件'],
+  ['agent-deliveries', 'Agent 待处理投递'],
+  ['llm-calls', 'LLM 调用'], ['audit-events', '审计事件'],
   ['webhook-receipts', 'Webhook 收据'],
 ] as const
 

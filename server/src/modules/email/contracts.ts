@@ -30,6 +30,22 @@ export const replyEmailRequestSchema = z.object({
   attachments: attachmentsSchema,
 }).strict()
 
+const attachmentClientMsgNos = z.array(z.string().trim().min(1).max(200)).max(16).default([])
+  .refine(ids => new Set(ids).size === ids.length, 'attachment IDs must be unique')
+export const agentEmailSchemas = {
+  whoami: z.object({}).strict(),
+  contacts: z.object({ query: z.string().max(2000).default('') }).strict(),
+  inbox: z.object({ unreadOnly: z.boolean().default(false), limit: z.number().int().min(1).max(50).default(20) }).strict(),
+  show: z.object({ conversationId: z.string().trim().min(1).max(200), limit: z.number().int().min(1).max(50).default(50) }).strict(),
+  send: sendEmailRequestSchema.omit({ idempotencyKey: true, attachments: true }).extend({
+    to: sendEmailRequestSchema.shape.to.max(64), cc: z.array(z.string().trim().min(1).max(998)).max(64).default([]), attachmentClientMsgNos,
+  }).strict(),
+  reply: replyEmailRequestSchema.omit({ idempotencyKey: true, attachments: true }).extend({
+    conversationId: z.string().trim().min(1).max(200), messageId: z.string().trim().min(1).max(200),
+    cc: z.array(z.string().trim().min(1).max(998)).max(64).default([]), attachmentClientMsgNos,
+  }).strict(),
+}
+
 const inboundAttachmentSchema = z.object({
   filename: z.string().trim().min(1).max(200),
   mimeType: z.string().trim().min(1).max(120),
@@ -147,6 +163,7 @@ export type EmailHtmlPayload =
   | { kind: 'html'; html: string }
 
 export interface PersistEmailMessageInput {
+  nativeActionId?: string
   conversationId: string
   companyId: string
   authorId: string

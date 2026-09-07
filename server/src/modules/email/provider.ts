@@ -7,6 +7,7 @@ export interface ProviderSendResult {
 }
 
 export interface SendArgs {
+  signal?: AbortSignal
   from: string
   to: string[]
   cc?: string[]
@@ -43,6 +44,7 @@ export function assertEmailProviderConfigured(): void {
 }
 
 export async function sendViaProvider(args: SendArgs): Promise<ProviderSendResult> {
+  args.signal?.throwIfAborted()
   if (!args.messageId.trim()) throw new Error('authoritative Message-ID is required')
   if (providerOverride) {
     const result = await providerOverride(args)
@@ -85,6 +87,7 @@ export async function sendViaProvider(args: SendArgs): Promise<ProviderSendResul
   let response: Response
   try {
     response = await fetch('https://api.resend.com/emails', {
+      signal: AbortSignal.any([AbortSignal.timeout(30_000), ...(args.signal ? [args.signal] : [])]),
       method: 'POST',
       headers: {
         authorization: `Bearer ${apiKey}`,

@@ -1,4 +1,5 @@
 import type { AppendMessage, ThreadMessage, ThreadUserMessagePart } from '@assistant-ui/react'
+import { consumeRunEvent, consumeRunState, createRunView } from 'lingxios/ui'
 import type { ApiAttachment, WsEvent } from '@/api/contracts'
 import { ws } from '@/api/core/realtime'
 import { agentsApi } from '@/features/agents/api'
@@ -30,6 +31,8 @@ import {
   useChatThreadStore,
 } from './store'
 import { applyAssistantStreamChunks, runningAgentIds, StreamSequenceTracker } from './stream'
+import { harnessApi, type AgentRunTarget } from './harness-api'
+import { harnessParts, harnessStatus, readHarnessEvent } from './harness'
 
 const TYPING_STALE_MS = 45_000
 
@@ -162,8 +165,11 @@ export class ChatTransport {
   private readonly typingTimers = new Map<string, number>()
   private readonly streamSequences = new StreamSequenceTracker()
   private readonly messageListeners = new Set<(message: ThreadMessage) => void>()
+  private connection = new AbortController()
+  private readonly runReads = new Map<string, Promise<void>>()
 
   boot(): void {
+    if (this.connection.signal.aborted) this.connection = new AbortController()
     resetChatThreadStore()
     if (this.booted) return
     this.booted = true
@@ -175,6 +181,8 @@ export class ChatTransport {
   }
 
   disconnect(): void {
+    this.connection.abort()
+    this.runReads.clear()
     lingxiIm.disconnect()
     for (const timer of this.typingTimers.values()) window.clearTimeout(timer)
     this.typingTimers.clear()
@@ -221,6 +229,11 @@ export class ChatTransport {
       const messages = convertEnvelopeBatch(envelopes, conversionContext())
       setConversationMessages(conversationId, messages)
       updateConversation(conversationId, (state) => ({ ...state, loaded: true, error: null }))
+      for (const message of useChatThreadStore.getState().conversations[conversationId]?.messages ?? []) {
+        const meta = messageMetadata(message)
+        if (meta.senderKind === 'agent' && meta.messageKind === 'text' && meta.runId) void this.refreshRun({ conversationId,
+          agentId: meta.senderId, runId: meta.runId, ...(meta.threadRootId ? { threadId: meta.threadRootId } : {}) })
+      }
     } catch (error) {
       console.error('[chat.transport] reload failed', error)
     }
@@ -284,9 +297,9 @@ export class ChatTransport {
     quotedMessageId: string | null,
     clientMessageId = `temp-${crypto.randomUUID()}`,
     replayPayload?: LingxiMessageV1,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const text = body.trim()
-    if (!text && !attachment) return
+    if (!text && !attachment) return false
     const optimistic = optimisticMessage(conversationId, clientMessageId, text, attachment, quotedMessageId)
     setConversationMessages(conversationId, [optimistic])
     const payload: LingxiMessageV1 = replayPayload ?? {
@@ -316,9 +329,11 @@ export class ChatTransport {
             .catch((error) => console.warn('[chat.transport] attachment refresh failed', error))
         }, 750)
       }
+      return true
     } catch (error) {
       console.warn('[chat.transport] send failed', error)
       markDelivery(conversationId, clientMessageId, 'failed')
+      return false
     }
   }
 
@@ -373,42 +388,99 @@ export class ChatTransport {
     await messagesApi.castPollVote(messageId, optionIds)
   }
 
+  async continueRun(target: AgentRunTarget, text: string, requestVersion: number): Promise<void> {
+    const clientMsgNo = `temp-${crypto.randomUUID()}`
+    const accepted = await this.send(target.conversationId,text,null,target.threadId ?? null,clientMsgNo,{
+      version: 1, kind: 'text', clientMsgNo, body: text.trim(), ...(target.threadId ? { replyToClientMsgNo: target.threadId } : {}),
+      data: { mentionedIds: [target.agentId], agentContinuation: { runId: target.runId, agentId: target.agentId, requestVersion } },
+    })
+    if (!accepted) throw new Error('补充信息尚未发送，可在消息中重试')
+    await harnessApi.continue(target,clientMsgNo,requestVersion)
+  }
+
+  refreshRun(target: AgentRunTarget): Promise<void> {
+    const key = JSON.stringify(target), pending = this.runReads.get(key)
+    if (pending) return pending
+    const signal = AbortSignal.any([this.connection.signal,AbortSignal.timeout(30_000)])
+    const read = async () => {
+      for (let page = 0; page < 8 && !signal.aborted; page++) {
+        const current = useChatThreadStore.getState().conversations[target.conversationId]?.messages
+          .find(message => messageMetadata(message).runId === target.runId && messageMetadata(message).messageKind === 'text')
+        if (!current) return
+        const afterSeq = messageMetadata(current).harnessReplaySeq ?? 0
+        const response = await harnessApi.read(target,afterSeq,signal)
+        if (signal.aborted) return
+        updateConversation(target.conversationId,state => {
+          const activeRuns = { ...state.activeRuns }
+          const messages = state.messages.map(message => {
+            const meta = messageMetadata(message)
+            if (message.role !== 'assistant' || meta.runId !== target.runId || meta.messageKind !== 'text') return message
+            let view = meta.harness ?? createRunView(target.runId)
+            for (const event of response.events) view = consumeRunEvent(view,event)
+            view = consumeRunState(view,response)
+            if (view.lifecycle === 'queued' || view.lifecycle === 'leased') {
+              activeRuns[message.id] = { id: target.runId, agentId: target.agentId, messageId: message.id,
+                lastSequence: view.lastSeq, state: view.lifecycle === 'queued' ? 'queued' : 'running' }
+            } else for (const [id,run] of Object.entries(activeRuns)) if (run.id === target.runId) delete activeRuns[id]
+            return { ...message, status: harnessStatus(view), content: harnessParts(view), metadata: { ...message.metadata,
+              custom: { ...meta, harness: view, harnessReplaySeq: response.nextSeq, harnessControl: response.canControl, harnessError: response.run.error ?? undefined,
+                unresolvedActions: response.diagnostics?.actions.filter(action => !action.result || action.result.executionState === 'unknown')
+                  .map(({ actionKey,action }) => ({ actionKey,action })) ?? [] } } } as ThreadMessage
+          })
+          return { ...state, messages, activeRuns }
+        })
+        if (response.events.length < 100 || response.nextSeq <= afterSeq) return
+      }
+    }
+    const promise = read().catch(error => {
+      if (signal.aborted) return
+      updateConversation(target.conversationId,state => ({ ...state, messages: state.messages.map(message => {
+        const meta = messageMetadata(message)
+        if (meta.runId !== target.runId || meta.messageKind !== 'text') return message
+        const inaccessible = /\(40[134]\)/.test(String(error))
+        return { ...message, metadata: { ...message.metadata, custom: { ...meta,
+          ...(inaccessible ? { harnessControl: false } : {}), harnessError: inaccessible ? undefined : '运行状态暂时无法同步，请重试' } } } as ThreadMessage
+      }) }))
+    }).finally(() => { if (this.runReads.get(key) === promise) this.runReads.delete(key) })
+    this.runReads.set(key,promise)
+    return promise
+  }
+
   private commitEnvelope(envelope: ImEnvelope): void {
+    if (this.connection.signal.aborted) return
     try {
       const message = convertEnvelope(envelope, conversionContext())
       const metadata = messageMetadata(message)
       forgetChatOutbox(envelope.clientMsgNo || metadata.clientMessageId)
+      let accepted = true
       updateConversation(envelope.channelId, (state) => {
+        const messages = mergeCanonicalMessages(state.messages, [message])
+        const merged = metadata.runId && messages.find(value => messageMetadata(value).runId === metadata.runId && messageMetadata(value).messageKind === 'text')
+        const view = merged && messageMetadata(merged).harness
+        if (metadata.harness && view && view.resultId !== metadata.harness.resultId) { accepted = false; return state }
         const reconcilesStream = metadata.senderKind === 'agent' && metadata.messageKind === 'text' && Boolean(metadata.runId)
         const activeRuns = { ...state.activeRuns }
         if (reconcilesStream) {
-          for (const id of Object.keys(activeRuns)) {
-            if (id === metadata.clientMessageId || (metadata.runId && id.includes(metadata.runId))) delete activeRuns[id]
+          for (const [id,run] of Object.entries(activeRuns)) {
+            if (run.id === metadata.runId) delete activeRuns[id]
+          }
+          if (merged && view && (view.lifecycle === 'queued' || view.lifecycle === 'leased')) activeRuns[merged.id] = {
+            id: view.runId, agentId: metadata.senderId, messageId: merged.id, lastSequence: view.lastSeq,
+            state: view.lifecycle === 'queued' ? 'queued' : 'running',
           }
         }
-        const withoutStream = state.messages.filter((current) => {
-          const currentMetadata = messageMetadata(current)
-          return !(
-            current.id === metadata.clientMessageId
-            || currentMetadata.clientMessageId === metadata.clientMessageId
-            || (
-              reconcilesStream
-              && metadata.runId
-              && currentMetadata.runId === metadata.runId
-              && currentMetadata.messageKind === 'text'
-            )
-          )
-        })
         return {
           ...state,
           activeRuns,
           typingAgentIds: reconcilesStream
             ? state.typingAgentIds.filter((id) => id !== metadata.senderId)
             : state.typingAgentIds,
-          messages: mergeCanonicalMessages(withoutStream, [message]),
+          messages,
         }
       })
-      for (const listener of this.messageListeners) listener(message)
+      if (accepted) for (const listener of this.messageListeners) listener(message)
+      if (metadata.harness && metadata.runId) void this.refreshRun({ conversationId: envelope.channelId,
+        agentId: metadata.senderId, runId: metadata.runId, ...(metadata.threadRootId ? { threadId: metadata.threadRootId } : {}) })
     } catch (error) {
       console.error('[chat.transport] rejected unsupported WuKong message', error, {
         channelId: envelope.channelId,
@@ -423,6 +495,7 @@ export class ChatTransport {
   }
 
   private applyAssistantStreamEvent(event: Extract<WsEvent, { type: 'assistant.stream' }>): void {
+    if (this.connection.signal.aborted) return
     if (
       typeof event.conversationId !== 'string'
       || !event.conversationId
@@ -441,24 +514,23 @@ export class ChatTransport {
     }
     const runId = messageId.startsWith('preview-') ? messageId.slice('preview-'.length) : messageId
     const participant = useParticipants.getState().byId[event.authorId]
-    const failed = event.chunks.find((chunk) => chunk.type === 'error')
+    if (participant?.kind !== 'agent') throw new Error('Assistant stream requires a known agent')
+    const incoming = readHarnessEvent(event.chunks,runId)
     const finished = event.chunks.some((chunk) => chunk.type === 'message-finish')
+    let threadId = incoming?.threadId ?? undefined
     updateConversation(event.conversationId, (state) => {
-      const current = state.messages.find((message) => message.id === messageId)
+      const current = state.messages.find(message => messageMetadata(message).runId === runId && messageMetadata(message).messageKind === 'text')
+      const before = current && messageMetadata(current)
+      if (!incoming && !before?.harness) return state
+      threadId = incoming?.threadId ?? before?.threadRootId ?? undefined
+      let view = before?.harness ?? createRunView(runId)
+      const previous = view
+      if (incoming) view = consumeRunEvent(view,incoming.event)
+      if (incoming && previous === view) return state
       const activeRuns = { ...state.activeRuns }
-      if (finished || failed) delete activeRuns[messageId]
-      if (!current && (finished || failed)) {
-        return {
-          ...state,
-          activeRuns,
-          ...(failed ? { error: failed.error } : {}),
-        }
-      }
-      const status: ThreadMessage['status'] = failed
-        ? { type: 'incomplete', reason: failed.code === 'run.cancelled' ? 'cancelled' : 'error' }
-        : finished ? { type: 'complete', reason: 'stop' }
-          : { type: 'running' }
-      const content = applyAssistantStreamChunks(current?.role === 'assistant' ? current.content : [], event.chunks)
+      const currentContent = current?.role === 'assistant' ? current.content : []
+      const content = view.message && view.messageFence >= view.fence ? harnessParts(view)
+        : applyAssistantStreamChunks(incoming?.event.kind === 'run.started' ? [] : currentContent,event.chunks)
       const metadata: LingxiMessageMetadata = current
         ? { ...messageMetadata(current), runId }
         : {
@@ -467,7 +539,7 @@ export class ChatTransport {
             clientMessageId: messageId,
             sequence: null,
             senderId: event.authorId,
-            senderName: participant?.name ?? event.authorId,
+            senderName: participant.name,
             senderKind: 'agent',
             senderAvatarUrl: participant?.avatarUrl ?? null,
             isMine: false,
@@ -486,13 +558,17 @@ export class ChatTransport {
             continuedToNext: false,
             clusterChromeAt: null,
           }
+      metadata.harness = view
+      metadata.threadRootId = threadId ?? null
+      metadata.quotedMessageId = threadId ?? null
       metadata.presentation = resolveMessagePresentation(content)
+      const canonicalId = current?.id ?? messageId
       const streamMessage: ThreadMessage = {
-        id: messageId,
+        id: canonicalId,
         role: 'assistant',
         createdAt: current?.createdAt ?? new Date(),
         content,
-        status,
+        status: harnessStatus(view),
         metadata: {
           unstable_state: null,
           unstable_annotations: [],
@@ -501,31 +577,24 @@ export class ChatTransport {
           custom: metadata,
         },
       }
-      if (!finished && !failed) {
-        activeRuns[messageId] = {
+      if (view.lifecycle === 'leased' || view.lifecycle === 'queued') {
+        activeRuns[canonicalId] = {
           id: runId,
           agentId: event.authorId,
-          messageId,
+          messageId: canonicalId,
           lastSequence: event.sequence,
           state: 'running',
         }
-      }
-      const withoutCurrent = state.messages.filter((message) => message.id !== messageId)
-      if ((finished || failed) && streamMessage.content.length === 0) {
-        return {
-          ...state,
-          activeRuns,
-          messages: withoutCurrent,
-          ...(failed ? { error: failed.error } : {}),
-        }
-      }
+      } else for (const [id,run] of Object.entries(activeRuns)) if (run.id === runId) delete activeRuns[id]
       return {
         ...state,
         activeRuns,
-        messages: mergeCanonicalMessages(withoutCurrent, [streamMessage]),
-        ...(failed ? { error: failed.error } : {}),
+        messages: mergeCanonicalMessages(state.messages.filter(message => message.id !== canonicalId), [streamMessage]),
       }
     })
+    if (finished || incoming && !incoming.event.kind.startsWith('model.') && !incoming.event.kind.startsWith('tool.')) {
+      void this.refreshRun({ conversationId: event.conversationId, agentId: event.authorId, runId, ...(threadId ? { threadId } : {}) })
+    }
   }
 
   private applyWorkspaceEvent(event: WsEvent): void {

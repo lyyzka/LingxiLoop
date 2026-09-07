@@ -113,7 +113,6 @@ export type PermissionResource =
   | { type: 'canvas'; id: string }
   | { type: 'canvas_frame'; id: string }
   | { type: 'agent'; id: string }
-  | { type: 'approval'; id: string }
   | { type: 'routine'; id: string }
 
 export interface PermissionRequest {

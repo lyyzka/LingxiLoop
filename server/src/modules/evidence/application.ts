@@ -16,7 +16,7 @@ import {
   insertEvidenceLink,
   insertEvidenceRecord,
   listEvidenceChainRecords,
-  modelRunBelongsToCompany,
+  modelRunBelongsToProject,
 } from './repository.js'
 import type { EvidenceChainRecord, EvidenceTargetLevel } from './contracts.js'
 
@@ -102,8 +102,8 @@ export async function createEvidenceClaim(
   boundedText(input.claimType, 'Claim type', 100)
   boundedText(input.statement, 'Claim statement', 10_000)
   return transaction(async (db) => {
-    if (!await modelRunBelongsToCompany(db, input.companyId, input.modelRunId)) {
-      throw new Error('Claim model run is outside the current Company')
+    if (!await modelRunBelongsToProject(db, input.companyId, input.projectId, input.modelRunId)) {
+      throw new Error('Claim model run is outside the current Project')
     }
     if (await countScopedEvidenceRecords(db, { ...input, evidenceIds }) !== evidenceIds.length) {
       throw new Error('Claim Evidence is outside the current Project')

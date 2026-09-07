@@ -11,6 +11,7 @@ export interface AgentKnowledgeSourceRow {
   created_by_user_id: string
   created_via: 'USER' | 'AGENT'
   excluded: boolean
+  updated_at: Date | string
 }
 
 export async function listAgentKnowledgeSources(
@@ -18,7 +19,7 @@ export async function listAgentKnowledgeSources(
   input: { companyId: string; projectId: string; conversationId: string; authorizationUserId: string },
 ): Promise<AgentKnowledgeSourceRow[]> {
   const { rows } = await db.query<AgentKnowledgeSourceRow>(
-    `SELECT source.id,source.title,source.kind,source.status,source.external_source_id,
+    `SELECT source.id,source.title,source.kind,source.status,source.external_source_id,source.updated_at,
             source.visibility_scope,source.owner_user_id,source.created_by_user_id,source.created_via,
             (exclusion.source_id IS NOT NULL) AS excluded
        FROM knowledge_sources source

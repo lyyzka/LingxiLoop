@@ -287,7 +287,7 @@ export class CalendarApplication {
       eventId,
       companyId: scope.companyId,
       workspaceId: scope.projectId,
-      actorId: scope.userId,
+      actorId: scope.actorId ?? scope.userId,
     })
   }
 }

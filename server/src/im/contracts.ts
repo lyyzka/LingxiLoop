@@ -1,4 +1,6 @@
 import { z } from 'zod'
+export const agentContinuationSchema = z.object({ agentId: z.string().min(1).max(1000), runId: z.string().min(1).max(1000),
+  requestVersion: z.number().int().positive().safe() }).strict()
 
 export const imHistoryQuerySchema = z.object({
   limit: z.coerce.number().int().positive().max(200).default(80),
@@ -19,6 +21,9 @@ const userMessagePayloadSchema = z.object({
   replyToClientMsgNo: z.string().trim().min(1).optional(),
   data: z.record(z.string(), z.unknown()).optional(),
 }).strict().superRefine((payload, context) => {
+  if (payload.data?.agentContinuation !== undefined && (payload.kind !== 'text' || !agentContinuationSchema.safeParse(payload.data.agentContinuation).success)) {
+    context.addIssue({ code: 'custom', message: 'invalid agent continuation', path: ['data','agentContinuation'] })
+  }
   if (payload.kind === 'text' && !payload.body?.trim()) {
     context.addIssue({ code: 'custom', message: 'text message body is required', path: ['body'] })
   }
@@ -42,8 +47,13 @@ export const imReadReceiptsQuerySchema = z.object({
 })
 
 export const approvalResolutionRequestSchema = z.object({ approved: z.boolean() }).strict()
-export const lingxiOSRunQuerySchema = z.object({ afterSeq: z.coerce.number().int().nonnegative().safe().default(0) }).strict()
+export const lingxiOSRunQuerySchema = z.object({ afterSeq: z.coerce.number().int().nonnegative().safe().default(0), threadId: z.string().min(1).max(1000).optional() }).strict()
 export const lingxiOSRunCancelSchema = z.object({ threadId: z.string().trim().min(1).max(80).optional() }).strict()
+export const lingxiOSArtifactQuerySchema = z.object({ path: z.string().min(1).max(1000), threadId: z.string().min(1).max(1000).optional() }).strict()
+export const lingxiOSRunInputSchema = z.object({ clientMsgNo: z.string().min(1).max(1000), requestVersion: z.number().int().positive(),
+  attachmentClientMsgNos: z.array(z.string().min(1).max(1000)).max(20).optional() }).strict()
+export const lingxiOSRunRevisionSchema = z.object({ text: z.string().trim().min(1).max(8000), threadId: z.string().min(1).max(1000).optional() }).strict()
+export const lingxiOSReconcileSchema = z.object({ actionKey: z.string().min(1).max(2000), threadId: z.string().min(1).max(1000).optional() }).strict()
 export const approvalSupersedeRequestSchema = z.object({
   args: z.record(z.string(), z.unknown()),
   summary: z.string().trim().min(1).max(500).optional(),

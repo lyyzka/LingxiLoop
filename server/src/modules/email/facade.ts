@@ -19,7 +19,9 @@ import {
 } from './runtime.js'
 import { storage } from '../../storage.js'
 import type { Storage } from '../../storage.js'
-import { EmailApplication } from './application.js'
+import { EmailApplication, type EmailInfrastructure } from './application.js'
+import type { Queryable } from '../../db/queryable.js'
+import { findParticipantAddress } from './address-repository.js'
 import { InboundEmailApplication } from './inbound-application.js'
 import { inc } from '../../metrics.js'
 import { notifyOperationalAlert } from '../../alerting.js'
@@ -43,7 +45,7 @@ import type {
 import type { ResendWebhookHeaders } from './resend-inbound-application.js'
 import type { ResendEmailReceivedEvent } from './contracts.js'
 
-export const emailApplication = new EmailApplication(pool, {
+const emailInfrastructure: EmailInfrastructure = {
   assertAvailable: assertEmailProviderConfigured,
   publicUrl: (key) => storage.publicUrl(key),
   parseAddress,
@@ -58,7 +60,20 @@ export const emailApplication = new EmailApplication(pool, {
   completeDelivery: completeOutboundEmail,
   findOrCreateConversation: (args) => findOrCreateEmailConversation(args),
   persist: (args) => persistEmailMessage(args),
-})
+}
+export const emailApplication = new EmailApplication(pool, emailInfrastructure)
+
+export function createNativeEmailApplications(db: Queryable) {
+  const ensureAddress = async (userId: string, companyId: string) => {
+    const row = await findParticipantAddress(db, companyId, userId)
+    const email = row && (row.email ?? computeAgentAddress(row.participantId, row.companySlug))
+    return row && email ? { email, displayName: row.displayName } : null
+  }
+  const delivery = new EmailApplication(db, { ...emailInfrastructure, ensureAddress })
+  return { delivery, agent: new AgentEmailApplication(db, delivery, {
+    addressingConfigured: () => Boolean(env.EMAIL_DOMAIN), computeAgentAddress, ensureAddress,
+  }) }
+}
 
 const agentEmailApplication = new AgentEmailApplication(pool, emailApplication, {
   addressingConfigured: () => Boolean(env.EMAIL_DOMAIN),

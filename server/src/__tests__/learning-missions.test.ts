@@ -237,6 +237,7 @@ test('Personal mission start needs no Course and publishes the committed project
   const metrics: string[] = []
 
   const mission = await startLearningMission(db, async (work) => work(db), {
+    enqueueCoordinator: async (_db, input) => { statements.push(`enqueue coordinator ${input.missionId}`) },
     syncMessages: async () => [{
       clientMsgNo: 'message-1', fromUid: 'learner-1', authoredByAgent: false,
     }],
@@ -253,7 +254,7 @@ test('Personal mission start needs no Course and publishes the committed project
   assert.deepEqual(published, [{ missionId: 'mission-1', projectId: 'personal-project' }])
   assert.deepEqual(metrics, ['learning.mission.created'])
   assert.equal(statements.filter((text) => text.includes('INSERT INTO learning_missions')).length, 1)
-  assert.equal(statements.filter((text) => text.includes('INSERT INTO agent_work_items')).length, 1)
+  assert.equal(statements.filter((text) => text === 'enqueue coordinator mission-1').length, 1)
 })
 
 test('Agent OS attempt recording binds message evidence to one project learner', async () => {

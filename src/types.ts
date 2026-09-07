@@ -1,7 +1,7 @@
 export type AgentRole = 'researcher' | 'designer' | 'engineer' | 'pm' | 'brand' | 'ops'
 export type ParticipantKind = 'agent' | 'human'
 export type Status = 'avail' | 'working' | 'thinking' | 'waiting' | 'resting'
-export type AgentCapability = 'canvas' | 'web' | 'files' | 'email' | 'documents' | 'calendar' | 'knowledge' | 'learning' | 'teacher_admin'
+export type AgentCapability = 'canvas' | 'web' | 'files' | 'email' | 'documents' | 'calendar' | 'knowledge' | 'learning' | 'teacher_admin' | 'handoffs' | 'routines'
 
 export type ProjectKind = 'PERSONAL_LEARNING' | 'TEACHING' | 'INSTITUTIONAL_COURSE'
 export type ProjectStatus =

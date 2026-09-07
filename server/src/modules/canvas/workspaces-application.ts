@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { parseCanvasActivityKind } from '../../../../src/lib/canvasEventKinds.js'
 import type { Queryable } from '../../db/queryable.js'
 import type { CanvasEvent } from '../../redis.js'
+import type { CanvasExecution, CanvasRunRow } from './execution.js'
 import type {
   CanvasActivity,
   CanvasAssignmentReport,
@@ -32,6 +33,7 @@ type PublishCanvas = (
 
 export interface CanvasWorkspacesApplicationContext {
   db: Queryable
+  execution: CanvasExecution
   transaction: Transaction
   resolveCanvasRead(companyId: string, canvasId?: string, projectId?: string): Promise<CanvasRow>
   toReport(row: ReportRow): CanvasAssignmentReport
@@ -39,7 +41,7 @@ export interface CanvasWorkspacesApplicationContext {
 }
 
 export function createCanvasWorkspacesApplication(context: CanvasWorkspacesApplicationContext) {
-  const { db, transaction, resolveCanvasRead, toReport, publishCanvas } = context
+  const { db, transaction, execution, resolveCanvasRead, toReport, publishCanvas } = context
 
   async function listCanvasWorkspaces(
     companyId: string,
@@ -171,9 +173,8 @@ export function createCanvasWorkspacesApplication(context: CanvasWorkspacesAppli
       })
       if (!canvas) throw new Error('canvas requires a conversation')
       const existing = await listAssignments(transactionDb, canvas.id)
-      if (existing.length === 0) {
-        await insertCanvasMembers(transactionDb, { canvas, members: input.members, existing })
-      }
+      if (existing.length) throw new Error('Canvas already has assignments; revise or recruit through its assignment tools')
+      await insertCanvasMembers(transactionDb, { canvas, members: input.members, existing }, execution)
       const activityId = `activity-${createHash('sha256').update(`${input.idempotencyKey}:workspace_started`).digest('hex').slice(0, 32)}`
       const row = await insertActivity(transactionDb, {
         id: activityId,
@@ -227,11 +228,12 @@ export function createCanvasWorkspacesApplication(context: CanvasWorkspacesAppli
   }
 
   async function stopCanvasWorkspace(input: { companyId: string; canvasId: string }): Promise<void> {
-    await transaction((transactionDb) => stopCanvasWorkspaceState(
-      transactionDb,
-      input.companyId,
-      input.canvasId,
-    ))
+    await transaction(async transactionDb => {
+      const canvas = await resolveCanvasRead(input.companyId, input.canvasId)
+      const { rows } = await transactionDb.query<CanvasRunRow>('SELECT * FROM canvas_agent_runs WHERE canvas_id=$1 AND company_id=$2', [input.canvasId,input.companyId])
+      for (const run of rows) await execution.cancel(transactionDb, canvas, run.work_id)
+      await stopCanvasWorkspaceState(transactionDb, input.companyId, input.canvasId)
+    })
     await publishCanvas(input.companyId, {
       kind: 'workspace.updated',
       canvasId: input.canvasId,

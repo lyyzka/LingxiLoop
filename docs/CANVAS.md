@@ -21,11 +21,11 @@ with additional work, create a typed frame, or click a frame to send focused
 feedback. Those actions steer the same durable Agent work items instead of
 creating a separate collaboration surface.
 Agent mutations use the
-Agent OS Host Bridge (`canvas.available_agents`, `canvas.start_workspace`,
+LingxiOS native tools (`canvas.available_agents`, `canvas.start_workspace`,
 `canvas.add_agents`, `canvas.get`, `canvas.create_frame`,
 `canvas.update_frame`, `canvas.append_content`, `canvas.delete_frame`, and
-`canvas.set_status`). The bridge retains Agent OS tenant authorization, work
-leases and the durable idempotency ledger.
+`canvas.set_status`). Each tool retains product tenant authorization, LingxiOS work
+leases and the durable action receipt.
 
 `start_workspace` returns an internal runtime directive. It tells the initiating
 runtime to persist its session and defer safely after the live Canvas card
@@ -46,13 +46,13 @@ Frame types are deliberately open beyond HTML: `html`, `markdown`, `document`,
 sandboxed iframe; it never executes in the LingxiLoop application origin.
 
 Canvas introduces no collaboration container, MCP service, Docker runtime,
-Screen/X11 session, browser profile, or shared filesystem. Agent OS kernels and
+Screen/X11 session, browser profile, or shared filesystem. LingxiOS kernels and
 their Agent Homes remain isolated exactly as before.
 
 The server implementation is one vertical slice under `server/src/modules/canvas`:
 `contracts.ts` owns Zod and event/DTO contracts, `router.ts` maps authenticated
 HTTP requests, `application.ts` owns validation, transactions and publication,
-and `repository.ts` owns every parameterized query and lock primitive. Agent OS
+and `repository.ts` owns every parameterized query and lock primitive. LingxiOS
 and integration callers import only the public `index.ts`; the former
 `server/src/canvas/service.ts` path does not exist.
 

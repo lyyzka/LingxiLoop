@@ -6,15 +6,13 @@ import { pathToFileURL } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { Pool } from 'pg'
 import test from 'node:test'
+import { releaseVersions } from 'lingxios'
 import { assertMigrationsCurrent, migrateDatabase } from '../db/migrate.js'
 
 const baselineUrl = new URL('../db/migrations/0001_v1_baseline.sql', import.meta.url)
 const legacyCleanupUrl = new URL('../db/migrations/0002_remove_legacy_identity.sql', import.meta.url)
 const affinityUrl = new URL('../db/migrations/0003_agent_os_session_affinity.sql', import.meta.url)
 const personalOwnerUrl = new URL('../db/migrations/0004_backfill_personal_owner_participants.sql', import.meta.url)
-const lingxiOSResetUrl = new URL('../db/migrations/0005_lingxios_v2_reset.sql', import.meta.url)
-const observableEvalUrl = new URL('../db/migrations/0006_observable_live_eval.sql', import.meta.url)
-const lingxiOSInstallUrl = new URL('../db/migrations/0007_install_lingxios.sql', import.meta.url)
 
 async function withDatabase(run: (database: Pool, connectionString: string) => Promise<void>): Promise<void> {
   const source = new URL(process.env.INTEGRATION_DATABASE_URL!)
@@ -47,7 +45,7 @@ async function withMigrations(run: (url: URL, directory: string) => Promise<void
 
 test('an empty database reaches the latest schema once and repeated migration is a no-op', async () => {
   await withDatabase(async (database) => {
-    assert.deepEqual(await migrateDatabase(database), ['0001_v1_baseline', '0002_remove_legacy_identity', '0003_agent_os_session_affinity', '0004_backfill_personal_owner_participants', '0005_lingxios_v2_reset', '0006_observable_live_eval', '0007_install_lingxios'])
+    assert.deepEqual(await migrateDatabase(database), ['0001_v1_baseline', '0002_remove_legacy_identity', '0003_agent_os_session_affinity', '0004_backfill_personal_owner_participants', '0005_lingxios_v2_reset', '0006_observable_live_eval', '0007_install_lingxios', '0008_agent_os_execution', '0009_native_agent_tools', '0010_lingxios_native_runtime'])
     assert.deepEqual(await migrateDatabase(database), [])
     await assertMigrationsCurrent(database)
     const { rows } = await database.query('SELECT version,name FROM schema_migrations ORDER BY version')
@@ -59,6 +57,9 @@ test('an empty database reaches the latest schema once and repeated migration is
       { version: 5, name: 'lingxios_v2_reset' },
       { version: 6, name: 'observable_live_eval' },
       { version: 7, name: 'install_lingxios' },
+      { version: 8, name: 'agent_os_execution' },
+      { version: 9, name: 'native_agent_tools' },
+      { version: 10, name: 'lingxios_native_runtime' },
     ])
     const { rows: evalSchema } = await database.query(`SELECT
       to_regclass('public.eval_jobs') AS jobs,
@@ -67,13 +68,13 @@ test('an empty database reaches the latest schema once and repeated migration is
     assert.deepEqual(evalSchema, [{ jobs: 'eval_jobs', policies: 'eval_gate_policies', scenario_key: true }])
     const { rows: runtimeSchema } = await database.query(`SELECT
       (SELECT version FROM lingxios.schema_version WHERE singleton) AS version,
-      (SELECT target_namespace.nspname FROM pg_constraint constraint_row
-        JOIN pg_class target ON target.oid=constraint_row.confrelid
-        JOIN pg_namespace target_namespace ON target_namespace.oid=target.relnamespace
-        WHERE constraint_row.conname='approvals_work_id_fkey') AS approval_namespace,
-      EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public'
-        AND table_name='approvals' AND column_name='legacy_work_id') AS legacy_work_id`)
-    assert.deepEqual(runtimeSchema, [{ version: 4, approval_namespace: 'lingxios', legacy_work_id: true }])
+      to_regclass('public.approvals') AS legacy_approvals, to_regclass('public.agent_work_items') AS legacy_queue,
+      EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='lingxios'
+        AND table_name='agent_work_items' AND column_name='strategy_snapshot') AS strategy_snapshot`)
+    assert.deepEqual(runtimeSchema, [{ version: releaseVersions.schema, legacy_approvals: null, legacy_queue: null, strategy_snapshot: true }])
+    await database.query("UPDATE lingxios_installation SET schema_sha256=repeat('0',64)")
+    await assert.rejects(assertMigrationsCurrent(database), /package\/schema mismatch/)
+
   })
 })
 
@@ -109,81 +110,20 @@ test('the affinity migration backfills the most recent worker without changing t
   })
 })
 
-test('the LingxiOS v2 reset clears resumable runtime state and preserves durable history', async () => {
+test('native installation rejects old run data before historical reset migrations can change it', async () => {
   await withMigrations(async (migrationsUrl, directory) => {
     await copyFile(legacyCleanupUrl, join(directory, '0002_remove_legacy_identity.sql'))
     await copyFile(affinityUrl, join(directory, '0003_agent_os_session_affinity.sql'))
     await copyFile(personalOwnerUrl, join(directory, '0004_backfill_personal_owner_participants.sql'))
-    await withDatabase(async (database) => {
+    await withDatabase(async database => {
       await migrateDatabase(database, migrationsUrl)
-      await database.query(`INSERT INTO users(id,email,display_name) VALUES('reset-user','reset@example.com','Reset User')`)
-      await database.query(
-        `INSERT INTO companies(id,name,slug,type,plan_id)
-         VALUES('reset-company','Reset','reset-company','EDUCATION','plan-personal-free')`,
-      )
-      await database.query(
-        `INSERT INTO conversations(id,kind,title,members,company_id)
-         VALUES('reset-channel','group','Reset','[]'::jsonb,'reset-company')`,
-      )
-      await database.query(
-        `INSERT INTO agent_work_items
-           (id,company_id,agent_id,channel_id,trigger_client_msg_no,reason,status,lease_token_hash,leased_by,lease_started_at,lease_expires_at,cancel_requested_at,steer_inputs,preempt_requested_at,preempt_grace_expires_at)
-         VALUES
-           ('reset-active','reset-company','agent','reset-channel','trigger-active','message','leased','hash','worker',NOW(),NOW()+INTERVAL '1 hour',NOW(),'[{"id":"steer"}]'::jsonb,NOW(),NOW()+INTERVAL '1 minute'),
-           ('reset-complete','reset-company','agent','reset-channel','trigger-complete','message','completed',NULL,NULL,NULL,NULL,NULL,'[]'::jsonb,NULL,NULL)`,
-      )
-      await database.query(
-        `INSERT INTO agent_os_workers(worker_id) VALUES('worker');
-         INSERT INTO agent_os_sessions(session_key,company_id,agent_id,channel_id) VALUES('reset-session','reset-company','agent','reset-channel');
-         INSERT INTO agent_os_session_routes(session_key,worker_id) VALUES('reset-session','worker');
-         INSERT INTO agent_os_session_leases(session_key,work_id,fence,expires_at) VALUES('reset-session','reset-active',1,NOW()+INTERVAL '1 hour')`,
-      )
-      await database.query(
-        `INSERT INTO approvals
-           (id,company_id,agent_id,channel_id,source,work_id,authorization_user_id,idempotency_key,action,run_id,summary,expires_at,status)
-         VALUES('reset-approval','reset-company','agent','reset-channel','AGENT_OS','reset-active','reset-user','reset-key','chat.send','reset-run','Reset',NOW()+INTERVAL '1 hour','APPROVED')`,
-      )
-      await database.query(
-        `INSERT INTO agent_host_actions(idempotency_key,work_id,run_id,cell_id,call_index,action,status)
-         VALUES('reset-key','reset-active','reset-run','cell',0,'chat.send','awaiting_approval'),
-               ('complete-key','reset-complete','complete-run','cell',0,'chat.send','succeeded');
-         INSERT INTO agent_runs(id,agent_id,company_id,status) VALUES('reset-run','agent','reset-company','running');
-         INSERT INTO agent_events(id,run_id,agent_id,company_id,kind,title) VALUES('reset-event','reset-run','agent','reset-company','run.started','started')`,
-      )
-
-      await copyFile(lingxiOSResetUrl, join(directory, '0005_lingxios_v2_reset.sql'))
-      assert.deepEqual(await migrateDatabase(database, migrationsUrl), ['0005_lingxios_v2_reset'])
-      const { rows: work } = await database.query(
-        `SELECT id,status,lease_token_hash,leased_by,steer_inputs,preempt_requested_at FROM agent_work_items ORDER BY id`,
-      )
-      assert.deepEqual(work, [
-        { id: 'reset-active', status: 'cancelled', lease_token_hash: null, leased_by: null, steer_inputs: [], preempt_requested_at: null },
-        { id: 'reset-complete', status: 'completed', lease_token_hash: null, leased_by: null, steer_inputs: [], preempt_requested_at: null },
-      ])
-      const { rows: approvals } = await database.query(`SELECT status,continuation_status,cancel_reason FROM approvals WHERE id='reset-approval'`)
-      assert.deepEqual(approvals, [{ status: 'CANCELLED', continuation_status: 'REJECTED', cancel_reason: 'LingxiOS v2 runtime reset' }])
-      const { rows: actions } = await database.query(`SELECT idempotency_key,status FROM agent_host_actions ORDER BY idempotency_key`)
-      assert.deepEqual(actions, [
-        { idempotency_key: 'complete-key', status: 'succeeded' },
-        { idempotency_key: 'reset-key', status: 'failed' },
-      ])
-      const { rows: runtimeState } = await database.query(
-        `SELECT
-          (SELECT COUNT(*)::int FROM agent_os_sessions) AS sessions,
-          (SELECT COUNT(*)::int FROM agent_os_session_leases) AS leases,
-          (SELECT COUNT(*)::int FROM agent_os_session_routes) AS routes,
-          (SELECT COUNT(*)::int FROM agent_os_workers) AS workers,
-          (SELECT COUNT(*)::int FROM agent_runs WHERE id='reset-run') AS runs,
-          (SELECT COUNT(*)::int FROM agent_events WHERE id='reset-event') AS events`,
-      )
-      assert.deepEqual(runtimeState, [{ sessions: 0, leases: 0, routes: 0, workers: 0, runs: 1, events: 1 }])
-      await copyFile(observableEvalUrl, join(directory, '0006_observable_live_eval.sql'))
-      await copyFile(lingxiOSInstallUrl, join(directory, '0007_install_lingxios.sql'))
-      assert.deepEqual(await migrateDatabase(database, migrationsUrl), ['0006_observable_live_eval', '0007_install_lingxios'])
-      const { rows: migratedApproval } = await database.query(
-        `SELECT work_id,legacy_work_id,status FROM approvals WHERE id='reset-approval'`,
-      )
-      assert.deepEqual(migratedApproval, [{ work_id: null, legacy_work_id: 'reset-active', status: 'CANCELLED' }])
+      await database.query(`INSERT INTO companies(id,name,slug,type,plan_id) VALUES('tenant','Test','test','EDUCATION','plan-personal-free')`)
+      await database.query(`INSERT INTO agent_work_items(id,company_id,agent_id,channel_id,trigger_client_msg_no,reason,status)
+        VALUES('old-run','tenant','agent','room','old-message','message','leased')`)
+      await assert.rejects(migrateDatabase(database), /requires an empty retired runtime/)
+      assert.deepEqual((await database.query("SELECT id,status FROM agent_work_items")).rows, [{ id: 'old-run', status: 'leased' }])
+      assert.deepEqual((await database.query('SELECT MAX(version) AS version FROM schema_migrations')).rows, [{ version: 4 }])
+      assert.deepEqual((await database.query("SELECT to_regclass('lingxios.agent_work_items') AS queue")).rows, [{ queue: null }])
     })
   })
 })
@@ -230,11 +170,11 @@ test('concurrent migrators serialize and apply each migration once', async () =>
     try {
       const results = await Promise.all([migrateDatabase(database), migrateDatabase(second)])
       assert.deepEqual(results.map((result) => [...result]).sort((a, b) => b.length - a.length), [
-        ['0001_v1_baseline', '0002_remove_legacy_identity', '0003_agent_os_session_affinity', '0004_backfill_personal_owner_participants', '0005_lingxios_v2_reset', '0006_observable_live_eval', '0007_install_lingxios'],
+        ['0001_v1_baseline', '0002_remove_legacy_identity', '0003_agent_os_session_affinity', '0004_backfill_personal_owner_participants', '0005_lingxios_v2_reset', '0006_observable_live_eval', '0007_install_lingxios', '0008_agent_os_execution', '0009_native_agent_tools', '0010_lingxios_native_runtime'],
         [],
       ])
       const { rows } = await database.query('SELECT COUNT(*)::int AS count FROM schema_migrations')
-      assert.deepEqual(rows, [{ count: 7 }])
+      assert.deepEqual(rows, [{ count: 10 }])
     } finally {
       await second.end()
     }

@@ -1,6 +1,11 @@
 import { documentCollaboration } from './collaboration-facade.js'
 import { documentsApplication } from './facade.js'
 import { documentMentionApplication } from './mention-facade.js'
+import { createDocumentTools } from './agent-tools.js'
+import { normalizeStorageKey, storageKeyFromPublicUrl, signedUrlExpiresSoon, storage } from '../../storage.js'
+export { createDocumentTools } from './agent-tools.js'
+export const documentTools = createDocumentTools({ normalizeKey: value => normalizeStorageKey(value ?? ''),
+  keyFromPublicUrl: value => storageKeyFromPublicUrl(value ?? ''), signedUrlExpiresSoon, publicUrl: key => storage.publicUrl(key) })
 export { projectDocumentIds } from './collaboration-facade.js'
 
 export const subscribe = documentCollaboration.subscribe

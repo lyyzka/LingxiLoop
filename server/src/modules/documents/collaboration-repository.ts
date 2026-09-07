@@ -1,5 +1,20 @@
 import type { Queryable } from '../../db/queryable.js'
 
+/** One MVCC snapshot includes compaction and its remaining update tail. */
+export async function readPersistedDocument(db: Queryable, documentId: string, companyId: string) {
+  const { rows } = await db.query<{ revision: string; state_bytes: Buffer | null; updates: Buffer[] | null }>(`SELECT document.updated_at::text AS revision,
+      snapshot.state_bytes,ARRAY(SELECT update_log.update_bytes FROM document_updates update_log
+        WHERE update_log.document_id=document.id AND update_log.id>COALESCE(snapshot.snapshot_at_update_id,0)
+        ORDER BY update_log.id) AS updates
+    FROM documents document LEFT JOIN document_snapshots snapshot ON snapshot.document_id=document.id
+    WHERE document.id=$1 AND document.company_id=$2`, [documentId,companyId])
+  const result = rows[0]
+  if (!result) throw new Error('document not found')
+  const bytes = (result.state_bytes?.byteLength ?? 0) + (result.updates ?? []).reduce((total, update) => total + update.byteLength, 0)
+  if (bytes > 16 * 1024 * 1024) throw new Error('document snapshot exceeds 16 MiB')
+  return result
+}
+
 export async function lockTenantDocument(
   db: Queryable,
   documentId: string,

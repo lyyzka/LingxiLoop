@@ -44,6 +44,7 @@ export interface ImMessagesInfrastructure {
     userId: string,
     beforeSequence?: number,
     repairProfile?: ImChannelProfile,
+    signal?: AbortSignal,
   ): Promise<ImMessageEnvelope[]>
   listConversations(userId: string): Promise<Array<{
     channelId: string
@@ -120,6 +121,35 @@ export class ImMessagesApplication {
       ? profile.members.filter((member): member is string => typeof member === 'string')
       : []
     return this.historyFromProfile(input, profile, members[0] ?? '')
+  }
+
+  /** Stable IDs identify the request even after its message leaves the recent history window. */
+  async readMessages(input: { companyId: string; userId: string; channelId: string; messageIds: string[]; signal?: AbortSignal }): Promise<Array<ImMessageEnvelope & { channelType: number }> | null> {
+    if (input.messageIds.length > 50 || input.messageIds.some(id => !id.trim() || id.length > 2000)) throw new Error('invalid message identities')
+    const profile = await channelProfileForMember(this.infrastructure.db, input)
+    if (!profile) return null
+    const signal = input.signal ?? AbortSignal.timeout(30_000), missing = new Set(input.messageIds)
+    const found: Array<ImMessageEnvelope & { channelType: number }> = []
+    const channelType = Number(profile.channelType ?? 2)
+    let beforeSequence = 0
+    // ponytail: bounded-memory history scan; use a native ID index if old-message lookup throughput requires it.
+    while (missing.size) {
+      signal.throwIfAborted()
+      const page = await this.infrastructure.syncMessages(input.channelId, channelType, 200, input.userId, beforeSequence, undefined, signal)
+      if (!page.length) break
+      for (const message of page) {
+        if (message.channelId !== input.channelId || !Number.isSafeInteger(message.messageSeq) || message.messageSeq < 1) throw new Error('invalid scoped message history')
+        if (missing.has(message.clientMsgNo) || missing.has(message.messageId)) {
+          missing.delete(message.clientMsgNo); missing.delete(message.messageId)
+          found.push({ ...message, channelType })
+        }
+      }
+      const next = Math.min(...page.map(message => message.messageSeq))
+      if (next <= 1) break
+      if (beforeSequence && next >= beforeSequence) throw new Error('message history cursor did not advance')
+      beforeSequence = next
+    }
+    return found
   }
 
   private async historyFromProfile(

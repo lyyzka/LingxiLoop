@@ -20,6 +20,8 @@ const CAPABILITY_OPTIONS: Array<{ id: AgentCapability; label: string; descriptio
   { id: 'calendar', label: '日历', description: '访问日历和日程相关能力' },
   { id: 'knowledge', label: '知识库', description: '检索并使用当前学习区的知识资料' },
   { id: 'learning', label: '教学', description: '在课程范围内规划学习任务、记录证据并提出形成性评价' },
+  { id: 'handoffs', label: '协作交接', description: '向同一会话的其他 Agent 委派任务并跟踪结果' },
+  { id: 'routines', label: '定时任务', description: '创建经审批的定时任务并查看运行记录' },
 ]
 const DEFAULT_CAPABILITIES: AgentCapability[] = ['canvas', 'web', 'files', 'email', 'documents', 'knowledge']
 

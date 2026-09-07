@@ -5,7 +5,7 @@ import type { Queryable } from '../../db/queryable.js'
 import type { ImChannelProfile } from '../../im/types.js'
 import { wukongClient } from '../../im/wukong.js'
 import { inc } from '../../metrics.js'
-import { audit, auditInTransaction } from '../identity/public.js'
+import { auditInTransaction } from '../identity/public.js'
 import { ProjectLifecycleApplication } from '../projects/public.js'
 import {
   bindLearningCourseRoom,
@@ -63,11 +63,9 @@ import {
   loadTeacherOverviewRows,
 } from './teacher-reporting-repository.js'
 import {
-  findTeacherApprovalTriggerAuthor,
   findTeacherDigestSchedule,
   findTeacherScopeBinding,
   findTeacherTurnCounts,
-  pauseTeacherDigestForMissingTeacher,
 } from './teacher-runtime-repository.js'
 import type {
   LearningActivityType,
@@ -148,35 +146,15 @@ interface TeacherScope {
   mode: 'teacher' | 'routine' | 'approval'
 }
 
-async function resolveTeacherTriggerAuthor(work: AgentActionContext, db: Queryable): Promise<string | undefined> {
-  if (work.reason === 'routine') return undefined
-  if (work.reason === 'resume' && work.triggerClientMsgNo.startsWith('approval:')) {
-    return findTeacherApprovalTriggerAuthor(db, {
-      companyId: work.companyId,
-      agentId: work.agentId,
-      channelId: work.channelId,
-      approvalId: work.triggerClientMsgNo.slice('approval:'.length),
-    })
-  }
-  const messages = await wukongClient().syncMessages(work.channelId, 2, 80, work.agentId)
-  return messages.find((message) => message.clientMsgNo === work.triggerClientMsgNo)?.fromUid
-}
-
-export async function resolveTeacherScope(work: AgentActionContext, db: Queryable): Promise<TeacherScope> {
+export async function resolveTeacherScope(work: Pick<AgentActionContext, 'companyId' | 'agentId' | 'channelId' | 'authorizationUserId' | 'reason'>, db: Queryable): Promise<TeacherScope> {
   const row = await findTeacherScopeBinding(db, work.companyId, work.agentId, work.channelId)
-  if (!row) { inc('learning.teacher_agent.authorization_denied', { reason: 'scope' }); throw new Error('teacher Agent is not registered for this room') }
-  if (row.room_status !== 'active') throw new Error('teacher room is closed')
-  if(work.reason==='routine'&&!row.has_teacher){
-    await pauseTeacherDigestForMissingTeacher(db,work.companyId,work.agentId,work.channelId)
-    throw new Error('teacher digest paused because the course has no teacher')
-  }
-  const teacherId = await resolveTeacherTriggerAuthor(work, db)
-  if (work.reason !== 'routine') {
-    if (!teacherId) throw new Error('teacher action requires a human trigger')
-    await requireLearningCourseRole(db, {
-      companyId: row.company_id, courseId: row.course_id, userId: teacherId, role: 'teacher',
-    })
-  }
+  if (!row) { inc('learning.teacher_agent.authorization_denied', { reason: 'scope' }); throw Object.assign(new Error('teacher Agent is not registered for this room'), { code: 'teacher_scope_revoked' }) }
+  if (row.room_status !== 'active' || row.course_status === 'ARCHIVED' || !row.has_teacher) throw Object.assign(new Error('teacher room is closed or has no teacher'), { code: 'teacher_scope_revoked' })
+  const teacherId = work.authorizationUserId
+  if (!teacherId) throw new Error('teacher action requires its original human principal')
+  await requireLearningCourseRole(db, {
+    companyId: row.company_id, courseId: row.course_id, userId: teacherId, role: 'teacher',
+  })
   return {
     companyId:row.company_id,projectId:row.project_id,projectName:row.project_name,
     courseId:row.course_id,courseTitle:row.course_title,courseStatus:row.course_status,
@@ -240,7 +218,8 @@ export async function sendTeacherAgentWelcome(companyId:string,courseId:string,d
   })
 }
 
-export async function syncTeacherRoomMembers(companyId:string,courseId:string,db:Queryable,transaction:TeacherTransaction):Promise<void>{
+export async function syncTeacherRoomMembers(companyId:string,courseId:string,db:Queryable,transaction:TeacherTransaction,
+  syncChannel:(profile:ImChannelProfile)=>Promise<unknown> = profile=>wukongClient().upsertChannel(profile)):Promise<void>{
   const persist=async(persistence:Queryable)=>{
     const room=await findActiveTeacherRoom(persistence,companyId,courseId)
     if(!room)return undefined
@@ -252,7 +231,7 @@ export async function syncTeacherRoomMembers(companyId:string,courseId:string,db
   }
   const profile=await transaction(persist)
   if(profile){
-    await wukongClient().upsertChannel(profile as unknown as ImChannelProfile)
+    await syncChannel(profile as unknown as ImChannelProfile)
   }
 }
 
@@ -329,7 +308,7 @@ async function attemptDetail(scope:TeacherScope,attemptId:string,db:Queryable):P
     attemptId,
   )
   if(!attempt)throw new Error('attempt is outside the current course')
-  await audit({kind:'teacher_agent_attempt_access',userId:scope.teacherId,companyId:scope.companyId,detail:{courseId:scope.courseId,attemptId,agentId:scope.agentId}})
+  await auditInTransaction(db,{kind:'teacher_agent_attempt_access',userId:scope.teacherId,companyId:scope.companyId,detail:{courseId:scope.courseId,attemptId,agentId:scope.agentId}})
   inc('learning.teacher_agent.evidence_accessed')
   return attempt
 }
@@ -367,7 +346,7 @@ async function configureDigest(scope:TeacherScope,args:Record<string,unknown>,db
   const nextRunAt=await nextTeacherDigestRun(schedule,timezone,new Date(),db)
   await upsertTeacherDigest(db,{
     id,companyId:scope.companyId,agentId:scope.agentId,roomId:scope.roomId,
-    schedule,timezone,nextRunAt,teacherId:scope.teacherId,
+    schedule,timezone,nextRunAt,teacherId:scope.teacherId,projectId:scope.projectId,
   })
   inc('learning.teacher_agent.digest_configured',{frequency})
   return {frequency,timezone,localTime,...(weekday?{weekday}:{}),status:'active',nextRunAt}
@@ -437,7 +416,8 @@ export async function assertTeacherApprovalFresh(input:{channelId:string;company
 
 export function teacherActionRequiresApproval(action:string):boolean{return action.startsWith('teacher.')&&APPROVAL_METHODS.has(action.slice('teacher.'.length))}
 
-export async function executeTeacherAction(work:AgentActionContext,method:string,args:Record<string,unknown>,db:Queryable,transaction:TeacherTransaction):Promise<unknown>{
+export async function executeTeacherAction(work:AgentActionContext,method:string,args:Record<string,unknown>,db:Queryable,transaction:TeacherTransaction,
+  syncChannel?:(profile:ImChannelProfile)=>Promise<unknown>):Promise<unknown>{
   const scope=await resolveTeacherScope(work,db)
   if(scope.mode==='routine'&&WRITE_METHODS.has(method))throw new Error('scheduled teacher summaries are read-only')
   if(method==='current')return loadTeacherTurnContext(work,db)
@@ -460,14 +440,14 @@ export async function executeTeacherAction(work:AgentActionContext,method:string
     return createLearningObjectives(db, transaction, {
       companyId: scope.companyId,
       courseId: scope.courseId,
-      actorId: scope.teacherId,
-      actorKind: 'teacher',
+      actorId: scope.agentId,
+      actorKind: 'agent',
       objectives: values,
     })
   }
   if(method==='draft_activity'){
     const objectiveIds=args.objectiveIds??args.objective_ids
-    return createLearningActivity(db,transaction,{companyId:scope.companyId,courseId:scope.courseId,actorId:scope.teacherId,actorKind:'teacher',title:textArg(args,'title'),instructions:textArg(args,'instructions'),type:textArg(args,'type') as LearningActivityType,evaluationMode:(optionalText(args,'evaluationMode','evaluation_mode')??'TEACHER_REQUIRED') as LearningEvaluationMode,targetLevel:Number(args.targetLevel??args.target_level??2),rubric:Array.isArray(args.rubric)?args.rubric:[],objectiveIds:Array.isArray(objectiveIds)?objectiveIds.map(String):[],...(optionalText(args,'dueAt','due_at')?{dueAt:optionalText(args,'dueAt','due_at')}:{})})
+    return createLearningActivity(db,transaction,{companyId:scope.companyId,courseId:scope.courseId,actorId:scope.agentId,actorKind:'agent',title:textArg(args,'title'),instructions:textArg(args,'instructions'),type:textArg(args,'type') as LearningActivityType,evaluationMode:(optionalText(args,'evaluationMode','evaluation_mode')??'TEACHER_REQUIRED') as LearningEvaluationMode,targetLevel:Number(args.targetLevel??args.target_level??2),rubric:Array.isArray(args.rubric)?args.rubric:[],objectiveIds:Array.isArray(objectiveIds)?objectiveIds.map(String):[],...(optionalText(args,'dueAt','due_at')?{dueAt:optionalText(args,'dueAt','due_at')}:{})})
   }
   if(method==='update_course'){
     const title=optionalText(args,'title');const description=optionalText(args,'description')
@@ -492,7 +472,7 @@ export async function executeTeacherAction(work:AgentActionContext,method:string
       command:command as 'END'|'ENTER_READ_ONLY'|'ARCHIVE',
     })
   }
-  if(method==='set_teacher_membership'){const userId=textArg(args,'userId','user_id');const enabled=boolArg(args);await setLearningCourseMembership(db,transaction,{companyId:scope.companyId,courseId:scope.courseId,managerId:scope.teacherId,userId,role:'teacher',enabled});await syncTeacherRoomMembers(scope.companyId,scope.courseId,db,transaction);return {ok:true}}
+  if(method==='set_teacher_membership'){const userId=textArg(args,'userId','user_id');const enabled=boolArg(args);await setLearningCourseMembership(db,transaction,{companyId:scope.companyId,courseId:scope.courseId,managerId:scope.teacherId,userId,role:'teacher',enabled});await syncTeacherRoomMembers(scope.companyId,scope.courseId,db,transaction,syncChannel);return {ok:true}}
   if(method==='review_evaluation'){await reviewLearningEvaluation(db,transaction,inc,{companyId:scope.companyId,courseId:scope.courseId,evaluationId:textArg(args,'evaluationId','evaluation_id'),teacherId:scope.teacherId,decision:optionalText(args,'decision')==='reject'?'reject':'accept',reason:textArg(args,'reason')});return {ok:true}}
   throw new Error(`unsupported teacher action: ${method}`)
 }

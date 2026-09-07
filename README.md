@@ -1,6 +1,6 @@
 # LingxiLoop
 
-The old Agent OS is retired. The Web process owns authenticated LingxiOS ingress and control operations; the Worker is the only process that claims LingxiOS work. The server pins a vendored LingxiOS release artifact so clean builds do not depend on an unpublished registry version.
+LingxiLoop uses the published `lingxios@2.1.0` runtime. The Web process owns authenticated ingress and control operations; the Worker is the only process that claims LingxiOS work.
 
 LingxiLoop is a Web learning-collaboration product with direct messages, Study Rooms, and Labs.
 
@@ -34,7 +34,7 @@ npm run dev:preview
 
 Open `http://localhost:5180`. For direct process development, run `npm run dev:all`. Electron can be run locally with `npm run electron:dev`; every package command is fixed to `--publish never`.
 
-PostgreSQL starts from [`0001_v1_baseline.sql`](server/src/db/migrations/0001_v1_baseline.sql) and evolves only through new numbered migrations. `npm run db:migrate` takes an advisory lock, verifies recorded names and checksums, and applies each pending file in its own transaction. It refuses a non-empty database without migration history. Migration `0007_install_lingxios.sql` installs the pinned package schema and moves new Agent OS approvals to its namespaced work table; application startup never executes package DDL dynamically. Web and Worker only verify that migrations are current.
+PostgreSQL starts from [`0001_v1_baseline.sql`](server/src/db/migrations/0001_v1_baseline.sql) and evolves only through new numbered migrations. `npm run db:migrate` takes an advisory lock and verifies names and checksums. The native runtime cutover is atomic: migration `0010_lingxios_native_runtime.sql` rejects any old runtime data, removes the retired schema, installs the exact package schema, and records its version and SHA-256 manifest. Application startup only checks migration and package readiness; Web and Worker never execute DDL.
 
 For the packaged service topology:
 

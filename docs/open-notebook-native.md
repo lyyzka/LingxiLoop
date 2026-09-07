@@ -12,12 +12,11 @@ application image. It contains no Next.js/Node runtime and starts exactly the
 
 The Compose stacks start `open-notebook` and a digest-pinned `surrealdb` on a
 dedicated internal backplane. Open Notebook additionally has an isolated
-egress-only bridge for provider and URL access; Agent OS is attached to neither
+egress-only bridge for provider and URL access; LingxiOS Workers are attached to neither
 knowledge network. Only the LingxiLoop server spans the application and
 knowledge backplanes, and neither knowledge service publishes a host port. Browsers keep using
 LingxiLoop's existing `/projects/:id/sources` and `/conversations/:id/sources`
-routes; Agent OS also reaches knowledge only through the LingxiLoop Host
-Bridge.
+routes; Agents reach knowledge only through LingxiLoop's authorized native tools.
 
 The internal API is an allowlist for notebook creation/update, asynchronous
 Source creation/status/retry/delete, Source-only scoped search, `/health`, and
@@ -83,7 +82,7 @@ content extraction, chunking/embedding, ingestion-state synchronization, and
 scoped retrieval of citation-ready excerpts. The LingxiLoop gateway never
 accepts or returns Open Notebook external IDs to a browser or Agent.
 
-The Agent OS knowledge contract is `native-v2`. For each turn, lexical search
+The LingxiOS knowledge contract is defined by the product's native Zod schemas. For each turn, lexical search
 uses the raw current question so exact names survive, while vector search uses
 at most 2,000 characters made from the question, the replied-to message, and
 the two most recent earlier learner messages. Both authorized searches run in

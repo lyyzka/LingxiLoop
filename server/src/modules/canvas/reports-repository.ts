@@ -1,7 +1,6 @@
-import { createHash } from 'node:crypto'
 import type { Queryable } from '../../db/queryable.js'
 import type { CanvasAssignmentStatus, CanvasEvidenceRef, CanvasReportVerdict, CanvasWorkspaceStatus } from './contracts.js'
-import type { CanvasRow, ReportRow } from './repository-types.js'
+import type { ReportRow } from './repository-types.js'
 
 export async function missingEvidenceRefs(db: Queryable, args: {
   companyId: string; canvasId: string; refs: CanvasEvidenceRef[]
@@ -16,7 +15,7 @@ export async function missingEvidenceRefs(db: Queryable, args: {
          WHERE report.canvas_id=$1 AND report.company_id=$2
        UNION ALL SELECT 'document',document.id FROM documents document
          JOIN canvases canvas ON canvas.company_id=document.company_id
-         WHERE canvas.id=$1 AND canvas.company_id=$2
+         WHERE canvas.id=$1 AND canvas.company_id=$2 AND document.project_id=canvas.project_id
            AND (document.conversation_id IS NULL OR document.conversation_id=canvas.conversation_id)
        UNION ALL SELECT 'source',source.id FROM knowledge_sources source
          JOIN canvases canvas ON canvas.project_id=source.project_id
@@ -41,19 +40,22 @@ export async function lockReportWork(db: Queryable, args: {
     canvas_assignment_id: string | null
     execution_role: 'specialist' | 'verifier' | 'reporter'
     project_id: string | null
+    principal_id: string; session_id: string; request_version: number
   }>(
-    `SELECT work.canvas_assignment_id,work.execution_role,canvas.project_id
-       FROM agent_work_items work
-       JOIN canvases canvas ON canvas.id=work.canvas_id AND canvas.company_id=work.company_id
-      WHERE work.id=$1 AND work.company_id=$2 AND work.agent_id=$3 AND work.canvas_id=$4 FOR UPDATE`,
+    `SELECT work.assignment_id AS canvas_assignment_id,work.execution_role,canvas.project_id,
+       work.principal_id,work.session_id,work.request_version
+       FROM canvas_agent_runs work JOIN canvases canvas ON canvas.id=work.canvas_id AND canvas.company_id=work.company_id
+       LEFT JOIN canvas_agent_assignments assignment ON assignment.id=work.assignment_id
+      WHERE work.work_id=$1 AND work.company_id=$2 AND work.agent_id=$3 AND work.canvas_id=$4
+        AND (work.execution_role='reporter' OR assignment.work_id=work.work_id) FOR UPDATE OF work,canvas`,
     [args.workId, args.companyId, args.agentId, args.canvasId],
   )
   return rows[0] ?? null
 }
 
 export async function reportIdentity(db: Queryable, companyId: string, canvasId: string, reportId: string) {
-  const { rows } = await db.query<{ author_agent_id: string; assignment_id: string | null }>(
-    `SELECT author_agent_id,assignment_id FROM canvas_assignment_reports
+  const { rows } = await db.query<{ author_agent_id: string; assignment_id: string | null; execution_role: string }>(
+    `SELECT author_agent_id,assignment_id,execution_role FROM canvas_assignment_reports
       WHERE id=$1 AND canvas_id=$2 AND company_id=$3`,
     [reportId, canvasId, companyId],
   )
@@ -83,16 +85,18 @@ export async function insertReport(db: Queryable, args: {
   sourceEvidenceIds: string[]
   confidence: number; unresolved: string[]; nextStep: string | null; verifiesReportId: string | null
   disconfirmingChecks: string[]; verdict: CanvasReportVerdict | null; consumedReportIds: string[]; conflictResolution: unknown[]
+  workId: string; requestVersion: number
 }) {
+  if (args.assignmentId) await db.query('UPDATE canvas_assignment_reports SET assignment_id=NULL WHERE assignment_id=$1 AND id<>$2', [args.assignmentId,args.id])
   const { rows } = await db.query<ReportRow>(
     `INSERT INTO canvas_assignment_reports(id,company_id,canvas_id,assignment_id,author_agent_id,execution_role,
-       finding,evidence_id,source_evidence_ids,confidence,unresolved,next_step,verifies_report_id,disconfirming_checks,verdict,consumed_report_ids,conflict_resolution)
-     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11::jsonb,$12,$13,$14::jsonb,$15,$16::jsonb,$17::jsonb)
+       finding,evidence_id,source_evidence_ids,confidence,unresolved,next_step,verifies_report_id,disconfirming_checks,verdict,consumed_report_ids,conflict_resolution,work_id,request_version)
+     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11::jsonb,$12,$13,$14::jsonb,$15,$16::jsonb,$17::jsonb,$18,$19)
      ON CONFLICT(id) DO UPDATE SET id=canvas_assignment_reports.id RETURNING *`,
     [args.id, args.companyId, args.canvasId, args.assignmentId, args.agentId, args.executionRole, args.finding,
       args.evidenceId, JSON.stringify(args.sourceEvidenceIds), args.confidence, JSON.stringify(args.unresolved), args.nextStep,
       args.verifiesReportId, JSON.stringify(args.disconfirmingChecks), args.verdict,
-      JSON.stringify(args.consumedReportIds), JSON.stringify(args.conflictResolution)],
+      JSON.stringify(args.consumedReportIds), JSON.stringify(args.conflictResolution), args.workId, args.requestVersion],
   )
   return rows[0]
 }
@@ -102,7 +106,8 @@ export async function workReportContext(db: Queryable, workId: string, companyId
     reason: string; canvas_id: string | null; canvas_assignment_id: string | null
     execution_role: 'specialist' | 'verifier' | 'reporter'
   }>(
-    `SELECT reason,canvas_id,canvas_assignment_id,execution_role FROM agent_work_items WHERE id=$1 AND company_id=$2`,
+    `SELECT CASE WHEN execution_role='reporter' THEN 'canvas_summary' ELSE 'canvas_worker' END AS reason,
+       canvas_id,assignment_id AS canvas_assignment_id,execution_role FROM canvas_agent_runs WHERE work_id=$1 AND company_id=$2`,
     [workId, companyId],
   )
   return rows[0] ?? null
@@ -118,100 +123,23 @@ export async function reportExists(db: Queryable, args: { canvasId?: string; ass
 export async function completeCanvasWorkState(db: Queryable, input: {
   workId: string; companyId: string; status: 'completed' | 'failed' | 'cancelled'; resultText?: string; error?: string
 }) {
-  const { rows: works } = await db.query<{
-    canvas_id: string | null; canvas_assignment_id: string | null; reason: string; agent_id: string
-  }>(
-    `SELECT canvas_id,canvas_assignment_id,reason,agent_id FROM agent_work_items
-      WHERE id=$1 AND company_id=$2 FOR UPDATE`,
-    [input.workId, input.companyId],
-  )
-  const work = works[0]
-  if (!work?.canvas_id) return { canvasId: null, completion: null, workspace: null }
-  if (work.reason === 'canvas_summary') {
-    if (input.status === 'completed' && !await reportExists(db, { canvasId: work.canvas_id, reporter: true })) {
-      throw new Error('reporter work requires a learning_report_v1 submission before completion')
-    }
+  const { rows } = await db.query<{ canvas_id: string; assignment_id: string | null; agent_id: string; execution_role: string }>(
+    `SELECT run.* FROM canvas_agent_runs run LEFT JOIN canvas_agent_assignments assignment ON assignment.id=run.assignment_id
+      WHERE run.work_id=$1 AND run.company_id=$2 AND (run.execution_role='reporter' OR assignment.work_id=run.work_id)`,
+    [input.workId,input.companyId])
+  const run = rows[0]
+  if (!run) return { canvasId: null, completion: null, workspace: null }
+  if (run.execution_role === 'reporter') {
     const { rows } = await db.query<{ status: CanvasWorkspaceStatus; conversation_id: string | null; title: string; goal: string }>(
-      `UPDATE canvases SET status=$2,summary=$3,completed_at=NOW(),updated_at=NOW()
-        WHERE id=$1 AND status='summarizing' RETURNING status,conversation_id,title,goal`,
-      [work.canvas_id, input.status === 'completed' ? 'completed' : 'failed', input.resultText ?? input.error ?? null],
-    )
-    return { canvasId: work.canvas_id, completion: null, workspace: rows[0] ?? null }
+      `UPDATE canvases SET status=$2,summary=$3,completed_at=NOW(),updated_at=NOW() WHERE id=$1 AND status IN ('active','summarizing')
+        RETURNING status,conversation_id,title,goal`,
+      [run.canvas_id,input.status === 'completed' ? 'completed' : input.status === 'cancelled' ? 'stopped' : 'failed',input.resultText ?? input.error ?? null])
+    return { canvasId: run.canvas_id, completion: null, workspace: rows[0] ?? null }
   }
-  if (!work.canvas_assignment_id) return { canvasId: work.canvas_id, completion: null, workspace: null }
-  if (input.status === 'completed' && !await reportExists(db, { assignmentId: work.canvas_assignment_id })) {
-    throw new Error('canvas worker requires a learning_report_v1 submission before completion')
-  }
-  const assignmentStatus: CanvasAssignmentStatus = input.status === 'completed'
-    ? 'completed' : input.status === 'failed' ? 'failed' : 'cancelled'
   const { rows: completed } = await db.query<{ active_frame_id: string | null }>(
     `UPDATE canvas_agent_assignments SET status=$2,result=$3,error=$4,completed_at=NOW(),updated_at=NOW()
-      WHERE id=$1 AND status NOT IN ('completed','failed','cancelled') RETURNING active_frame_id`,
-    [work.canvas_assignment_id, assignmentStatus, input.resultText ?? null, input.error ?? null],
-  )
-  await db.query(
-    `WITH RECURSIVE blocked_descendants(id) AS (
-       SELECT d.assignment_id FROM canvas_assignment_dependencies d
-        JOIN canvas_agent_assignments parent ON parent.id=d.depends_on_assignment_id
-        WHERE parent.canvas_id=$1 AND parent.status IN ('failed','cancelled')
-       UNION SELECT d.assignment_id FROM canvas_assignment_dependencies d
-        JOIN blocked_descendants b ON b.id=d.depends_on_assignment_id
-     ) UPDATE canvas_agent_assignments child SET status='blocked',error='Blocked by a failed or stopped dependency',
-       completed_at=NOW(),updated_at=NOW()
-       WHERE child.id IN (SELECT id FROM blocked_descendants) AND child.status='blocked' AND child.error IS NULL`,
-    [work.canvas_id],
-  )
-  await db.query(
-    `UPDATE agent_work_items work SET status='cancelled',cancel_requested_at=COALESCE(cancel_requested_at,NOW()),updated_at=NOW()
-       FROM canvas_agent_assignments assignment
-      WHERE work.canvas_assignment_id=assignment.id AND assignment.canvas_id=$1
-        AND assignment.status='blocked' AND assignment.error IS NOT NULL AND work.status='blocked'`,
-    [work.canvas_id],
-  )
-  await db.query(
-    `WITH ready AS (
-       SELECT child.id,child.work_id FROM canvas_agent_assignments child
-        WHERE child.canvas_id=$1 AND child.status='blocked' AND child.error IS NULL
-          AND NOT EXISTS (SELECT 1 FROM canvas_assignment_dependencies d
-            JOIN canvas_agent_assignments parent ON parent.id=d.depends_on_assignment_id
-            WHERE d.assignment_id=child.id AND parent.status <> 'completed')
-     ) UPDATE canvas_agent_assignments a SET status='queued',updated_at=NOW() FROM ready WHERE a.id=ready.id`,
-    [work.canvas_id],
-  )
-  await db.query(
-    `UPDATE agent_work_items w SET status='queued',available_at=NOW(),updated_at=NOW()
-      FROM canvas_agent_assignments a
-      WHERE w.canvas_assignment_id=a.id AND a.canvas_id=$1 AND a.status='queued' AND w.status='blocked'`,
-    [work.canvas_id],
-  )
-  const { rows: unfinished } = await db.query(
-    `SELECT 1 FROM canvas_agent_assignments WHERE canvas_id=$1 AND
-      (status IN ('queued','working','waiting') OR (status='blocked' AND error IS NULL)) LIMIT 1`,
-    [work.canvas_id],
-  )
-  if (!unfinished[0]) {
-    const { rows } = await db.query<CanvasRow>(
-      `UPDATE canvases SET status='summarizing',updated_at=NOW() WHERE id=$1 AND status='active' RETURNING *`,
-      [work.canvas_id],
-    )
-    const canvas = rows[0]
-    if (canvas?.initiator_agent_id && canvas.conversation_id) {
-      if (!canvas.authorization_user_id) throw new Error('Canvas has no persisted human authorization principal')
-      const summaryWorkId = `canvas-summary-${createHash('sha256').update(canvas.id).digest('hex').slice(0, 24)}`
-      await db.query(
-        `INSERT INTO agent_work_items
-           (id,company_id,authorization_user_id,agent_id,channel_id,thread_root_client_msg_no,trigger_client_msg_no,reason,status,priority,canvas_id,execution_role)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,'canvas_summary','queued',200,$8,'reporter') ON CONFLICT (id) DO NOTHING`,
-        [summaryWorkId, canvas.company_id, canvas.authorization_user_id, canvas.initiator_agent_id,
-          canvas.conversation_id, canvas.trigger_client_msg_no, `canvas-summary:${canvas.id}`, canvas.id],
-      )
-    }
-  }
-  return {
-    canvasId: work.canvas_id,
-    completion: completed[0]
-      ? { agentId: work.agent_id, frameId: completed[0].active_frame_id, status: assignmentStatus }
-      : null,
-    workspace: null,
-  }
+      WHERE id=$1 AND work_id=$5 AND status NOT IN ('completed','failed','cancelled') RETURNING active_frame_id`,
+    [run.assignment_id,input.status,input.resultText ?? null,input.error ?? null,input.workId])
+  return { canvasId: run.canvas_id, workspace: null, completion: completed[0]
+    ? { agentId: run.agent_id, frameId: completed[0].active_frame_id, status: input.status as CanvasAssignmentStatus } : null }
 }

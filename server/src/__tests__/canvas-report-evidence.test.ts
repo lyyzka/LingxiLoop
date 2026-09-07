@@ -9,9 +9,12 @@ test('Canvas reports persist only canonical Evidence IDs for validated source re
   let reportInsert: { text: string; params?: readonly unknown[] } | undefined
   const db: Queryable = {
     query: async (text, params) => {
-      if (text.includes('FROM agent_work_items work')) return { rows: [{
+      if (text.includes('FROM canvas_agent_runs work')) return { rows: [{
         canvas_assignment_id: 'assignment-1', execution_role: 'specialist', project_id: 'project-1',
+        principal_id: 'human-1', session_id: 'room-1', request_version: 1,
       }], rowCount: 1 } as never
+      if (text.includes('SELECT id,revision FROM canvas_frames')) return { rows: [{ id: 'frame-1', revision: 2 }], rowCount: 1 } as never
+      if (text.includes('UPDATE canvas_assignment_reports SET assignment_id=NULL')) return { rows: [], rowCount: 0 } as never
       if (text.includes('WITH requested(kind,id)')) return { rows: [], rowCount: 0 } as never
       if (text.includes('SELECT * FROM evidence_records')) {
         const row = evidenceRows.get(String(params?.[2]))
@@ -67,6 +70,7 @@ test('Canvas reports persist only canonical Evidence IDs for validated source re
   const report = await application.submitCanvasReport({
     companyId: 'company-1', workId: 'work-1', agentId: 'agent-1', canvasId: 'canvas-1',
     executionRole: 'specialist', finding: 'Observed result',
+    principalId: 'human-1', requestVersion: 1, actionId: 'action-1',
     evidenceRefs: [{ kind: 'frame', id: 'frame-1' }], confidence: 0.8,
   })
 
@@ -75,7 +79,7 @@ test('Canvas reports persist only canonical Evidence IDs for validated source re
   assert.match(reportInsert?.text ?? '', /evidence_id,source_evidence_ids/)
   assert.doesNotMatch(reportInsert?.text ?? '', /evidence_refs/)
   assert.deepEqual([...evidenceRows.values()].map((row) => row.data), [
-    { sourceKind: 'frame', sourceId: 'frame-1' },
-    { reportId: report.id, canvasId: 'canvas-1', executionRole: 'specialist' },
+    { sourceKind: 'frame', sourceId: 'frame-1', observation: JSON.stringify({ id: 'frame-1', revision: 2 }) },
+    { reportId: report.id, canvasId: 'canvas-1', executionRole: 'specialist', workId: 'work-1', requestVersion: 1 },
   ])
 })

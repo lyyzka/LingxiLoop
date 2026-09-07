@@ -1,6 +1,7 @@
 import type { LingxiMessageV1 } from './message-types.js'
 import type { ImMessageEnvelope } from './messages-application.js'
-import { imMessagesApplication } from './messages-facade.js'
+import { createImMessagesApplication, imMessagesApplication } from './messages-facade.js'
+export { messageTools } from './agent-tools.js'
 
 export function getAgentChannelHistory(input: {
   companyId: string
@@ -23,28 +24,19 @@ export async function missingAgentChannelMessageIds(input: {
   agentId: string
   channelId: string
   messageIds: string[]
+  signal?: AbortSignal
 }): Promise<string[]> {
   const missing = new Set(input.messageIds)
   if (missing.size === 0) return []
-  let beforeSequence = 0
-  while (missing.size > 0) {
-    const page = await getAgentChannelHistory({
-      companyId: input.companyId,
-      agentId: input.agentId,
-      channelId: input.channelId,
-      limit: 200,
-      beforeSequence,
-    })
-    if (!page || page.length === 0) break
-    for (const message of page) {
-      missing.delete(message.messageId)
-      missing.delete(message.clientMsgNo)
-    }
-    const next = Math.min(...page.map((message) => message.messageSeq).filter((sequence) => sequence > 0))
-    if (!Number.isSafeInteger(next) || next <= 1 || next === beforeSequence) break
-    beforeSequence = next
+  for (const message of await readAgentChannelMessages(input) ?? []) {
+    missing.delete(message.messageId)
+    missing.delete(message.clientMsgNo)
   }
   return input.messageIds.filter((messageId) => missing.has(messageId))
+}
+
+export function readAgentChannelMessages(input: { companyId: string; agentId: string; channelId: string; messageIds: string[]; signal?: AbortSignal }) {
+  return imMessagesApplication.readMessages({ ...input, userId: input.agentId })
 }
 
 export async function sendAgentChannelMessage(input: {
@@ -53,13 +45,14 @@ export async function sendAgentChannelMessage(input: {
   channelId: string
   clientNonce: string
   payload: LingxiMessageV1
+  signal?: AbortSignal
 }): Promise<
   | { kind: 'channel_not_found' }
   | { kind: 'nonce_conflict' }
   | { kind: 'verbatim_peer'; peer: ImMessageEnvelope }
   | { kind: 'accepted'; duplicate: boolean; messageId: string; sequence: number }
 > {
-  const result = await imMessagesApplication.acceptAgentMessage({
+  const result = await createImMessagesApplication(input.signal).acceptAgentMessage({
     companyId: input.companyId,
     userId: input.agentId,
     channelId: input.channelId,
@@ -85,12 +78,13 @@ export async function sendSystemChannelMessage(input: {
   channelId: string
   clientNonce: string
   payload: LingxiMessageV1
+  signal?: AbortSignal
 }): Promise<
   | { kind: 'channel_not_found' }
   | { kind: 'nonce_conflict' }
   | { kind: 'accepted'; duplicate: boolean; messageId: string; sequence: number }
 > {
-  const result = await imMessagesApplication.acceptSystemMessage(input)
+  const result = await createImMessagesApplication(input.signal).acceptSystemMessage(input)
   if (result.kind !== 'accepted') return result
   const messageId = String(result.echo.messageId ?? '')
   const sequence = Number(result.echo.messageSeq)
@@ -159,13 +153,7 @@ export async function toggleAgentChannelReaction(input: {
   | { kind: 'message_not_found' }
   | { kind: 'updated'; reactions: Array<{ emoji: string; count: number; users: string[] }> }
 > {
-  const history = await imMessagesApplication.history({
-    companyId: input.companyId,
-    userId: input.agentId,
-    channelId: input.channelId,
-    limit: 200,
-    beforeSequence: 0,
-  })
+  const history = await readAgentChannelMessages({ ...input, messageIds: [input.messageId] })
   if (!history) return { kind: 'channel_not_found' }
   const message = history.find((candidate) => candidate.messageId === input.messageId)
   if (!message) return { kind: 'message_not_found' }
@@ -179,3 +167,4 @@ export async function toggleAgentChannelReaction(input: {
   })
   return result ? { kind: 'updated', reactions: result.reactions } : { kind: 'message_not_found' }
 }
+export { agentContinuationSchema } from './contracts.js'

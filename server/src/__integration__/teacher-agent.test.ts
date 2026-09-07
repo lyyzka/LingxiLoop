@@ -140,14 +140,14 @@ test('[integration] Pulse provisioning rolls back every owned row on persistence
   await pool.query(`CREATE OR REPLACE FUNCTION test_teacher_provision_failure() RETURNS trigger AS $$
     BEGIN RAISE EXCEPTION 'test teacher provision failure'; END; $$ LANGUAGE plpgsql`)
   await pool.query(`CREATE TRIGGER test_teacher_provision_failure
-    BEFORE INSERT ON agent_workspace FOR EACH ROW EXECUTE FUNCTION test_teacher_provision_failure()`)
+    BEFORE INSERT ON learning_course_teacher_rooms FOR EACH ROW EXECUTE FUNCTION test_teacher_provision_failure()`)
   try{
     await assert.rejects(
       ensureTeacherAgentForCourse(fixture.companyId,fixture.courseId,pool,teacherTransaction),
       /test teacher provision failure/,
     )
   }finally{
-    await pool.query(`DROP TRIGGER IF EXISTS test_teacher_provision_failure ON agent_workspace`)
+    await pool.query(`DROP TRIGGER IF EXISTS test_teacher_provision_failure ON learning_course_teacher_rooms`)
     await pool.query(`DROP FUNCTION IF EXISTS test_teacher_provision_failure()`)
   }
   const {rows}=await pool.query<{agents:number;rooms:number;participants:number}>(

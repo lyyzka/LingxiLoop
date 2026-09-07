@@ -39,7 +39,7 @@ export async function pauseTeacherDigest(
 ): Promise<void> {
   await db.query(
     `UPDATE agent_routines
-        SET status='paused',next_run_at=NULL,updated_at=NOW()
+        SET status='paused',next_run_at=NULL,version=version+1,updated_at=NOW()
       WHERE company_id=$1 AND id=$2`,
     [companyId, routineId],
   )
@@ -56,20 +56,22 @@ export async function upsertTeacherDigest(
     timezone: string
     nextRunAt: string
     teacherId: string
+    projectId: string
   },
 ): Promise<void> {
   await db.query(
     `INSERT INTO agent_routines(
       id,company_id,agent_id,channel_id,kind,title,instructions,schedule,
-      timezone,status,next_run_at,created_by,approved_by
+      timezone,status,next_run_at,created_by,approved_by,project_id
     ) VALUES(
       $1,$2,$3,$4,'teacher_project_digest','项目学情摘要',
       'Generate a bounded aggregate teacher digest with host.teacher.overview. Do not read raw attempts or perform writes.',
-      $5::jsonb,$6,'active',$7,$8,$8
+      $5::jsonb,$6,'active',$7,$8,$8,$9
     )
     ON CONFLICT(id) DO UPDATE SET
       schedule=EXCLUDED.schedule,timezone=EXCLUDED.timezone,status='active',
-      next_run_at=EXCLUDED.next_run_at,updated_at=NOW(),created_by=EXCLUDED.created_by`,
+      next_run_at=EXCLUDED.next_run_at,updated_at=NOW(),created_by=EXCLUDED.created_by,approved_by=EXCLUDED.approved_by,
+      project_id=EXCLUDED.project_id,version=agent_routines.version+1`,
     [
       input.id,
       input.companyId,
@@ -79,6 +81,7 @@ export async function upsertTeacherDigest(
       input.timezone,
       input.nextRunAt,
       input.teacherId,
+      input.projectId,
     ],
   )
 }

@@ -80,8 +80,21 @@ export const updateCalendarEventRequestSchema = z.object({
 export type CreateCalendarEventInput = z.infer<typeof createCalendarEventRequestSchema>
 export type UpdateCalendarEventInput = z.infer<typeof updateCalendarEventRequestSchema>
 
+const agentEventIdSchema = z.string().trim().min(1).max(2000)
+const observedEventSchema = z.record(z.string(), z.unknown()).refine(value => JSON.stringify(value).length <= 32_000)
+export const agentCalendarSchemas = {
+  list: listCalendarEventsQuerySchema.required().refine(({ from, to }) => to >= from && to.getTime() - from.getTime() <= 366 * 86400_000,
+    'from and to must define a range of at most 366 days'),
+  get: z.object({ eventId: agentEventIdSchema }).strict(),
+  create: createCalendarEventRequestSchema,
+  update: z.object({ eventId: agentEventIdSchema, expected: observedEventSchema, patch: updateCalendarEventRequestSchema }).strict(),
+  delete: z.object({ eventId: agentEventIdSchema, expected: observedEventSchema }).strict(),
+}
+
 export interface CalendarScope {
   userId: string
+  /** Human authorization remains userId; native agent actions attribute events to actorId. */
+  actorId?: string
   companyId: string
   projectId: string
 }

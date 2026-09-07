@@ -27,7 +27,13 @@ type ResolvedAttachment = OutboundAttachmentInput & { publicUrl: string }
 export interface AgentEmailDeliveryContext {
   projectId?: string
   autoSubmitted: 'auto-generated' | 'auto-replied'
+  signal?: AbortSignal
+  nativeActionId?: string
+  reviewed?: SendEmailPreview | ReplyEmailPreview
 }
+export interface SendEmailPreview { kind: 'send'; sender: Sender; subject: string; to: Address[]; cc: Address[] }
+export interface ReplyEmailPreview { kind: 'reply'; sender: Sender; subject: string; to: string[]; cc: string[];
+  conversationId: string; references: string[]; inReplyTo: string | null }
 
 export type EmailErrorCode =
   | 'message_not_found'
@@ -97,6 +103,7 @@ export interface EmailInfrastructure {
       storageKey: string
     }>
     idempotencyKey?: string
+    nativeActionId?: string
   }): Promise<{ messageId: string }>
 }
 
@@ -131,12 +138,8 @@ export class EmailApplication {
       replayed: true, subject: replay.subject, to: replay.to, cc: replay.cc,
     }
     const idempotencyKey = tenantEmailIdempotencyKey(scope.companyId, input.idempotencyKey)
-    const subject = this.infrastructure.sanitizeSubject(input.subject)
-    if (!subject) throw new EmailApplicationError('recipient_unresolved', 'subject required')
+    const { sender, subject, to, cc } = context?.reviewed?.kind === 'send' ? context.reviewed : await this.previewSend(scope, input)
     const attachments = await this.resolveAttachments(input.attachments)
-    const sender = await this.requireSender(scope)
-    const to = await this.resolveRecipients(scope.companyId, input.to, 'recipient')
-    const cc = await this.resolveRecipients(scope.companyId, input.cc, 'cc')
     const memberIds = new Set<string>([scope.userId])
     for (const id of await findTenantMemberIdsByAddresses(
       this.db,
@@ -170,10 +173,12 @@ export class EmailApplication {
       ccAddrs: cc.map((address) => this.infrastructure.formatAddress(address.addr, address.name)),
       body: input.body,
       ...(context ? { autoSubmitted: true } : {}),
+      ...(context?.nativeActionId ? { nativeActionId: context.nativeActionId } : {}),
       attachments: this.persistedAttachments(attachments),
       idempotencyKey,
     })
     const result = await this.infrastructure.send({
+      ...(context?.signal ? { signal: context.signal } : {}),
       from,
       to: to.map((address) => this.infrastructure.formatAddress(address.addr, address.name)),
       cc: cc.length
@@ -223,6 +228,29 @@ export class EmailApplication {
     return this.executeReply(scope, targetId, input, context)
   }
 
+  async previewSend(scope: EmailScope, input: Pick<SendEmailInput, 'subject' | 'to' | 'cc'>): Promise<SendEmailPreview> {
+    const subject = this.infrastructure.sanitizeSubject(input.subject)
+    if (!subject) throw new EmailApplicationError('recipient_unresolved', 'subject required')
+    return { kind: 'send', subject, sender: await this.requireSender(scope),
+      to: await this.resolveRecipients(scope.companyId, input.to, 'recipient'), cc: await this.resolveRecipients(scope.companyId, input.cc, 'cc') }
+  }
+
+  async previewReply(scope: EmailScope, targetId: string, input: Pick<ReplyEmailInput, 'cc'>): Promise<ReplyEmailPreview> {
+    const target = await findEmailReplyTarget(this.db, scope.companyId, targetId)
+    if (!target) throw new EmailApplicationError('message_not_found', 'unknown email message')
+    if (!target.members?.includes(scope.userId)) throw new EmailApplicationError('thread_forbidden', 'not a member of this thread')
+    const sender = await this.requireSender(scope), authEmail = await findUserEmail(this.db, scope.userId)
+    const selfAddresses = [sender.email.toLowerCase(), ...(authEmail ? [authEmail.toLowerCase()] : [])]
+    const addresses = this.infrastructure.splitReplyAddresses({ originalFrom: target.from_addr,
+      originalTo: target.to_addrs ?? [], originalCc: target.cc_addrs ?? [], selfAddresses })
+    if (!addresses.to.length) throw new EmailApplicationError('reply_recipient_missing', 'no other recipients to reply to')
+    return { kind: 'reply', sender, conversationId: target.conversation_id, to: addresses.to,
+      cc: this.mergeCc(addresses.to, addresses.cc, selfAddresses, await this.resolveRecipients(scope.companyId, input.cc, 'cc')),
+      subject: this.infrastructure.sanitizeSubject(/^(re|fwd|fw)\s*:/i.test(target.subject) ? target.subject : `Re: ${target.subject}`),
+      references: [...(target.references_chain ?? []), ...(target.smtp_message_id ? [target.smtp_message_id] : [])].filter(Boolean),
+      inReplyTo: this.infrastructure.normalizeMessageId(target.smtp_message_id) }
+  }
+
   private async executeReply(
     scope: EmailScope,
     targetId: string,
@@ -237,36 +265,13 @@ export class EmailApplication {
       replayed: true, subject: replay.subject, to: replay.to, cc: replay.cc,
     }
     const idempotencyKey = tenantEmailIdempotencyKey(scope.companyId, input.idempotencyKey)
-    const target = await findEmailReplyTarget(this.db, scope.companyId, targetId)
-    if (!target) throw new EmailApplicationError('message_not_found', 'unknown email message')
-    if (!target.members?.includes(scope.userId)) {
-      throw new EmailApplicationError('thread_forbidden', 'not a member of this thread')
-    }
+    const reviewed = context?.reviewed?.kind === 'reply' ? context.reviewed : await this.previewReply(scope, targetId, input)
+    const { sender, subject, to, cc: combinedCc, references, inReplyTo, conversationId } = reviewed
     const attachments = await this.resolveAttachments(input.attachments)
-    const sender = await this.requireSender(scope)
-    const authEmail = await findUserEmail(this.db, scope.userId)
-    const selfAddresses = [sender.email.toLowerCase(), ...(authEmail ? [authEmail.toLowerCase()] : [])]
-    const addresses = this.infrastructure.splitReplyAddresses({
-      originalFrom: target.from_addr,
-      originalTo: target.to_addrs ?? [],
-      originalCc: target.cc_addrs ?? [],
-      selfAddresses,
-    })
-    if (addresses.to.length === 0) {
-      throw new EmailApplicationError('reply_recipient_missing', 'no other recipients to reply to')
-    }
-    const extraCc = await this.resolveRecipients(scope.companyId, input.cc, 'cc')
-    const combinedCc = this.mergeCc(addresses.to, addresses.cc, selfAddresses, extraCc)
-    const subject = /^(re|fwd|fw)\s*:/i.test(target.subject)
-      ? this.infrastructure.sanitizeSubject(target.subject)
-      : this.infrastructure.sanitizeSubject(`Re: ${target.subject}`)
-    const references = [...(target.references_chain ?? []), ...(target.smtp_message_id ? [target.smtp_message_id] : [])]
-      .filter(Boolean)
-    const inReplyTo = this.infrastructure.normalizeMessageId(target.smtp_message_id)
     const messageId = this.infrastructure.mintMessageId()
     const from = this.infrastructure.formatAddress(sender.email, sender.displayName)
     const persisted = await this.infrastructure.persist({
-      conversationId: target.conversation_id,
+      conversationId,
       companyId: scope.companyId,
       authorId: scope.userId,
       direction: 'out',
@@ -276,16 +281,18 @@ export class EmailApplication {
       references,
       subject,
       fromAddr: from,
-      toAddrs: addresses.to,
+      toAddrs: to,
       ccAddrs: combinedCc,
       body: input.body,
       ...(context ? { autoSubmitted: true } : {}),
+      ...(context?.nativeActionId ? { nativeActionId: context.nativeActionId } : {}),
       attachments: this.persistedAttachments(attachments),
       idempotencyKey,
     })
     const result = await this.infrastructure.send({
+      ...(context?.signal ? { signal: context.signal } : {}),
       from,
-      to: addresses.to,
+      to,
       cc: combinedCc.length ? combinedCc : undefined,
       subject,
       text: input.body,
@@ -301,13 +308,13 @@ export class EmailApplication {
       })),
     })
     await this.infrastructure.completeDelivery(scope.companyId, persisted.messageId, result, messageId)
-    await markEmailConversationRead(this.db, scope.companyId, scope.userId, target.conversation_id)
+    await markEmailConversationRead(this.db, scope.companyId, scope.userId, conversationId)
     return this.deliveryResult(
       persisted.messageId,
-      target.conversation_id,
+      conversationId,
       result,
       subject,
-      addresses.to,
+      to,
       combinedCc,
     )
   }

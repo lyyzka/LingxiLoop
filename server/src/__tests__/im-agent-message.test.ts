@@ -103,6 +103,7 @@ test('agent inbox reads and clears only tenant-authorized WuKong conversations',
 test('agent search pages authoritative history and excludes unauthorized channels', async () => {
   const db = {
     async query(sql: string) {
+      if (sql.includes('SELECT binding.profile')) return { rows: [{ profile: { channelType: 2 } }] }
       if (sql.includes('FROM conversations conversation')) {
         return { rows: [{ channelId: 'allowed', title: 'Allowed', kind: 'group', topic: null, channelType: 2 }] }
       }
@@ -145,4 +146,10 @@ test('agent search pages authoritative history and excludes unauthorized channel
 
   assert.deepEqual(results.map((result) => result.message.messageId), ['match'])
   assert.deepEqual(synced, [{ channelId: 'allowed', before: 0 }, { channelId: 'allowed', before: 2 }])
+  synced.length = 0
+  const application = new ImMessagesApplication(infrastructure)
+  const messages = await application.readMessages({ companyId: 'company', userId: 'agent', channelId: 'allowed', messageIds: ['match-client'] })
+  assert.deepEqual(messages?.map(message => [message.messageId, message.clientMsgNo, message.messageSeq]), [['match','match-client',1]])
+  assert.deepEqual(synced, [{ channelId: 'allowed', before: 0 }, { channelId: 'allowed', before: 2 }])
+  await assert.rejects(application.readMessages({ companyId: 'company', userId: 'agent', channelId: 'allowed', messageIds: ['missing'], signal: AbortSignal.abort() }))
 })

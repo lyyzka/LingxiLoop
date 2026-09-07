@@ -24,6 +24,7 @@ import { useConversationUi } from '@/stores/conversationUi'
 import type { Participant } from '@/types'
 import { chatTransport, type LingxiMessageMetadata } from '../runtime'
 import { CHAT_TOOL_RENDERERS, HostToolTimeline } from './ToolRenderers'
+import { HarnessDetails } from './HarnessDetails'
 
 function ReasoningPart({ status }: ReasoningMessagePartProps) {
   return (
@@ -414,9 +415,10 @@ export function ConversationMessage() {
               tools: CHAT_TOOL_RENDERERS,
             }}
           />
-          <MessagePrimitive.Error>
+          {custom.senderKind === 'agent' && custom.messageKind === 'text' && custom.runId && <HarnessDetails metadata={custom} />}
+          {!custom.harness && <MessagePrimitive.Error>
             <div className="mt-2 text-xs text-destructive">消息生成失败</div>
-          </MessagePrimitive.Error>
+          </MessagePrimitive.Error>}
         </div>
         <Reactions metadata={custom} messageId={messageId} />
         {custom.isMine && (custom.delivery !== 'sent' || (showMessageChrome && custom.groupEnd)) && (

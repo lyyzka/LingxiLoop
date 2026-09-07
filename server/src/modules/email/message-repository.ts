@@ -42,7 +42,7 @@ export async function persistEmailProjection(
     throw new Error(`email conversation ${input.conversationId} does not belong to ${input.companyId}`)
   }
 
-  const nextRetryAt = input.direction === 'out' && input.transportStatus === 'failed'
+  const nextRetryAt = !input.nativeActionId && input.direction === 'out' && input.transportStatus === 'failed'
     ? new Date(Date.now() + 60_000)
     : null
   await db.query(
@@ -50,12 +50,12 @@ export async function persistEmailProjection(
         message_id, conversation_id, company_id, author_id, body, sequence, direction, transport_status,
         transport_error, smtp_message_id, in_reply_to, references_chain,
         subject, from_addr, to_addrs, cc_addrs, bcc_addrs, html, raw_size_bytes,
-        auto_submitted, next_retry_at
+        auto_submitted, next_retry_at, native_action_id
      ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8,
         $9, $10, $11, $12::jsonb,
         $13, $14, $15::jsonb, $16::jsonb, $17::jsonb, $18, $19,
-        $20, $21
+        $20, $21, $22
      )`,
     [
       messageId,
@@ -79,6 +79,7 @@ export async function persistEmailProjection(
       input.rawSizeBytes ?? null,
       Boolean(input.autoSubmitted),
       nextRetryAt,
+      input.nativeActionId ?? null,
     ],
   )
   for (const attachment of attachments) {
@@ -117,7 +118,7 @@ export async function completeOutboundDelivery(
         SET transport_status = $3,
             transport_error = $4,
             smtp_message_id = $5,
-            next_retry_at = CASE WHEN $3 = 'failed' THEN NOW() + INTERVAL '60 seconds' ELSE NULL END
+            next_retry_at = CASE WHEN $3 = 'failed' AND native_action_id IS NULL THEN NOW() + INTERVAL '60 seconds' ELSE NULL END
       WHERE message_id = $1 AND company_id = $2 AND direction = 'out'`,
     [messageId, companyId, input.status, input.error, input.smtpMessageId],
   )

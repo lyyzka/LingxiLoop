@@ -35,6 +35,7 @@ import {
   loadDocumentUpdatesAfter,
   lockTenantDocument,
   persistDocumentUpdate,
+  readPersistedDocument,
 } from './collaboration-repository.js'
 
 /** A subscriber attached to a room. Updates emitted by the local Y.Doc
@@ -651,6 +652,17 @@ function fragmentToPlainText(fragment: Y.XmlFragment): string {
     }
   }
   return lines.join('\n')
+}
+
+/** Snapshot reads never attach mutation handlers or refresh persisted image URLs. */
+export async function readDocumentSnapshot(db: Queryable, documentId: string, companyId: string) {
+  const record = await readPersistedDocument(db, documentId, companyId)
+  const doc = new Y.Doc()
+  try {
+    if (record.state_bytes) Y.applyUpdate(doc, record.state_bytes)
+    for (const update of record.updates ?? []) Y.applyUpdate(doc, update)
+    return { body: fragmentToPlainText(pmFragment(doc)), revision: record.revision }
+  } finally { doc.destroy() }
 }
 
 /** Read-only access to the doc's current plain-text body. Used by REST

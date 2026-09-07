@@ -18,7 +18,7 @@ start a thread.
                                                                                  │
                                                                                  ▼ wakes the recipient agent
                                                                          ┌──────────────────┐
-                                                                         │  Agent OS runs   │
+                                                                         │ LingxiOS Worker  │
                                                                          │  a learning      │
                                                                          │  turn, replies   │
                                                                          └──────────────────┘

@@ -13,11 +13,8 @@ import {
 import { isKnowledgeAttachmentMime, MAX_SOURCE_BYTES, validateKnowledgeUrl } from './policy.js'
 import { enqueueSourceJob } from './repository.js'
 import { findKnowledgeRetrievalProject } from './retrieval-repository.js'
-import {
-  deleteKnowledgeSource,
-  ensureProjectNotebook,
-  retryKnowledgeSource,
-} from './runtime.js'
+import { deleteKnowledgeSourceState } from './runtime.js'
+import { resetIngestionAttempts } from './ingestion-repository.js'
 
 export interface KnowledgeAgentInfrastructure {
   storage: Pick<Storage, 'put'> & Pick<BoundedStorageReader, 'readObjectBounded'>
@@ -38,6 +35,7 @@ export function createKnowledgeAgentApplication(db: Queryable, infrastructure: K
       createdByUserId: source.created_by_user_id,
       createdVia: source.created_via,
       enabled: !source.excluded,
+      version: new Date(source.updated_at).toISOString(),
     }
   }
 
@@ -62,7 +60,6 @@ export function createKnowledgeAgentApplication(db: Queryable, infrastructure: K
       projectId,
       ...(sourceId ? { resource: { type: 'knowledge_source' as const, id: sourceId } } : {}),
     })
-    await ensureProjectNotebook(projectId, work.companyId)
     return { projectId, authorizationUserId: userId }
   }
 
@@ -156,7 +153,11 @@ export function createKnowledgeAgentApplication(db: Queryable, infrastructure: K
 
   async function retryKnowledgeSourceForAgent(work: AgentActionContext, sourceId: string): Promise<{ status: string }> {
     const { projectId, authorizationUserId: userId } = await projectScope(work, 'knowledge:manage', sourceId)
-    await retryKnowledgeSource(sourceId, work.companyId, projectId, userId)
+    await infrastructure.transaction(async tx => {
+      await resetIngestionAttempts(tx, sourceId)
+      await enqueueSourceJob(tx, { sourceId, companyId: work.companyId, projectId, userId })
+      await tx.query("UPDATE knowledge_sources SET stage='retrying' WHERE id=$1 AND external_source_id IS NOT NULL", [sourceId])
+    })
     return { status: 'queued' }
   }
 
@@ -175,7 +176,7 @@ export function createKnowledgeAgentApplication(db: Queryable, infrastructure: K
 
   async function deleteKnowledgeSourceForAgent(work: AgentActionContext, sourceId: string): Promise<{ deleted: boolean }> {
     const { projectId, authorizationUserId: userId } = await projectScope(work, 'knowledge:manage', sourceId)
-    await deleteKnowledgeSource(sourceId, work.companyId, projectId, userId)
+    await infrastructure.transaction(tx => deleteKnowledgeSourceState(tx, { sourceId, companyId: work.companyId, projectId, userId }))
     return { deleted: true }
   }
 

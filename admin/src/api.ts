@@ -117,6 +117,8 @@ export const accessControlProvider: AccessControlProvider = {
       companies: ['activate', 'enter-read-only', 'archive'],
       projects: ['activate', 'end', 'enter-read-only', 'archive'],
       'agent-routines': ['pause'],
+      'agent-runs': ['retry'],
+      'agent-deliveries': ['retry'],
     }
     if (resource && commands[resource]?.includes(action)) return { can: true }
     return { can: false, reason: '平台后台仅开放明确的业务命令' }

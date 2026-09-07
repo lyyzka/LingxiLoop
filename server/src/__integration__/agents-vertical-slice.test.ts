@@ -55,10 +55,10 @@ test('[integration] agent creation atomically seeds strict identity, Bloub persi
   assert.deepEqual(agents[0]?.tools, ['ipython'])
   assert.deepEqual(agents[0]?.capabilities, ['web', 'knowledge'])
 
-  const { rows: workspace } = await pool.query<{ path: string }>(
-    `SELECT path FROM agent_workspace WHERE agent_id=$1 AND company_id=$2 ORDER BY path`, [created.id, companyId],
+  const { rows: persona } = await pool.query<{ system_prompt: string }>(
+    `SELECT system_prompt FROM participants WHERE id=$1 AND company_id=$2`, [created.id, companyId],
   )
-  assert.deepEqual(workspace.map((row) => row.path), ['IDENTITY.md', 'SOUL.md'])
+  assert.equal(persona[0]?.system_prompt, 'You verify primary evidence before answering.')
   const { rows: directs } = await pool.query<{ id: string; members: string[]; project_id: string }>(
     `SELECT id,members,project_id FROM conversations
       WHERE company_id=$1 AND kind='direct' AND members@>to_jsonb(ARRAY[$2::text])`,

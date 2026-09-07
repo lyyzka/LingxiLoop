@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from 'node:crypto'
-import type { PoolClient } from 'pg'
 import type { Queryable } from '../../db/queryable.js'
 import type { PollUpdatedEvent } from '../../redis.js'
 import type {
@@ -89,7 +88,7 @@ function requestFingerprint(input: CreatePollCommand, poll: PollPayload): string
 }
 
 export interface PollInfrastructure {
-  transaction<T>(work: (db: PoolClient) => Promise<T>): Promise<T>
+  transaction<T>(work: (db: Queryable) => Promise<T>): Promise<T>
   publishSnapshot(
     row: PollRow,
     tallies: PollUpdatedEvent['tallies'],
@@ -107,6 +106,16 @@ export class PollApplication {
   }
 
   async create(input: CreatePollCommand): Promise<CreatedPoll> {
+    const row = await this.persistCreate(input)
+    const sequence = await this.publish(row, input.actorId)
+    if (!await recordPublishedSequence(this.db, input.companyId, row.poll_client_msg_no, Number(row.revision), sequence)) {
+      throw new PollApplicationError('internal', 'poll vanished after publish')
+    }
+    return { messageId: row.poll_client_msg_no, sequence, poll: row.poll }
+  }
+
+  /** Leaves a durable pending publication; callers may include this in their own transaction. */
+  async persistCreate(input: CreatePollCommand): Promise<PollRow> {
     const poll = validatePoll(input)
     const binding = await channelBinding(this.db, input.companyId, input.conversationId)
     if (!binding) throw new PollApplicationError('not_found', 'channel not found')
@@ -135,16 +144,19 @@ export class PollApplication {
       }
       row = existing
     }
-    const sequence = await this.publish(row, input.actorId)
-    if (!await recordPublishedSequence(this.db, input.companyId, messageId, Number(row.revision), sequence)) {
-      throw new PollApplicationError('internal', 'poll vanished after publish')
-    }
-    return { messageId, sequence, poll: row.poll }
+    return row
   }
 
   async vote(input: CastVoteCommand): Promise<PollUpdatedEvent> {
+    const updated = await this.infra.transaction(db => this.persistVote(db, input))
+    const event = await this.updatedEvent(input.companyId, input.messageId, input.actorId)
+    const sequence = await this.infra.publishSnapshot(updated, event.tallies, input.actorId, false)
+    await recordPublishedSequence(this.db, input.companyId, input.messageId, Number(updated.revision), sequence)
+    return event
+  }
+
+  async persistVote(db: Queryable, input: CastVoteCommand): Promise<PollRow> {
     const requested = [...new Set(input.optionIds.filter(Boolean))]
-    const updated = await this.infra.transaction(async (db) => {
       const row = await lockPoll(db, input.companyId, input.messageId)
       if (!row) throw new PollApplicationError('not_found', 'poll not found')
       if (row.poll.closedAt) throw new PollApplicationError('conflict', 'poll is closed')
@@ -169,15 +181,18 @@ export class PollApplication {
       const next = await bumpPollRevision(db, input.companyId, input.messageId)
       if (!next) throw new PollApplicationError('internal', 'poll vanished mid-update')
       return next
-    })
+  }
+
+  async close(input: ClosePollCommand): Promise<PollUpdatedEvent | null> {
+    const updated = await this.infra.transaction(db => this.persistClose(db, input))
+    if (!updated) return null
     const event = await this.updatedEvent(input.companyId, input.messageId, input.actorId)
     const sequence = await this.infra.publishSnapshot(updated, event.tallies, input.actorId, false)
     await recordPublishedSequence(this.db, input.companyId, input.messageId, Number(updated.revision), sequence)
     return event
   }
 
-  async close(input: ClosePollCommand): Promise<PollUpdatedEvent | null> {
-    const updated = await this.infra.transaction(async (db) => {
+  async persistClose(db: Queryable, input: ClosePollCommand): Promise<PollRow | null> {
       const row = await lockPoll(db, input.companyId, input.messageId)
       if (!row) throw new PollApplicationError('not_found', 'poll not found')
       if (row.poll.closedAt) return null
@@ -192,12 +207,6 @@ export class PollApplication {
       const next = await bumpPollRevision(db, input.companyId, input.messageId, poll)
       if (!next) throw new PollApplicationError('internal', 'poll vanished mid-update')
       return next
-    })
-    if (!updated) return null
-    const event = await this.updatedEvent(input.companyId, input.messageId, input.actorId)
-    const sequence = await this.infra.publishSnapshot(updated, event.tallies, input.actorId, false)
-    await recordPublishedSequence(this.db, input.companyId, input.messageId, Number(updated.revision), sequence)
-    return event
   }
 
   async show(companyId: string, messageId: string): Promise<PollSnapshot> {

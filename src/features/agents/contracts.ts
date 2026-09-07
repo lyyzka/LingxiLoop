@@ -1,6 +1,7 @@
 import type { AgentCapability, Status } from '@/types'
+import type { RunSnapshot } from 'lingxios/ui'
 
-export type AgentRunStatus = 'running' | 'waiting_for_human' | 'completed' | 'failed' | 'skipped' | 'stalled'
+export type AgentRunStatus = RunSnapshot['status']
 export type AgentEventLevel = 'debug' | 'info' | 'warn' | 'error'
 
 export interface CoworkerActivity {
@@ -32,30 +33,6 @@ export interface ApiParticipant {
   model?: string | null
   email?: string | null
   departedAt?: string | null
-}
-
-export interface ApiLearnedMemory {
-  agentId: string
-  agentName: string
-  path: string
-  body: string
-  meta: {
-    kind?: 'fact' | 'preference' | 'instruction' | 'relationship'
-    about?: string
-    [key: string]: unknown
-  }
-  updatedAt: string
-}
-
-export interface ApiAutonomyRule {
-  id: string
-  agentId: string
-  scope: string
-  operation: string
-  mode: 'allow' | 'ask' | 'deny'
-  source: 'explicit_user' | 'learned'
-  createdAt: string
-  updatedAt: string
 }
 
 export interface AgentInput {

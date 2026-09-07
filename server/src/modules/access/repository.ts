@@ -437,17 +437,6 @@ function resourceQuery(resource: PermissionResource): {
         params: [resource.id],
         lockTarget: 'participants',
       }
-    case 'approval':
-      return {
-        sql: `SELECT approval.company_id,conversation.project_id,NULL::text AS created_by,
-                     conversation.members AS conversation_members,conversation.leader_id,approval.status AS resource_status
-                FROM approvals approval
-                LEFT JOIN conversations conversation ON conversation.id=approval.channel_id
-                 AND conversation.company_id=approval.company_id
-               WHERE approval.id=$1 AND approval.source='AGENT_OS'`,
-        params: [resource.id],
-        lockTarget: 'approval',
-      }
     case 'routine':
       return {
         sql: `SELECT routine.company_id,conversation.project_id,routine.created_by,

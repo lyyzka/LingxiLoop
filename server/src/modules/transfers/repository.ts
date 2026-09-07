@@ -254,22 +254,9 @@ export async function completeProjectTransferOwnership(
           OR EXISTS (SELECT 1 FROM context_thread_participants thread_participant
                       WHERE thread_participant.project_id=$1 AND thread_participant.company_id=$2
                         AND thread_participant.participant_id=participant.id)
-          OR EXISTS (SELECT 1 FROM agent_work_items work
-                      WHERE work.company_id=$2 AND work.agent_id=participant.id AND (
-                        work.channel_id IN (SELECT id FROM conversation_scope)
-                        OR work.canvas_id IN (SELECT id FROM canvas_scope)))
-          OR EXISTS (SELECT 1 FROM approvals approval
-                      WHERE approval.company_id=$2 AND approval.agent_id=participant.id
-                        AND approval.channel_id IN (SELECT id FROM conversation_scope))
-          OR EXISTS (SELECT 1 FROM agent_os_sessions session
-                      WHERE session.company_id=$2 AND session.agent_id=participant.id
-                        AND session.channel_id IN (SELECT id FROM conversation_scope))
           OR EXISTS (SELECT 1 FROM agent_routines routine
                       WHERE routine.company_id=$2 AND routine.agent_id=participant.id
                         AND routine.channel_id IN (SELECT id FROM conversation_scope))
-          OR EXISTS (SELECT 1 FROM agent_memory_evidence memory
-                      WHERE memory.company_id=$2 AND memory.agent_id=participant.id
-                        AND memory.conversation_id IN (SELECT id FROM conversation_scope))
           OR EXISTS (SELECT 1 FROM agent_handoffs handoff
                       WHERE handoff.company_id=$2
                         AND handoff.conversation_id IN (SELECT id FROM conversation_scope)
@@ -330,25 +317,9 @@ export async function completeProjectTransferOwnership(
      ), indirect_handoffs AS (
        UPDATE agent_handoffs SET company_id=$3 WHERE company_id=$2
         AND conversation_id IN (SELECT id FROM conversation_scope) RETURNING 1
-     ), indirect_memory AS (
-       UPDATE agent_memory_evidence SET company_id=$3 WHERE company_id=$2
-        AND conversation_id IN (SELECT id FROM conversation_scope) RETURNING 1
-     ), indirect_sessions AS (
-       UPDATE agent_os_sessions SET company_id=$3 WHERE company_id=$2
-        AND channel_id IN (SELECT id FROM conversation_scope) RETURNING 1
      ), indirect_routines AS (
-       UPDATE agent_routines SET company_id=$3 WHERE company_id=$2
+       UPDATE agent_routines SET company_id=$3,version=version+1 WHERE company_id=$2
         AND channel_id IN (SELECT id FROM conversation_scope) RETURNING 1
-     ), indirect_work AS (
-       UPDATE agent_work_items SET company_id=$3 WHERE company_id=$2 AND (
-         channel_id IN (SELECT id FROM conversation_scope)
-         OR canvas_id IN (SELECT id FROM canvas_scope)
-       ) RETURNING id
-     ), indirect_approvals AS (
-       UPDATE approvals SET company_id=$3 WHERE company_id=$2 AND (
-         channel_id IN (SELECT id FROM conversation_scope)
-         OR work_id IN (SELECT id FROM indirect_work)
-       ) RETURNING 1
      ), indirect_dispatches AS (
        UPDATE calendar_dispatches SET company_id=$3 WHERE company_id=$2
         AND event_id IN (SELECT id FROM calendar_scope) RETURNING 1

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import type { Queryable } from '../db/queryable.js'
 import { ImMessagesApplication } from '../im/messages-application.js'
+import { listNativeDeliveryFailures, retryNativeDelivery } from '../agents/delivery-operations.js'
 import { observabilityDashboard } from '../modules/platform-operations/observability-dashboard.js'
 import { listAdminResources } from '../modules/platform-operations/resources.js'
 import { changeUserLifecycle } from '../modules/platform-operations/user-lifecycle.js'
@@ -29,6 +30,26 @@ test('admin resource lists enforce bounds and return an opaque next cursor', asy
   await assert.rejects(() => listAdminResources(db, 'companies', { limit: '101' }), /between 1 and 100/)
   await assert.rejects(() => listAdminResources(db, 'knowledge-jobs', { companyId: 'tenant' }), /not available/)
   await assert.rejects(() => listAdminResources(db, 'companies', { cursor: 'not-a-cursor' }), /invalid cursor/)
+})
+
+test('native delivery operations page failures and retry only a validated identity', async () => {
+  const calls: Array<{ sql: string; params: readonly unknown[] }> = []
+  const db = { query: async (sql: string, params: readonly unknown[] = []) => {
+    calls.push({ sql,params })
+    if (sql.includes('SELECT * FROM')) return { rows: [{ id: '["event","one"]' },{ id: '["event","two"]' },{ id: '["event","three"]' }] }
+    return { rows: [{ company_id: 'company-1' }] }
+  } } as unknown as Queryable
+
+  assert.deepEqual(await listNativeDeliveryFailures(db,{ limit: 2,offset: 4 }),{
+    data: [{ id: '["event","one"]' },{ id: '["event","two"]' }],
+    nextCursor: Buffer.from('6').toString('base64url'),
+  })
+  assert.deepEqual(calls[0]?.params,[null,null,3,4])
+  assert.equal(await retryNativeDelivery(db,'["event","event-1"]'),true)
+  assert.match(calls[1]?.sql ?? '',/agent_native_event_outbox/)
+  assert.equal(await retryNativeDelivery(db,'["ingress","message-1","agent-1"]'),true)
+  assert.match(calls[2]?.sql ?? '',/lingxios_ingress_outbox/)
+  await assert.rejects(() => retryNativeDelivery(db,'["ingress","message-1"]'),/invalid delivery identity/)
 })
 
 test('suspending revokes WS tickets while restore creates no ticket', async () => {
@@ -72,25 +93,24 @@ test('platform message history uses the company-scoped channel profile', async (
 })
 
 test('observability dashboard returns validated OpenPlait frames with collapsed run detail data', async () => {
-  let call = 0
-  const db = { query: async () => {
-    call += 1
-    if (call === 1) return { rows: [{ runs: 4, successes: 3, failures: 1, active: 0, tokens: 1200, average_duration_ms: 2500 }] }
-    if (call === 2) return { rows: [{ time: new Date('2026-09-03T12:00:00Z'), runs: 4, failures: 1 }] }
-    if (call === 3) return { rows: [{ model: 'gpt-test', runs: 4, tokens: 1200 }] }
-    return { rows: [{
-      id: 'run-1', agent: 'agent-1', company: 'company-1', model: 'gpt-test', status: 'completed',
-      timestamp: new Date('2026-09-03T12:00:00Z'), duration_ms: 2500, tokens: 300, tool_calls: 2,
-      summary: 'done', error: null,
-    }] }
-  } } as unknown as Queryable
-
-  const response = await observabilityDashboard(db)
+  const run = {
+    id: 'run-1', identity: { runId: 'run-1', agentId: 'agent-1', tenantId: 'company-1', sessionId: 'room', principalId: 'human' },
+    fence: 1, resultId: 'result-1', resultFence: 1, requestVersion: 1, kind: 'turn', attempts: 1,
+    model: 'gpt-test', status: 'succeeded' as const, createdAt: '2026-09-03T12:00:00.000Z', availableAt: '2026-09-03T12:00:00.000Z',
+    heartbeatAt: null, lastProgressAt: null, goalOutcome: null, executionMs: 2500, tokens: 300, costMicros: 40, unmeasuredCalls: 1, error: null,
+  }
+  const response = await observabilityDashboard({
+    listRuns: async query => { assert.deepEqual(query, { limit: 30 }); return { items: [run], nextCursor: null } },
+    readOperations: async () => ({ periodHours: 24, runs: 5, finished: 4, successes: 3, failures: 1, cancelled: 0, active: 1, queued: 0, waiting: 0,
+      tokens: 1200, costMicros: 120, failedDeliveries: 0, failedUsageDeliveries: 0, averageExecutionMs: 2500,
+      trend: [{ time: run.createdAt, runs: 5, failures: 1 }],
+      models: [{ model: 'gpt-test', calls: 4, tokens: 1200, costMicros: 120, unmeasuredCalls: 1 }] }),
+  })
 
   assert.equal(response.dashboard.apiVersion, 'openplait.io/v1alpha1')
   assert.deepEqual(response.results.summary.frames[0]?.fields.map((field) => [field.name, field.values]), [
-    ['runs', [4]], ['success_rate', [75]], ['average_duration_ms', [2500]], ['tokens', [1200]],
-    ['successes', [3]], ['failures', [1]], ['active', [0]],
+    ['runs', [5]], ['success_rate', [75]], ['average_duration_ms', [2500]], ['tokens', [1200]],
+    ['successes', [3]], ['failures', [1]], ['active', [1]],
   ])
   assert.deepEqual(response.results.recentRuns.frames[0], {
     name: 'recent-runs',
@@ -101,11 +121,11 @@ test('observability dashboard returns validated OpenPlait frames with collapsed 
       { name: 'agent', type: 'string', values: ['agent-1'] },
       { name: 'company', type: 'string', values: ['company-1'] },
       { name: 'model', type: 'string', values: ['gpt-test'] },
-      { name: 'status', type: 'string', values: ['completed'] },
+      { name: 'status', type: 'string', values: ['succeeded'] },
       { name: 'duration_ms', type: 'duration', values: [2500], unit: 'ms' },
       { name: 'tokens', type: 'number', values: [300] },
-      { name: 'tool_calls', type: 'number', values: [2] },
-      { name: 'summary', type: 'string', values: ['done'] },
+      { name: 'cost_usd', type: 'number', values: [0.00004] },
+      { name: 'unmeasured_calls', type: 'number', values: [1] },
       { name: 'error', type: 'string', values: [null] },
     ],
   })

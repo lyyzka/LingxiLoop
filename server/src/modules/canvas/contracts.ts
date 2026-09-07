@@ -211,3 +211,33 @@ export const canvasCommentRequestSchema = z.object({
   frameId: identifierSchema.nullish(),
   body: z.string().trim().min(1).max(8_000),
 }).strict()
+
+const canvasMemberSchema = z.object({ agentId: identifierSchema, assignment: z.string().trim().min(1).max(4_000),
+  dependsOnAgentIds: z.array(identifierSchema).max(32).optional(), executionRole: z.enum(['specialist','verifier']).optional(),
+  verifiesAgentId: identifierSchema.optional() }).strict()
+const reportStrings = z.array(z.string().trim().min(1).max(4_000)).max(32)
+export const agentCanvasSchemas = {
+  current: z.object({}).strict(),
+  available_agents: z.object({}).strict(),
+  add_comment: canvasCommentRequestSchema.omit({ canvasId: true }),
+  create_frame: z.object({ frame: canvasFrameCreateRequestSchema.omit({ canvasId: true }) }).strict(),
+  update_frame: z.object({ frameId: identifierSchema, patch: canvasFrameUpdateRequestSchema.required({ baseRevision: true })
+    .refine(patch => Object.keys(patch).some(key => key !== 'baseRevision'), 'frame update requires changed fields') }).strict(),
+  append_content: z.object({ frameId: identifierSchema, content: canvasAppendRequestSchema.shape.content }).strict(),
+  delete_frame: z.object({ frameId: identifierSchema }).strict(),
+  start_workspace: z.object({ title: z.string().trim().min(1).max(200), goal: z.string().trim().min(1).max(8_000),
+    members: z.array(canvasMemberSchema).min(1).max(32) }).strict(),
+  stop_workspace: z.object({}).strict(),
+  assign: z.object({ members: z.array(canvasMemberSchema).min(1).max(32) }).strict(),
+  steer_assignment: canvasAssignmentRequestSchema.omit({ assignment: true }).extend(canvasSteerRequestSchema.shape).strict(),
+  stop_assignment: z.object({ agentId: identifierSchema }).strict(),
+  handoff: z.object({ toAgentId: identifierSchema, task: z.string().trim().min(1).max(4_000),
+    context: z.string().max(8_000).optional(), frameIds: z.array(identifierSchema).max(32).optional() }).strict(),
+  submit_report: z.object({ finding: z.string().trim().min(1).max(16_000),
+    evidenceRefs: z.array(z.object({ kind: z.enum(['frame','message','document','source','attempt','report']), id: identifierSchema }).strict()).max(64),
+    confidence: z.number().min(0).max(1), unresolved: reportStrings.optional(), nextStep: z.string().trim().min(1).max(4_000).optional(),
+    verifiesReportId: identifierSchema.optional(), disconfirmingChecks: reportStrings.optional(),
+    verdict: z.enum(['supported','rejected','inconclusive']).optional(), consumedReportIds: z.array(identifierSchema).max(32).optional(),
+    conflictResolution: z.array(z.record(z.string(), z.unknown())).max(32).optional(),
+  }).strict().refine(value => Buffer.byteLength(JSON.stringify(value)) <= 32_768, 'report exceeds 32768 bytes'),
+}

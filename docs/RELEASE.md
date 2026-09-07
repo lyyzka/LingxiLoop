@@ -1,6 +1,6 @@
 # Release and rollback
 
-The server image contains the pinned LingxiOS package and its Python runner. Release migration must complete before Web or Worker starts; only App B runs the Worker. This repository change does not itself alter the live OpenShip environment.
+The server image contains the exact published LingxiOS dependency and its Python runner. Release migration must complete before Web or Worker starts; only App B runs the Worker. This repository change does not itself alter the live OpenShip environment.
 
 Pushes to `main` deploy only after lint, all TypeScript checks, builds, unit/integration tests pass. No browser-test runner is installed or invoked by this workflow.
 
@@ -36,4 +36,4 @@ Process loss can discard unconfirmed deltas, so a client must retain its unsaved
 
 ## LingxiOS runtime
 
-Migration `0007_install_lingxios.sql` installs the fixed namespaced schema and approval foreign key. App B must provide the model token-cost rates, mount the persistent kernel-home volume, and retain the checked-in CPU, memory and PID bounds. The image supplies Python 3 and Bubblewrap; Worker readiness verifies the namespace sandbox before it accepts work. Rollback never reverses the schema migration.
+Migration `0010_lingxios_native_runtime.sql` performs the empty-state cutover and installs the schema shipped by the exact package version under the migration lock. Startup checks its runtime, schema, protocol, and file digest. App B must provide model token-cost rates, mount the persistent kernel-home volume, and retain the checked-in CPU, memory and PID bounds. The image supplies Python 3 and Bubblewrap; Worker readiness verifies the namespace sandbox before it accepts work. Rollback never reverses the schema migration.

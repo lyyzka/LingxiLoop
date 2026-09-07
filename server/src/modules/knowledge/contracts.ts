@@ -33,6 +33,21 @@ export const updateSourceRequestSchema = z.object({
   title: z.string().trim().min(1).max(200),
 }).strict()
 
+const sourceId = z.string().trim().min(1).max(200)
+const expectedSource = z.object({ enabled: z.boolean().optional(), status: z.string().trim().min(1).max(2000).optional(), title: z.string().trim().min(1).max(2000).optional() })
+  .strict().refine(value => Object.keys(value).length > 0, 'expected source fields are required')
+export const agentKnowledgeSchemas = {
+  list_sources: z.object({}).strict(),
+  check_source: z.object({ sourceId, expected: expectedSource }).strict(),
+  add_text: createSourceRequestSchema.options[0].omit({ kind: true, idempotencyKey: true }).extend({ title: updateSourceRequestSchema.shape.title,
+    text: createSourceRequestSchema.options[0].shape.text.max(200_000) }).strict(),
+  add_url: createSourceRequestSchema.options[1].omit({ kind: true, idempotencyKey: true }).strict(),
+  add_file: z.object({ title: updateSourceRequestSchema.shape.title.optional(), clientMsgNo: sourceId }).strict(),
+  retry_ingestion: z.object({ sourceId }).strict(),
+  set_source_enabled: z.object({ sourceId, enabled: z.boolean() }).strict(),
+  delete_source: z.object({ sourceId }).strict(),
+}
+
 export const sourceSelectionRequestSchema = z.object({
   excludedSourceIds: z.array(z.string().trim().min(1).max(200)).max(500),
 }).strict()

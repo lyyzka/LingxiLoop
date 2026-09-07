@@ -1,4 +1,3 @@
-import { startStaleAgentRunSweeper } from './agents/observability.js'
 import { closeDatabasePools } from './db/pool.js'
 import { startDbGcWorker } from './db-gc.js'
 import { env } from './env.js'
@@ -20,6 +19,7 @@ import { Lifecycle, type ServiceHandle, startWorkerTasks, type WorkerTaskDefinit
 import { initializeNativeStorage } from './storage.js'
 import { startLingxiOSWorker } from './agent-runtime/runtime.js'
 import { startAgentIngressRetry } from './agent-runtime/ingress.js'
+import { startNativeEventWorker } from './agents/native-event-worker.js'
 
 /**
  * Concurrency is part of each task's contract, rather than an accidental
@@ -29,6 +29,7 @@ import { startAgentIngressRetry } from './agent-runtime/ingress.js'
  * - idempotent: duplicate ticks converge on the same durable state;
  */
 export const productionWorkerTasks: readonly WorkerTaskDefinition[] = [
+  { name: 'agent-native-events', concurrency: 'queue-claim', start: startNativeEventWorker },
   { name: 'attention-projection', concurrency: 'database-lock', start: () => startAttentionProjectionWorker() },
   { name: 'teacher-briefings', concurrency: 'queue-claim', start: () => startTeacherBriefingWorker() },
   { name: 'notifications', concurrency: 'queue-claim', start: () => startNotificationScheduler() },
@@ -46,9 +47,6 @@ export const productionWorkerTasks: readonly WorkerTaskDefinition[] = [
   { name: 'presentation-storage-gc', concurrency: 'idempotent', start: () => startPresentationStorageGc() },
   { name: 'calendar-dispatch', concurrency: 'idempotent', start: () => startCalendarScheduler() },
   { name: 'poll-expiration', concurrency: 'database-lock', start: () => startPollExpirationSweeper(env.POLL_SWEEP_INTERVAL_MS) },
-  ...(process.env.ENABLE_AGENT_RUN_SWEEPER === 'false' ? [] : [
-    { name: 'stale-agent-runs', concurrency: 'idempotent' as const, start: () => startStaleAgentRunSweeper() },
-  ]),
 ]
 
 async function prepareWorkerData(): Promise<void> {

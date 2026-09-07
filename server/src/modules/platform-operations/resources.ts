@@ -48,12 +48,7 @@ export const ADMIN_RESOURCES = {
   'trust-snapshots': { label: '信任快照', group: 'learning', table: 'trust_snapshots', idColumn: 'id', companyColumn: 'company_id', projectColumn: 'project_id', statusColumn: 'audience_level', searchColumns: ['id', 'dataset_release'], orderColumn: 'created_at', listOmit: ['payload', 'signature'], sensitive: true },
 
   participants: { label: '参与者与 Agent', group: 'collaboration', table: 'participants', idColumn: 'id', companyColumn: 'company_id', statusColumn: 'status', searchColumns: ['id', 'name', 'email', 'role'], orderColumn: 'updated_at', listOmit: ['system_prompt', 'tools'], sensitive: true },
-  'agent-runs': { label: 'Agent 运行', group: 'collaboration', table: 'agent_runs', idColumn: 'id', companyColumn: 'company_id', statusColumn: 'status', searchColumns: ['id', 'agent_id', 'summary', 'error'], orderColumn: 'started_at', listOmit: ['trigger', 'input_message_ids'], sensitive: true },
-  'agent-work-items': { label: 'Agent 工作项', group: 'collaboration', table: 'agent_work_items', idColumn: 'id', companyColumn: 'company_id', statusColumn: 'status', searchColumns: ['id', 'agent_id', 'reason', 'error'], orderColumn: 'created_at', listOmit: ['lease_token_hash', 'steer_inputs', 'result_text'], detailOmit: ['lease_token_hash'], sensitive: true },
-  approvals: { label: '审批', group: 'collaboration', table: 'approvals', idColumn: 'id', companyColumn: 'company_id', statusColumn: 'status', searchColumns: ['id', 'agent_id', 'summary'], orderColumn: 'requested_at', listOmit: ['payload', 'blocked_action', 'remaining_actions', 'result'], sensitive: true },
   'agent-routines': { label: 'Agent 例程', group: 'collaboration', table: 'agent_routines', idColumn: 'id', companyColumn: 'company_id', statusColumn: 'status', searchColumns: ['id', 'agent_id', 'title', 'instructions'], orderColumn: 'created_at', listOmit: ['instructions', 'schedule'] },
-  'autonomy-rules': { label: '自主规则', group: 'collaboration', table: 'agent_autonomy_rules', idColumn: 'id', companyColumn: 'company_id', statusColumn: 'mode', searchColumns: ['id', 'agent_id', 'operation', 'scope'], orderColumn: 'created_at' },
-  'agent-memories': { label: 'Agent 记忆证据', group: 'collaboration', table: 'agent_memory_evidence', idColumn: 'id', companyColumn: 'company_id', statusColumn: 'status', searchColumns: ['id', 'agent_id', 'learner_id', 'error'], orderColumn: 'created_at', listOmit: ['user_text', 'assistant_text'], sensitive: true },
   conversations: { label: '会话', group: 'collaboration', table: 'conversations', idColumn: 'id', companyColumn: 'company_id', projectColumn: 'project_id', statusColumn: 'kind', searchColumns: ['id', 'title', 'subtitle', 'topic'], orderColumn: 'created_at', sensitive: true },
   'email-messages': { label: '邮件', group: 'collaboration', table: 'email_messages', idColumn: 'message_id', companyColumn: 'company_id', statusColumn: 'transport_status', searchColumns: ['message_id', 'subject', 'from_addr', 'to_addrs'], orderColumn: 'created_at', listOmit: ['body', 'html', 'references_chain', 'bcc_addrs'], sensitive: true },
   documents: { label: '文档', group: 'collaboration', table: 'documents', idColumn: 'id', companyColumn: 'company_id', projectColumn: 'project_id', searchColumns: ['id', 'title', 'created_by'], orderColumn: 'created_at', sensitive: true },
@@ -65,7 +60,6 @@ export const ADMIN_RESOURCES = {
   'knowledge-jobs': { label: '知识任务', group: 'collaboration', table: 'knowledge_source_jobs', idColumn: 'id', statusColumn: 'status', searchColumns: ['id', 'source_id', 'last_error'], orderColumn: 'created_at' },
 
   'llm-calls': { label: 'LLM 调用', group: 'operations', table: 'llm_calls', idColumn: 'id', companyColumn: 'company_id', statusColumn: 'status', searchColumns: ['id', 'agent_id', 'model', 'purpose', 'error'], orderColumn: 'created_at', listOmit: ['extras'], sensitive: true },
-  'tool-calls': { label: '工具调用', group: 'operations', table: 'tool_calls', idColumn: 'id', companyColumn: 'company_id', statusColumn: 'status', searchColumns: ['id', 'agent_id', 'name', 'error'], orderColumn: 'created_at', listOmit: ['args', 'result'], sensitive: true },
   'audit-events': { label: '审计事件', group: 'operations', table: 'audit_events', idColumn: 'id', companyColumn: 'company_id', statusColumn: 'kind', searchColumns: ['id', 'user_id', 'kind'], orderColumn: 'created_at', sensitive: true },
   'webhook-receipts': { label: 'Webhook 收据', group: 'operations', table: 'wukong_webhook_receipts', idColumn: 'event_id', statusColumn: 'event_type', searchColumns: ['event_id', 'event_type', 'error'], orderColumn: 'received_at' },
 } as const satisfies Record<string, AdminResourceDefinition>
@@ -88,7 +82,7 @@ function definition(name: string): AdminResourceDefinition {
   return value
 }
 
-function cursorOffset(cursor: string | undefined): number {
+export function cursorOffset(cursor: string | undefined): number {
   if (!cursor) return 0
   try {
     const value = Number(Buffer.from(cursor, 'base64url').toString('utf8'))
@@ -202,7 +196,8 @@ export async function getAdminResourceField(
 }
 
 export function adminResourceCatalog() {
-  return Object.entries(ADMIN_RESOURCES).map(([name, value]) => {
+  return [{ name: 'agent-runs', label: 'Agent 运行', group: 'collaboration', detail: true, sensitive: true },
+    { name: 'agent-deliveries', label: 'Agent 待处理投递', group: 'operations', detail: true, sensitive: false }, ...Object.entries(ADMIN_RESOURCES).map(([name, value]) => {
     const resource: AdminResourceDefinition = value
     return {
       name,
@@ -211,5 +206,5 @@ export function adminResourceCatalog() {
       detail: resource.detail !== false,
       sensitive: Boolean(resource.sensitive),
     }
-  })
+  })]
 }

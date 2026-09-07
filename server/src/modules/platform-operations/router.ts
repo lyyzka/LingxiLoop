@@ -1,5 +1,7 @@
 import { Router } from 'express'
 import { z } from 'zod'
+import { lingxiOSControl } from '../../agent-runtime/runtime.js'
+import { listNativeDeliveryFailures, retryNativeDelivery } from '../../agents/delivery-operations.js'
 import { pool } from '../../db/pool.js'
 import { withTransaction } from '../../db/transaction.js'
 import { env } from '../../env.js'
@@ -12,6 +14,7 @@ import { platformApplication } from '../platform/facade.js'
 import { requirePlatformAdmin, type PlatformAdminIdentity } from './authorization.js'
 import {
   adminResourceCatalog,
+  cursorOffset,
   getAdminResource,
   getAdminResourceField,
   listAdminResources,
@@ -24,6 +27,19 @@ export const adminRouter = Router()
 
 const reasonSchema = z.object({ reason: z.string().trim().min(1).max(280) }).strict()
 const INLINE_CONTENT_LIMIT = 100_000
+const runQuerySchema = z.object({
+  companyId: z.string().trim().min(1).max(200).optional(),
+  search: z.string().trim().max(200).optional(), cursor: z.string().max(5000).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(50), sort: z.enum(['newest','oldest','id']).optional(),
+  status: z.enum(['queued','leased','waiting','succeeded','partial','blocked','failed','cancelled']).optional(),
+}).strict()
+
+async function readAgentRun(id: string) {
+  const runtime = await lingxiOSControl()
+  const { items } = await runtime.listRuns({ id, limit: 1 })
+  const run = items[0]
+  return run ? { data: { ...run, diagnostics: await runtime.readDiagnostics(run.identity) } as Record<string, unknown>, sensitive: true } : null
+}
 
 function requestMetadata(request: Parameters<typeof requirePlatformAdmin>[1]) {
   return {
@@ -85,24 +101,22 @@ adminRouter.get('/resources', (_request, response) => {
 })
 
 adminRouter.get('/dashboard', safe(async (_request, response) => {
-  const [counts, failures, recentAudit, dependencies] = await Promise.all([
+  const [counts, failures, recentAudit, dependencies, operations] = await Promise.all([
     pool.query<{
       users: number
       companies: number
       projects: number
-      active_runs: number
     }>(`SELECT
           (SELECT COUNT(*)::int FROM users WHERE deleted_at IS NULL) AS users,
           (SELECT COUNT(*)::int FROM companies WHERE status<>'DELETED') AS companies,
-          (SELECT COUNT(*)::int FROM projects WHERE status<>'DELETED') AS projects,
-          (SELECT COUNT(*)::int FROM agent_runs WHERE status='running') AS active_runs`),
+          (SELECT COUNT(*)::int FROM projects WHERE status<>'DELETED') AS projects`),
     pool.query<{ failed_jobs: number }>(`SELECT
-          (SELECT COUNT(*)::int FROM agent_work_items WHERE status='failed')+
           (SELECT COUNT(*)::int FROM knowledge_source_jobs WHERE status='failed')+
           (SELECT COUNT(*)::int FROM notification_deliveries WHERE status='FAILED') AS failed_jobs`),
     pool.query(`SELECT id,user_id,company_id,kind,detail,created_at
                   FROM audit_events ORDER BY created_at DESC,id DESC LIMIT 10`),
     platformApplication.dependencyReadiness(),
+    lingxiOSControl().then(runtime => runtime.readOperations()),
   ])
   const count = counts.rows[0] ?? { users: 0, companies: 0, projects: 0, active_runs: 0 }
   response.json({
@@ -110,8 +124,8 @@ adminRouter.get('/dashboard', safe(async (_request, response) => {
       users: count.users,
       companies: count.companies,
       projects: count.projects,
-      activeRuns: count.active_runs,
-      failedJobs: failures.rows[0]?.failed_jobs ?? 0,
+      activeRuns: operations.active,
+      failedJobs: (failures.rows[0]?.failed_jobs ?? 0) + operations.failures + operations.failedDeliveries + operations.failedUsageDeliveries,
     },
     dependencies,
     recentAudit: recentAudit.rows,
@@ -119,7 +133,7 @@ adminRouter.get('/dashboard', safe(async (_request, response) => {
 }))
 
 adminRouter.get('/observability', safe(async (request, response) => {
-  const dashboard = await observabilityDashboard(pool)
+  const dashboard = await observabilityDashboard(await lingxiOSControl())
   const admin = identity(response)
   await audit({
     kind: 'platform_admin.sensitive_read',
@@ -148,6 +162,22 @@ adminRouter.get('/search', safe(async (request, response) => {
 }))
 
 adminRouter.get('/resources/:resource', safe(async (request, response) => {
+  if (request.params.resource === 'agent-deliveries') {
+    const query = z.object({ companyId: z.string().max(200).optional(),cursor: z.string().max(100).optional(),
+      limit: z.coerce.number().int().min(1).max(100).default(50) }).strip().parse(request.query)
+    response.json(await listNativeDeliveryFailures(pool,{ ...query,offset: cursorOffset(query.cursor) }))
+    return
+  }
+  if (request.params.resource === 'agent-runs') {
+    const parsed = runQuerySchema.safeParse(request.query)
+    if (!parsed.success) throw new HttpError(400, 'invalid run filters')
+    const { companyId, sort, cursor, ...query } = parsed.data
+    const offset = cursorOffset(cursor)
+    if (offset > 10000) throw new HttpError(400, 'run pagination is limited to 10000 rows; narrow the filters')
+    const result = await (await lingxiOSControl()).listRuns({ ...query, tenantId: companyId, offset, order: sort })
+    response.json({ data: result.items, nextCursor: result.nextCursor ? Buffer.from(String(offset + query.limit)).toString('base64url') : null })
+    return
+  }
   response.json(await listAdminResources(
     pool,
     String(request.params.resource),
@@ -155,12 +185,33 @@ adminRouter.get('/resources/:resource', safe(async (request, response) => {
   ))
 }))
 
+adminRouter.post('/agent-runs/:id/delivery/:channel/retry', safe(async (request, response) => {
+  const channel = z.enum(['message','events','usage']).parse(request.params.channel)
+  const { reason } = reasonSchema.parse(request.body)
+  const runtime = await lingxiOSControl(), run = (await runtime.listRuns({ id: String(request.params.id),limit: 1 })).items[0]
+  if (!run) throw new HttpError(404, 'run not found')
+  await audit({ kind: 'platform_admin.delivery_retry', userId: identity(response).id, companyId: run.identity.tenantId,
+    ...requestMetadata(request), detail: { runId: run.id, channel, reason } })
+  response.json({ retried: await runtime.retryDelivery(run.identity,channel) })
+}))
+
+adminRouter.post('/agent-deliveries/:id/retry', safe(async (request, response) => {
+  const id = String(request.params.id), { reason } = reasonSchema.parse(request.body)
+  const delivery = (await listNativeDeliveryFailures(pool,{ id,limit: 1 })).data[0]
+  if (!delivery) throw new HttpError(404,'failed delivery not found')
+  await audit({ kind: 'platform_admin.delivery_retry',userId: identity(response).id,companyId: String(delivery.company_id),
+    ...requestMetadata(request),detail: { deliveryId: id,reason } })
+  response.json({ retried: await retryNativeDelivery(pool,id) })
+}))
+
 adminRouter.get('/resources/:resource/:id/content/:field', safe(async (request, response) => {
   const resource = String(request.params.resource)
   const resourceId = String(request.params.id)
   const field = String(request.params.field)
   let raw: unknown
-  if (resource === 'documents' && field === 'body') {
+  if (resource === 'agent-runs') {
+    raw = (await readAgentRun(resourceId))?.data[field]
+  } else if (resource === 'documents' && field === 'body') {
     const document = await getAdminResource(pool, resource, resourceId)
     const companyId = typeof document?.data.company_id === 'string' ? document.data.company_id : ''
     if (!companyId) throw new HttpError(404, 'document not found')
@@ -195,8 +246,10 @@ adminRouter.get('/resources/:resource/:id/content/:field', safe(async (request, 
 adminRouter.get('/resources/:resource/:id', safe(async (request, response) => {
   const resource = String(request.params.resource)
   const resourceId = String(request.params.id)
-  const result = await getAdminResource(pool, resource, resourceId)
-  if (!result) throw new HttpError(404, 'resource not found')
+  const result = resource === 'agent-runs' ? await readAgentRun(resourceId)
+    : resource === 'agent-deliveries' ? { data: (await listNativeDeliveryFailures(pool,{ id: resourceId,limit: 1 })).data[0],sensitive: false }
+    : await getAdminResource(pool, resource, resourceId)
+  if (!result?.data) throw new HttpError(404, 'resource not found')
   if (resource === 'documents') {
     const companyId = String(result.data.company_id ?? '')
     if (companyId) result.data.body = await readDocumentText(resourceId, companyId)

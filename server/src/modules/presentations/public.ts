@@ -22,3 +22,4 @@ export {
   startPresentationWorker,
 } from './runtime.js'
 export * from './contracts.js'
+export { presentationTools } from './agent-tools.js'

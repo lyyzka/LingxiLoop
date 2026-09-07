@@ -140,6 +140,7 @@ export function createCanvasApplication(infrastructure: CanvasInfrastructure) {
 
   const workspaceApplication = createCanvasWorkspacesApplication({
     db,
+    execution: infrastructure.execution,
     transaction,
     resolveCanvasRead,
     toReport,
@@ -148,6 +149,7 @@ export function createCanvasApplication(infrastructure: CanvasInfrastructure) {
 
   const assignmentApplication = createCanvasAssignmentsApplication({
     db,
+    execution: infrastructure.execution,
     transaction,
     withCanvasFence,
     getCanvasSnapshot: workspaceApplication.getCanvasSnapshot,

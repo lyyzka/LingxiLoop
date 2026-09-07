@@ -2,6 +2,7 @@ import type { ThreadMessage } from '@assistant-ui/react'
 import { create } from 'zustand'
 import { getLingxiMessageMetadata, type LingxiMessageMetadata } from './model'
 import { projectMessageGroups } from './converter'
+import { harnessParts, harnessStatus, mergeHarness } from './harness'
 
 export const CHAT_HISTORY_PAGE_SIZE = 80
 
@@ -48,21 +49,31 @@ function metadata(message: ThreadMessage): LingxiMessageMetadata {
 }
 
 function messageKey(message: ThreadMessage): string {
-  return metadata(message).clientMessageId || message.id
+  const value = metadata(message)
+  return value.senderKind === 'agent' && value.messageKind === 'text' && value.runId
+    ? JSON.stringify(['run',value.conversationId,value.senderId,value.runId,value.threadRootId])
+    : value.clientMessageId || message.id
 }
 
 export function mergeCanonicalMessages(
   current: readonly ThreadMessage[],
   incoming: readonly ThreadMessage[],
 ): ThreadMessage[] {
-  const incomingIds = new Set(incoming.map((message) => message.id))
-  const incomingClientIds = new Set(incoming.map(messageKey))
   const byId = new Map<string, ThreadMessage>()
-  for (const message of current) {
-    if (incomingIds.has(message.id) || incomingClientIds.has(messageKey(message))) continue
-    byId.set(message.id, message)
+  for (const message of [...current, ...incoming]) {
+    const key = messageKey(message), previous = byId.get(key)
+    const before = previous && metadata(previous), after = metadata(message)
+    if (previous && before?.harness && after.harness && message.role === 'assistant') {
+      const harness = mergeHarness(before.harness,after.harness)
+      const canonical = harness.resultId === before.harness.resultId && before.sequence !== null ? previous : message
+      byId.set(key,{ ...canonical, status: harnessStatus(harness),
+        content: harness.message ? harnessParts(harness) : message.content,
+        metadata: { ...canonical.metadata, custom: { ...before,...metadata(canonical), harness,
+          harnessControl: after.harnessControl ?? before.harnessControl,
+          harnessError: after.harnessError ?? before.harnessError,
+          unresolvedActions: after.unresolvedActions ?? before.unresolvedActions } } } as ThreadMessage)
+    } else if (!before?.harness || after.harness) byId.set(key,message)
   }
-  for (const message of incoming) byId.set(message.id, message)
   return projectMessageGroups([...byId.values()].sort((left, right) => {
     const leftSequence = metadata(left).sequence
     const rightSequence = metadata(right).sequence

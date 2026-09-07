@@ -1,4 +1,5 @@
 import type { ThreadMessage } from '@assistant-ui/react'
+import type { RunView } from 'lingxios/ui'
 
 export type LingxiDeliveryStatus = 'sending' | 'sent' | 'failed'
 export type LingxiMessagePresentation = 'conversation' | 'special-card'
@@ -63,6 +64,11 @@ export interface LingxiMessageMetadata extends Record<string, unknown> {
   messageKind: string
   presentation: LingxiMessagePresentation
   runId: string | null
+  harness?: RunView
+  harnessControl?: boolean
+  harnessReplaySeq?: number
+  harnessError?: string
+  unresolvedActions?: Array<{ actionKey: string; action: string }>
   quotedMessageId: string | null
   quote: LingxiQuoteMetadata | null
   reactions: LingxiReactionMetadata[]
