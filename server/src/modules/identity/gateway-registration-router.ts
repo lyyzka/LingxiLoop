@@ -86,3 +86,21 @@ gatewayRegistrationRouter.post('/internal/registration/provision', safe(async (r
   })
   res.json({ appUserId })
 }))
+
+gatewayRegistrationRouter.post('/internal/bootstrap/platform-user', safe(async (req, res) => {
+  requireGateway(req)
+  if (req.gatewayService?.capability !== 'bootstrap-platform-user'
+    || req.gatewayAuthUserId !== req.body?.authUserId) throw new HttpError(403, 'bootstrap service required')
+  const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : ''
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : ''
+  if (!email || !name) throw new HttpError(400, 'email and name are required')
+  const appUserId = await withTransaction(pool, async (db) => {
+    await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [email])
+    const existing = await db.query<{ id: string }>(`SELECT id FROM users WHERE lower(email)=$1 AND deleted_at IS NULL AND suspended_at IS NULL FOR UPDATE`, [email])
+    if (existing.rows[0]) return existing.rows[0].id
+    const id = `u-${randomUUID()}`
+    await db.query(`INSERT INTO users(id,email,display_name,email_verified_at) VALUES($1,$2,$3,NOW())`, [id, email, name])
+    return id
+  })
+  res.json({ appUserId })
+}))

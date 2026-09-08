@@ -60,6 +60,33 @@ describe('control-plane trust boundaries', () => {
     expect(response.status).toBe(401)
   })
 
+  it('links only the bootstrap administrator to a signed business identity', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO user(id,name,email,emailVerified,createdAt,updatedAt,role) VALUES(?,?,?,1,?,?,'admin')`)
+        .bind('bootstrap-admin', 'Bootstrap Admin', 'bootstrap-admin@example.com', now, now),
+      env.DB.prepare(`INSERT INTO account(id,accountId,providerId,issuer,userId,password,createdAt,updatedAt) VALUES(?,?,'credential','local:credential',?,?,?,?)`)
+        .bind('bootstrap-admin-account', 'bootstrap-admin', 'bootstrap-admin', await hashPassword('password123'), now, now),
+      env.DB.prepare(`UPDATE bootstrap_state SET completed_at=?,admin_user_id=? WHERE id=1`).bind(now, 'bootstrap-admin'),
+    ])
+    fetchMock.activate()
+    fetchMock.disableNetConnect()
+    fetchMock.get('https://challenges.cloudflare.com').intercept({ path: '/turnstile/v0/siteverify', method: 'POST' }).reply(200, { success: true })
+    fetchMock.get('https://origin.example.com').intercept({ path: '/api/internal/bootstrap/platform-user', method: 'POST' }).reply(200, { appUserId: 'bootstrap-app-user' })
+    try {
+      const signIn = await SELF.fetch('https://admin.example.com/api/auth/sign-in/email', {
+        method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://admin.example.com', 'x-captcha-response': 'XXXX.DUMMY.TOKEN.XXXX' },
+        body: JSON.stringify({ email: 'bootstrap-admin@example.com', password: 'password123' }),
+      })
+      const response = await SELF.fetch('https://admin.example.com/api/control/bootstrap-business-identity', {
+        method: 'POST', headers: { cookie: signIn.headers.get('set-cookie') ?? '' },
+      })
+      expect(await response.json()).toEqual({ ok: true, appUserId: 'bootstrap-app-user' })
+      expect(await env.DB.prepare(`SELECT app_user_id FROM app_user_links WHERE auth_user_id='bootstrap-admin'`).first()).toEqual({ app_user_id: 'bootstrap-app-user' })
+      fetchMock.assertNoPendingInterceptors()
+    } finally { fetchMock.deactivate() }
+  })
+
   it('signs in after an OTP verifies a password account', async () => {
     const email = 'otp-signup@example.com'
     const now = Math.floor(Date.now() / 1000)

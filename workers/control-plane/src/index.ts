@@ -84,7 +84,7 @@ async function sendEmail(env: Bindings, message: { to: string; subject: string; 
   await sendSmtpEmail({ address: 'no-reply@lingxilearn.cn', password: env.ALIYUN_OTP_EMAIL_PASSWORD }, message)
 }
 
-async function originRequest(env: Bindings, path: string, init: RequestInit, identity?: { appUserId?: string; authUserId?: string; authSessionIssuedAt?: number; platformAdmin?: boolean }, service?: { capability: 'registration-provision' | 'registration-invitation'; emailVerified?: boolean }): Promise<Response> {
+async function originRequest(env: Bindings, path: string, init: RequestInit, identity?: { appUserId?: string; authUserId?: string; authSessionIssuedAt?: number; platformAdmin?: boolean }, service?: { capability: 'registration-provision' | 'registration-invitation' | 'bootstrap-platform-user'; emailVerified?: boolean }): Promise<Response> {
   const url = new URL(path, env.ORIGIN_BASE_URL)
   const assertion = {
     appUserId: identity?.appUserId ?? null,
@@ -425,6 +425,27 @@ app.post('/api/internal/bootstrap-admin', async (c) => {
     c.env.DB.prepare(`UPDATE bootstrap_state SET completed_at=?,admin_user_id=? WHERE id=1`).bind(now, user.id),
   ])
   return c.json({ ok: true, removeSecret: 'BOOTSTRAP_ADMIN_TOKEN' })
+})
+
+app.post('/api/control/bootstrap-business-identity', async (c) => {
+  await attachSession(c, 'database')
+  const session = requireAdmin(c)
+  if (session instanceof Response) return session
+  const state = await c.env.DB.prepare(`SELECT admin_user_id FROM bootstrap_state WHERE id=1`).first<{ admin_user_id: string | null }>()
+  if (state?.admin_user_id !== session.user.id) return c.json({ error: 'initial administrator required' }, 403)
+  const linked = await c.env.DB.prepare(`SELECT app_user_id FROM app_user_links WHERE auth_user_id=?`).bind(session.user.id).first<{ app_user_id: string }>()
+  if (linked) return c.json({ ok: true, appUserId: linked.app_user_id })
+  const response = await originRequest(c.env, '/api/internal/bootstrap/platform-user', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ authUserId: session.user.id, email: session.user.email, name: session.user.name }),
+  }, { authUserId: session.user.id }, { capability: 'bootstrap-platform-user', emailVerified: session.user.emailVerified })
+  if (!response.ok) return response
+  const { appUserId } = await response.json<{ appUserId: string }>()
+  const inUse = await c.env.DB.prepare(`SELECT auth_user_id FROM app_user_links WHERE app_user_id=?`).bind(appUserId).first<{ auth_user_id: string }>()
+  if (inUse && inUse.auth_user_id !== session.user.id) return c.json({ error: 'business identity is linked to another administrator' }, 409)
+  await c.env.DB.prepare(`INSERT INTO app_user_links(auth_user_id,app_user_id,provisioned_at) VALUES(?,?,?)`)
+    .bind(session.user.id, appUserId, Date.now()).run()
+  return c.json({ ok: true, appUserId })
 })
 
 app.all('/api/mcp', async (c) => {

@@ -55,3 +55,16 @@ test('registration service binds capability, verified subject and all business i
     assert.equal(validRegistrationService(assertion, { ...body, [field]: 'changed' }), false)
   }
 })
+
+test('bootstrap platform identity service binds the verified bootstrap subject', () => {
+  const body = { authUserId: 'bootstrap-auth', email: 'admin@example.com', name: 'Administrator' }
+  const assertion: GatewayAssertion = {
+    appUserId: null, authUserId: 'bootstrap-auth', method: 'POST', path: '/api/internal/bootstrap/platform-user',
+    timestamp: Date.now(), nonce: '11111111-1111-4111-8111-111111111111',
+    service: { audience: 'registration', capability: 'bootstrap-platform-user', emailVerified: true,
+      bodyHash: createHash('sha256').update(JSON.stringify(body)).digest('base64url') },
+  }
+  assert.equal(validRegistrationService(assertion, body), true)
+  assert.equal(validRegistrationService(assertion, { ...body, authUserId: 'other' }), false)
+  assert.equal(validRegistrationService({ ...assertion, path: '/api/internal/registration/provision' }, body), false)
+})
