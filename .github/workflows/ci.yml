@@ -250,7 +250,7 @@ jobs:
             LINGXILOOP_VERSION=${{ steps.metadata.outputs.version }}
             LINGXILOOP_COMMIT_SHA=${{ github.sha }}
             WUKONG_COMMIT=${{ matrix.wukong_commit }}
-            VITE_TURNSTILE_SITE_KEY=0x4AAAAAAEk9EZhHYeS3szPO
+            VITE_TURNSTILE_SITE_KEY=0x4AAAAAAEsX5eyOl1nAe5i9
           cache-from: type=gha,scope=${{ matrix.package }}
           cache-to: type=gha,mode=max,scope=${{ matrix.package }}
 
@@ -313,7 +313,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           VITE_LINGXILIT_URL: ${{ vars.VITE_LINGXILIT_URL || 'https://openlit.lingxilearn.cn' }}
-          VITE_TURNSTILE_SITE_KEY: 0x4AAAAAAEk9EZhHYeS3szPO
+          VITE_TURNSTILE_SITE_KEY: 0x4AAAAAAEsX5eyOl1nAe5i9
 
   rollout:
     if: >-
