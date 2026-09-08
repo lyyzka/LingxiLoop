@@ -1,3 +1,4 @@
+import { revokeCompanyAccess } from './revocation.js'
 import { pool } from '../../db/pool.js'
 import type { WorkerTaskHandle } from '../../runtime/lifecycle.js'
 import { seedMemberLearningContextThreads } from '../context-threads/public.js'
@@ -20,7 +21,12 @@ export async function runCompanyOnboardingEffects(): Promise<void> {
     }, 30_000)
     heartbeat.unref?.()
     try {
-      await seedMemberLearningContextThreads({ companyId: effect.companyId, userId: effect.memberId })
+      if (effect.kind === 'access.revoke') {
+        if (!effect.revokedAt) throw new Error('revocation cutoff missing')
+        await revokeCompanyAccess(effect.companyId, effect.memberId, effect.revokedAt)
+      } else {
+        await seedMemberLearningContextThreads({ companyId: effect.companyId, userId: effect.memberId })
+      }
       if (leaseLost) throw new Error(`company onboarding effect lease lost during execution: ${effect.id}`)
       await completeCompanyOnboardingEffect(pool, effect)
     } catch (error) {

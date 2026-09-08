@@ -181,7 +181,6 @@ export async function listLearningSpaces(
   const pageScopes = authorized.slice(0, input.limit)
   const rows = await listLearningSpaceRows(db, pageScopes)
   const capabilities = await Promise.all(rows.map(async (row): Promise<LearningSpaceCapabilities> => {
-    const personal = row.projectKind === 'PERSONAL_LEARNING'
     const lifecycleAction = learningLifecycleAction(row.projectKind, row.status)
     const request = (action: PermissionAction) => permission.can({
       actorUserId,
@@ -200,15 +199,15 @@ export async function listLearningSpaces(
       review,
       lifecycle,
     ] = await Promise.all([
-      personal ? null : request('learning:manage'),
-      personal ? null : request('course:update'),
-      personal ? null : request('project_invitation:create'),
-      personal ? null : request('project_invitation:revoke'),
-      personal ? null : request('project_member:update'),
-      personal ? null : request('project_member:remove'),
+      request('learning:manage'),
+      request('course:update'),
+      request('project_invitation:create'),
+      request('project_invitation:revoke'),
+      request('project_member:update'),
+      request('project_member:remove'),
       request('learning:submit'),
-      personal ? null : request('learning:review'),
-      !personal && lifecycleAction ? request(LIFECYCLE_PERMISSION_ACTIONS[lifecycleAction]) : null,
+      request('learning:review'),
+      lifecycleAction ? request(LIFECYCLE_PERMISSION_ACTIONS[lifecycleAction]) : null,
     ])
     return {
       canEditContent: editContent?.allowed ?? false,
@@ -268,10 +267,7 @@ async function resolveTeacherAccess(
   scope: LearningScope,
   projectId: string,
 ): Promise<void> {
-  const access = await resolveProjectAccess(db, scope, projectId, 'learning:review')
-  if (access.projectKind === 'PERSONAL_LEARNING') {
-    throw new LearningApplicationError('forbidden', 'teacher reporting is unavailable for Personal Learning')
-  }
+  await resolveProjectAccess(db, scope, projectId, 'learning:review')
 }
 
 export async function learningOverview(

@@ -10,6 +10,7 @@ import type {
 } from './contracts'
 
 export const companiesApi = {
+  leaveCompany: (companyId: string) => http<{ ok: true }>(`/companies/${encodeURIComponent(companyId)}/leave`, { method: 'POST' }),
   listCompanies: () =>
     http<CompanySummary[]>('/companies'),
   getCompany: (companyId: string) => http<ApiCompanyProfile>(`/companies/${encodeURIComponent(companyId)}`),
@@ -17,18 +18,16 @@ export const companiesApi = {
     http<ApiCompanyProfile>(`/companies/${encodeURIComponent(companyId)}`, { method: 'PATCH', body: JSON.stringify(input) }),
   listCompanyMembers: (companyId: string) =>
     http<ApiCompanyMember[]>(`/companies/${encodeURIComponent(companyId)}/members`),
-  updateCompanyMember: (companyId: string, userId: string, role: 'admin' | 'member') =>
-    http<{ ok: true; userId: string; role: string }>(`/companies/${encodeURIComponent(companyId)}/members/${encodeURIComponent(userId)}`, { method: 'PATCH', body: JSON.stringify({ role }) }),
+  updateCompanyMember: (companyId: string, userId: string, isAdmin: boolean) =>
+    http<{ ok: true; userId: string; role: string }>(`/companies/${encodeURIComponent(companyId)}/members/${encodeURIComponent(userId)}`, { method: 'PATCH', body: JSON.stringify({ isAdmin }) }),
   removeCompanyMember: (companyId: string, userId: string) =>
     http<{ ok: true }>(`/companies/${encodeURIComponent(companyId)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
   listInvitations: (companyId: string) =>
     http<ApiInvitation[]>(`/companies/${encodeURIComponent(companyId)}/invitations`),
   createInvitation: (companyId: string, input: {
-    email?: string | null
-    role?: 'member' | 'admin'
+    email: string
+    isAdmin: boolean
     note?: string | null
-    multiUse?: boolean
-    maxUses?: number
     /** Ask the server to send the invitation email on the inviter's
      *  behalf. Requires `email`; delivery failures reject the request. */
     sendEmail?: boolean

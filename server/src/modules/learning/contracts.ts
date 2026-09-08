@@ -19,7 +19,7 @@ export const updateCourseRequestSchema = z.object({
 export const updateCourseMemberRequestSchema = z.object({ role: z.enum(['teacher', 'learner']) }).strict()
 
 export const addInstitutionalCourseMemberRequestSchema = z.object({
-  role: z.enum(['TEACHER', 'TA', 'STUDENT', 'OBSERVER']),
+  role: z.literal('TEACHER'),
   idempotencyKey: z.string().trim().min(8).max(200),
 }).strict()
 

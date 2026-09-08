@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { readFile, readdir } from 'node:fs/promises'
 import type { Pool, PoolClient } from 'pg'
 import { packageResources, releaseVersions } from 'lingxios'
-import { ensurePersonalPlans } from '../modules/entitlements/public.js'
+import { ensureEducationPlan } from '../modules/entitlements/public.js'
 import { pool } from './pool.js'
 
 const MIGRATIONS_URL = new URL('./migrations/', import.meta.url)
@@ -192,7 +192,7 @@ export async function migrateDatabase(
     await client.query('BEGIN')
     try {
       await client.query('SET search_path TO public')
-      await ensurePersonalPlans(client)
+      await ensureEducationPlan(client)
       await client.query('COMMIT')
     } catch (error) {
       await client.query('ROLLBACK')

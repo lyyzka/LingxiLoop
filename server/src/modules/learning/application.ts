@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Queryable } from '../../db/queryable.js'
 import { type ProjectKind, projectKindBelongsToCompanyType } from '../../domain/public.js'
-import { createPermissionService, ForbiddenError, type PermissionAction, resolvePlanEntitlements } from '../access/public.js'
-import { ensureTeacherPlans } from '../entitlements/public.js'
+import { createPermissionService, ForbiddenError, type PermissionAction, } from '../access/public.js'
 import { appendDomainEventInTransaction } from '../events/public.js'
 import { importProjectLearningActivities } from './activity-import-application.js'
 import type {
@@ -49,7 +48,6 @@ import { assignLearningMissionCoordinator, listVisibleLearningMissions } from '.
 import {
   addInstitutionalCourseMember,
   changeCourseMember,
-  countActiveTeachingProjects,
   countViewerPendingLearningReviews,
   courseManager,
   courseRole,
@@ -221,16 +219,7 @@ export class LearningApplication {
       if (!projectKindBelongsToCompanyType(projectKind, context.company.type)) {
         throw new LearningApplicationError('forbidden', `${projectKind} is not valid for this Company`)
       }
-      let planId: string | null = null
-      if (projectKind === 'TEACHING') {
-        const { teacherFreePlanId } = await ensureTeacherPlans(db)
-        const entitlements = await resolvePlanEntitlements(db, teacherFreePlanId)
-        const projectLimit = entitlements.number('teacher.project_limit')
-        if (projectLimit !== null && await countActiveTeachingProjects(db, scope.companyId) >= projectLimit) {
-          throw new LearningApplicationError('forbidden', 'Teacher Free Project limit reached')
-        }
-        planId = teacherFreePlanId
-      }
+      const planId: string | null = null
       await insertCourse(db, { ...scope, projectId, courseId, roomId, kind: projectKind, planId, input })
       const creationKey = `project-created:${projectId}`
       await appendDomainEventInTransaction(db, {
@@ -256,7 +245,7 @@ export class LearningApplication {
         event: {
           eventType: 'PROJECT_MEMBERSHIP.ASSIGNED',
           schemaVersion: 1,
-          payload: { userId: scope.userId, role: 'OWNER', source: 'COURSE_CREATION' },
+          payload: { userId: scope.userId, role: 'TEACHER', source: 'COURSE_CREATION' },
         },
       })
       const teacher = await this.infrastructure.ensureTeacherAgent(scope.companyId, courseId, db)
@@ -817,18 +806,7 @@ export class LearningApplication {
 
   private assertMemberChange(outcome: CourseMemberChangeOutcome): void {
     if (outcome === 'not_found') throw new LearningApplicationError('not_found', 'course member not found')
-    if (outcome === 'last_teacher') {
-      throw new LearningApplicationError('conflict', 'an active course must keep at least one teacher')
-    }
-    if (outcome === 'last_owner') {
-      throw new LearningApplicationError('conflict', 'an active course must keep at least one owner')
-    }
-    if (outcome === 'protected_owner') {
-      throw new LearningApplicationError('conflict', 'a course owner cannot be downgraded or removed')
-    }
-    if (outcome === 'protected_creator') {
-      throw new LearningApplicationError('conflict', 'the course creator cannot be downgraded or removed')
-    }
+
   }
 
   private async syncStudyRoom(companyId: string, courseId: string): Promise<void> {

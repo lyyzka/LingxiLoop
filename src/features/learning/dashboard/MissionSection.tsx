@@ -8,10 +8,9 @@ import { MISSION_KIND_LABELS, STEP_TYPE_LABELS, statusLabel } from '../component
 import type { LearningMission } from '../contracts'
 
 export function MissionSection({
-  missions, personal, showStepEvidence = false,
+  missions, showStepEvidence = false,
 }: {
   missions: LearningMission[]
-  personal: boolean
   showStepEvidence?: boolean
 }) {
   if (missions.length === 0) {
@@ -19,7 +18,7 @@ export function MissionSection({
       <Empty className="min-h-72 border">
         <EmptyHeader>
           <EmptyMedia variant="icon"><HugeiconsIcon icon={Task01Icon} strokeWidth={2} /></EmptyMedia>
-          <EmptyTitle>{personal ? '还没有学习计划' : '还没有学习任务'}</EmptyTitle>
+          <EmptyTitle>还没有学习任务</EmptyTitle>
           <EmptyDescription>在课程对话中建立持续任务后，真实步骤与进展会显示在这里。</EmptyDescription>
         </EmptyHeader>
       </Empty>

@@ -3,6 +3,7 @@ import { create } from 'zustand'
 export const SETTINGS_DIALOG_TRIGGER_ID = 'lingxiloop-settings-trigger'
 
 export type SettingsSectionId =
+  | 'company'
   | 'account'
   | 'appearance-sound'
   | 'notifications'

@@ -27,7 +27,6 @@ test('settings surfaces only existing theme, sound, notification, and account AP
   const account = read('./AccountSettingsPanel.tsx')
   const notification = read('./NotificationSettingsPanel.tsx')
   const dataAccount = read('./DataAccountSettingsPanel.tsx')
-  const authApi = read('../../auth/api.ts')
 
   assert.match(appearance, /useTheme\(\)/)
   assert.match(appearance, /useSoundStore/)
@@ -38,10 +37,6 @@ test('settings surfaces only existing theme, sound, notification, and account AP
   assert.match(notification, /toastAction\(learningApi\.setNotificationPreferences/)
   assert.doesNotMatch(notification, /设备推送|不可用/)
   assert.match(dataAccount, /authApi\.signOut\(\)/)
-  assert.match(dataAccount, /promptSensitiveAction/)
-  assert.match(dataAccount, /confirmation !== ACCOUNT_DELETE_CONFIRMATION/)
-  assert.match(dataAccount, /toastAction\(authApi\.deleteAccount\(\)/)
-  assert.match(authApi, /deleteAccount: \(\) => http<DeleteAccountResponse>\('\/me\/account', \{ method: 'DELETE' \}\)/)
   assert.doesNotMatch(`${appearance}\n${dataAccount}`, /语言|发布渠道|稳定通道|永久删除全部数据|关联数据无法恢复/)
 })
 

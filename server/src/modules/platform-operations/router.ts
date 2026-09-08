@@ -1,3 +1,4 @@
+import { educationRouter } from '../education/router.js'
 import { Router } from 'express'
 import { z } from 'zod'
 import { lingxiOSControl } from '../../agent-runtime/runtime.js'
@@ -95,6 +96,8 @@ adminRouter.use((request, response, next) => {
 function identity(response: { locals: Record<string, unknown> }): PlatformAdminIdentity {
   return response.locals.platformAdmin as PlatformAdminIdentity
 }
+
+adminRouter.use(educationRouter)
 
 adminRouter.get('/session', (request, response) => {
   response.json({
@@ -381,6 +384,13 @@ function userLifecycle(action: 'suspend' | 'restore' | 'delete') {
       reason: parsed.data.reason,
       ...requestMetadata(request),
     }))
+    if (action !== 'restore') {
+      const { disconnectUserFromCompany } = await import('../../ws.js')
+      const { rows } = await pool.query<{ company_id: string }>(
+        `SELECT company_id FROM company_memberships WHERE user_id=$1`, [targetId],
+      )
+      for (const membership of rows) disconnectUserFromCompany(targetId, membership.company_id)
+    }
     response.json(result)
   })
 }

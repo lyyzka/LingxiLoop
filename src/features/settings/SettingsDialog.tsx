@@ -1,3 +1,4 @@
+import { CompanySettingsPanel } from './CompanySettingsPanel'
 import {
   Cancel01Icon,
   Database01Icon,
@@ -44,6 +45,7 @@ import type { SettingsSectionId } from './store'
 import { SETTINGS_DIALOG_TRIGGER_ID, useSettingsDialog } from './store'
 
 const SETTINGS_SECTIONS = [
+  { id: 'company', label: '公司与成员', description: '查看公司身份、管理教师和成员。', icon: UserCircleIcon },
   {
     id: 'account',
     label: '账号',
@@ -59,7 +61,7 @@ const SETTINGS_SECTIONS = [
   {
     id: 'notifications',
     label: '通知',
-    description: '管理当前个人学习区或课程的通知偏好。',
+    description: '管理当前课程的通知偏好。',
     icon: Notification02Icon,
   },
   {
@@ -77,6 +79,7 @@ const SETTINGS_SECTIONS = [
 
 function SettingsPanel({ section }: { section: SettingsSectionId }) {
   switch (section) {
+    case 'company': return <CompanySettingsPanel />
     case 'account': return <AccountSettingsPanel />
     case 'appearance-sound': return <AppearanceSoundSettingsPanel />
     case 'notifications': return <NotificationSettingsPanel />

@@ -54,7 +54,7 @@ async function seedEmailConvoWithInbound(): Promise<{ companyId: string; convers
   await seedUserMembership(ME_USER_ID, companyId)
   await pool.query(
     `INSERT INTO project_memberships(company_id,project_id,user_id,role)
-     VALUES ($1,$2,$3,'OWNER')`,
+     VALUES ($1,$2,$3,'TEACHER')`,
     [companyId, projectId, ME_USER_ID],
   )
   const conv = await findOrCreateEmailConversation({
@@ -145,7 +145,7 @@ test('[integration] reply continues the thread when the latest row is our own ou
   await seedUserMembership(ME_USER_ID, companyId)
   await pool.query(
     `INSERT INTO project_memberships(company_id,project_id,user_id,role)
-     VALUES ($1,$2,$3,'OWNER')`,
+     VALUES ($1,$2,$3,'TEACHER')`,
     [companyId, projectId, ME_USER_ID],
   )
 

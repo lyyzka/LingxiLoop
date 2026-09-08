@@ -1,3 +1,5 @@
+import { lockEducationAdmissions } from './repository.js'
+import { acceptEducationInvitation } from './admission.js'
 import type { Queryable } from '../../db/queryable.js'
 import {
   companyRoleToWire,
@@ -6,33 +8,26 @@ import { createPermissionService } from '../access/public.js'
 import type {
   CreateInvitationInput,
   InvitationPreview,
-  InvitationRow,
   RequestAuditContext,
   UpdateCompanyInput,
 } from './contracts.js'
-import { enqueueMemberOnboardingEffect } from './effects-repository.js'
 import {
-  companyMembershipSummary,
-  courseManagementCounts,
   emailAlreadyMember,
   findCompany,
   findCompanyForMember,
   findUser,
-  insertAcceptedMembership,
   insertInvitation,
   invitationEmailContext,
   invitationWithCompany,
   isCompanyMember,
   isDepartedCompanyHuman,
   listCompanies,
-  listCompanyChannels,
   listInvitations,
   listMembers,
   lockCompany,
-  lockInvitation,
-  lockTeachingCourses,
   memberRole,
   removeMemberState,
+  assertAdministratorCanDepart,
   revokeActiveEmailInvitations,
   revokeInvitation,
   setMemberRole,
@@ -69,10 +64,10 @@ export interface CompanyInfrastructure {
 }
 
 const INVITE_TTL_MS = 1000 * 60 * 60 * 24 * 7
-const INVITE_MAX_LINK_USES = 100
 function baseInvitation(invitation: Awaited<ReturnType<typeof invitationWithCompany>> & {}) {
   return {
     role: companyRoleToWire(invitation.role),
+    isAdmin: invitation.is_admin,
     email: invitation.email,
     note: invitation.note,
     expiresAt: new Date(invitation.expires_at).toISOString(),
@@ -114,7 +109,7 @@ export class CompanyApplication {
     db: Queryable,
     companyId: string,
     userId: string,
-    action: 'company:update' | 'company_member:list' | 'company_member:update' | 'company_member:remove'
+    action: 'company:read' | 'company:update' | 'company_member:list' | 'company_member:update' | 'company_member:remove'
       | 'company_invitation:list' | 'company_invitation:create' | 'company_invitation:revoke',
     lockDependencies = false,
   ): Promise<void> {
@@ -128,6 +123,7 @@ export class CompanyApplication {
     auditContext: RequestAuditContext,
   ) {
     await this.infrastructure.transaction(async (db) => {
+      await lockEducationAdmissions(db)
       await this.assertPermission(db, companyId, userId, 'company:update', true)
       if (!await updateCompany(db, companyId, input)) {
         throw new CompanyApplicationError('not_found', 'company not found')
@@ -147,64 +143,44 @@ export class CompanyApplication {
   }
 
   async changeMemberRole(args: {
-    companyId: string; userId: string; targetId: string; role: 'admin' | 'member'; audit: RequestAuditContext
+    companyId: string; userId: string; targetId: string; isAdmin: boolean; audit: RequestAuditContext
   }) {
-    if (args.targetId === args.userId) throw new CompanyApplicationError('conflict', 'you cannot change your own company role')
     await this.infrastructure.transaction(async (db) => {
+      await lockEducationAdmissions(db)
       await this.assertPermission(db, args.companyId, args.userId, 'company_member:update', true)
       const current = await memberRole(db, args.companyId, args.targetId, true)
       if (!current) throw new CompanyApplicationError('not_found', 'member not found')
-      if (current === 'OWNER') throw new CompanyApplicationError('conflict', 'the company owner cannot be demoted')
-      await setMemberRole(db, args.companyId, args.targetId, args.role)
+      if (current !== 'TEACHER') throw new CompanyApplicationError('conflict', 'only teachers can administer a company')
+      if (!args.isAdmin) await assertAdministratorCanDepart(db, args.companyId, args.targetId)
+      await setMemberRole(db, args.companyId, args.targetId, args.isAdmin)
       await this.infrastructure.auditInTransaction(db, {
         kind: 'company_member_role_update', userId: args.userId, companyId: args.companyId,
-        ...args.audit, detail: { targetId: args.targetId, role: args.role },
+        ...args.audit, detail: { targetId: args.targetId, isAdmin: args.isAdmin },
       })
     })
-    return { ok: true as const, userId: args.targetId, role: args.role }
+    return { ok: true as const, userId: args.targetId, isAdmin: args.isAdmin }
   }
 
   async removeMember(args: {
     companyId: string; userId: string; targetId: string; audit: RequestAuditContext
   }) {
-    if (args.targetId === args.userId) throw new CompanyApplicationError('conflict', 'you cannot remove yourself')
     await this.infrastructure.transaction(async (db) => {
-      await this.assertPermission(db, args.companyId, args.userId, 'company_member:remove', true)
+      await lockEducationAdmissions(db)
+      await this.assertPermission(db, args.companyId, args.userId, args.targetId === args.userId ? 'company:read' : 'company_member:remove', true)
       const role = await memberRole(db, args.companyId, args.targetId, true)
       if (!role) {
         if (await isDepartedCompanyHuman(db, args.companyId, args.targetId)) return
         throw new CompanyApplicationError('not_found', 'member not found')
       }
-      if (role === 'OWNER') throw new CompanyApplicationError('conflict', 'the company owner cannot be removed')
-      const courses = await lockTeachingCourses(db, args.companyId, args.targetId)
-      for (const course of courses) {
-        if (course.course_created_by === args.targetId || course.project_created_by === args.targetId) {
-          throw new CompanyApplicationError('conflict', `${course.name} creator cannot be removed`)
-        }
-        const counts = await courseManagementCounts(db, args.companyId, course.id)
-        if (course.role === 'OWNER' && counts.owners <= 1) {
-          throw new CompanyApplicationError('conflict', `${course.name} must keep at least one owner`)
-        }
-        if (counts.managers <= 1) {
-          throw new CompanyApplicationError('conflict', `${course.name} must keep at least one teacher`)
-        }
-      }
+      await assertAdministratorCanDepart(db, args.companyId, args.targetId)
       await removeMemberState(db, args.companyId, args.targetId)
       await this.infrastructure.auditInTransaction(db, {
         kind: 'company_member_remove', userId: args.userId, companyId: args.companyId,
         ...args.audit, detail: { targetId: args.targetId },
       })
     })
-    const channels = await listCompanyChannels(this.db, args.companyId)
-    // Revoke the cached WebSocket authorization before any external IM call.
+    // Durable access.revoke effects finish external cleanup even when a provider is unavailable.
     await this.infrastructure.disconnectUser(args.targetId, args.companyId)
-    const syncResults = await Promise.allSettled(channels.map((channel) => this.infrastructure.syncChannel({
-      channelId: channel.channel_id, channelType: 2, title: channel.title, members: channel.members,
-    })))
-    const failures = syncResults.filter((result) => result.status === 'rejected')
-    if (failures.length > 0) {
-      throw new Error(`WuKongIM member revocation reconciliation failed (${failures.length}/${channels.length})`)
-    }
     return { ok: true as const }
   }
 
@@ -235,6 +211,7 @@ export class CompanyApplication {
       id: invitation.token_hash,
       email: invitation.email,
       role: companyRoleToWire(invitation.role),
+    isAdmin: invitation.is_admin,
       note: invitation.note,
       maxUses: invitation.max_uses,
       useCount: invitation.use_count,
@@ -259,14 +236,13 @@ export class CompanyApplication {
     companyId: string; userId: string; input: CreateInvitationInput; audit: RequestAuditContext
   }) {
     const email = args.input.email?.toLowerCase() ?? null
-    const maxUses = email
-      ? 1
-      : Math.min(INVITE_MAX_LINK_USES, args.input.maxUses ?? INVITE_MAX_LINK_USES)
+    const maxUses = 1
     const note = args.input.note || null
     const token = this.infrastructure.generateInvitationToken()
     const tokenHash = this.infrastructure.hashInvitationToken(token)
     const expiresAt = new Date(Date.now() + INVITE_TTL_MS)
     await this.infrastructure.transaction(async (db) => {
+      await lockEducationAdmissions(db)
       await this.assertPermission(db, args.companyId, args.userId, 'company_invitation:create', true)
       if (!await lockCompany(db, args.companyId)) throw new CompanyApplicationError('not_found', 'company not found')
       if (email) {
@@ -277,11 +253,11 @@ export class CompanyApplication {
       }
       await insertInvitation(db, {
         tokenHash, companyId: args.companyId, invitedBy: args.userId, email,
-        role: args.input.role, note, maxUses, expiresAt,
+        isAdmin: args.input.isAdmin, note, maxUses, expiresAt,
       })
       await this.infrastructure.auditInTransaction(db, {
         kind: 'invitation_create', userId: args.userId, companyId: args.companyId,
-        ...args.audit, detail: { email, role: args.input.role, maxUses, note: note ?? undefined },
+        ...args.audit, detail: { email, isAdmin: args.input.isAdmin, maxUses, note: note ?? undefined },
       })
     })
     const url = this.inviteUrl(token)
@@ -294,7 +270,7 @@ export class CompanyApplication {
         inviterName: context.inviter_name || context.inviter_email,
         inviterEmail: context.inviter_email,
         companyName: context.company_name,
-        role: args.input.role,
+        role: args.input.isAdmin ? 'teacher administrator' : 'teacher',
         note,
         inviteUrl: url,
       }).catch((error: unknown) => ({
@@ -303,7 +279,7 @@ export class CompanyApplication {
       }))
     }
     return {
-      id: tokenHash, token, url, email, role: args.input.role, note, maxUses, useCount: 0,
+      id: tokenHash, token, url, email, role: 'teacher' as const, isAdmin: args.input.isAdmin, note, maxUses, useCount: 0,
       createdAt: new Date().toISOString(), expiresAt: expiresAt.toISOString(),
       status: 'active' as const, emailDelivery,
     }
@@ -324,58 +300,7 @@ export class CompanyApplication {
     return { ok: true as const, revoked }
   }
 
-  async acceptInvitation(token: string, userId: string, auditContext: RequestAuditContext) {
-    const user = await findUser(this.db, userId)
-    if (!user) throw new CompanyApplicationError('unauthorized', 'session points to missing user')
-    const tokenHash = this.infrastructure.hashInvitationToken(token)
-    const result = await this.infrastructure.transaction(async (db) => {
-      const invitation = await lockInvitation(db, tokenHash)
-      if (!invitation) throw new CompanyApplicationError('not_found', 'invitation not found')
-      const companyStatus = await lockCompany(db, invitation.company_id)
-      if (!companyStatus) {
-        throw new CompanyApplicationError('not_found', 'company not found')
-      }
-      if (companyStatus !== 'ACTIVE' && companyStatus !== 'TRIAL') {
-        throw new CompanyApplicationError('gone', 'company is not accepting memberships')
-      }
-      if (await isCompanyMember(db, invitation.company_id, userId)) {
-        await enqueueMemberOnboardingEffect(db, invitation.company_id, userId)
-        return { invitation, alreadyMember: true }
-      }
-      this.assertInvitationAcceptable(invitation, user.email)
-      await insertAcceptedMembership(db, {
-        invitation, userId, displayName: user.display_name, avatarUrl: user.avatar_url,
-      })
-      await this.infrastructure.auditInTransaction(db, {
-        kind: 'invitation_accept', userId, companyId: invitation.company_id, ...auditContext,
-        detail: { invitedBy: invitation.invited_by, role: invitation.role },
-      })
-      await enqueueMemberOnboardingEffect(db, invitation.company_id, userId)
-      return { invitation, alreadyMember: false }
-    })
-    const company = await companyMembershipSummary(this.db, result.invitation.company_id, userId)
-    if (!company) throw new CompanyApplicationError('not_found', 'accepted company membership missing')
-    return {
-      ok: true as const,
-      alreadyMember: result.alreadyMember,
-      company: { id: result.invitation.company_id, ...company },
-    }
-  }
-
-  private assertInvitationAcceptable(invitation: InvitationRow | null, viewerEmail: string): asserts invitation is InvitationRow {
-    if (!invitation) throw new CompanyApplicationError('not_found', 'invitation not found')
-    if (invitation.revoked_at) throw new CompanyApplicationError('gone', 'invitation revoked')
-    if (new Date(invitation.expires_at).getTime() < Date.now()) {
-      throw new CompanyApplicationError('gone', 'invitation expired')
-    }
-    if (invitation.use_count >= invitation.max_uses) {
-      throw new CompanyApplicationError('gone', 'invitation already used')
-    }
-    if (invitation.email && invitation.email.toLowerCase() !== viewerEmail.toLowerCase()) {
-      throw new CompanyApplicationError(
-        'forbidden',
-        `this invitation is reserved for ${invitation.email} — sign in with that email to accept`,
-      )
-    }
+  async acceptInvitation(token: string, userId: string, _auditContext: RequestAuditContext) {
+    return this.infrastructure.transaction((db) => acceptEducationInvitation(db, userId, this.infrastructure.hashInvitationToken(token), 'company'))
   }
 }

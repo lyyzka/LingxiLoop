@@ -423,7 +423,7 @@ function CollaborativeEditor({ session, synced, userName, userColor, documentId,
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <Toolbar editor={editor} disabled={!synced} />
+      <Toolbar documentId={documentId} editor={editor} disabled={!synced} />
       <div className="flex-1 overflow-y-auto">
         <EditorContent editor={editor} className="h-full" />
       </div>
@@ -433,9 +433,9 @@ function CollaborativeEditor({ session, synced, userName, userColor, documentId,
 
 /* ============== Toolbar ============== */
 
-interface ToolbarProps { editor: Editor | null; disabled: boolean }
+interface ToolbarProps { documentId: string; editor: Editor | null; disabled: boolean }
 
-function Toolbar({ editor, disabled }: ToolbarProps) {
+function Toolbar({ editor, disabled, documentId }: ToolbarProps) {
   if (!editor) {
     return <div className="h-[42px] border-b border-[var(--im-divider-weak)] bg-muted/30 px-4 py-2" />
   }
@@ -498,7 +498,7 @@ function Toolbar({ editor, disabled }: ToolbarProps) {
         title="代码块"
       ><HugeiconsIcon icon={SourceCodeIcon} strokeWidth={2} /></Button>
       <LinkButton editor={editor} disabled={disabled} />
-      <ImageButton editor={editor} disabled={disabled} />
+      <ImageButton documentId={documentId} editor={editor} disabled={disabled} />
       <Separator orientation="vertical" className="mx-1 h-5" />
       <Button
         type="button" variant="ghost" size="icon-sm" disabled={disabled || !editor.can().undo()}
@@ -515,7 +515,7 @@ function Toolbar({ editor, disabled }: ToolbarProps) {
   )
 }
 
-function ImageButton({ editor, disabled }: { editor: Editor; disabled: boolean }) {
+function ImageButton({ editor, disabled, documentId }: { editor: Editor; disabled: boolean; documentId: string }) {
   const [dialogOpen, setDialogOpen] = useState(false)
   const [imageUrl, setImageUrl] = useState('')
   const [imageAlt, setImageAlt] = useState('')
@@ -536,7 +536,7 @@ function ImageButton({ editor, disabled }: { editor: Editor; disabled: boolean }
     }
     setUploading(true)
     try {
-      const attachment = await uploadsApi.uploadFile(file)
+      const attachment = await uploadsApi.uploadFile(file, documentId)
       if (attachment.kind !== 'img') throw new Error('Uploaded file is not an image.')
       insertImage({ src: attachment.url, alt: attachment.name, storageKey: attachment.key ?? null })
     } catch (err) {

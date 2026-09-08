@@ -11,7 +11,6 @@ import { Input } from '@/components/ui/input'
 import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemTitle } from '@/components/ui/item'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { companiesApi } from '@/features/companies/api'
 import type { ApiInvitation, ApiInvitationWithToken } from '@/features/companies/contracts'
 import { toastAction } from '@/lib/actionToast'
@@ -25,7 +24,6 @@ interface Props {
   onClose: () => void
 }
 
-type InviteMode = 'link' | 'email'
 
 const INVITATION_STATUS_LABELS: Record<ApiInvitation['status'], string> = {
   active: '有效',
@@ -34,17 +32,17 @@ const INVITATION_STATUS_LABELS: Record<ApiInvitation['status'], string> = {
   consumed: '已用完',
 }
 
-function invitationRoleLabel(role: ApiInvitation['role']): string {
-  return role === 'admin' ? '管理员' : '成员'
+function invitationRoleLabel(isAdmin: boolean): string {
+  return isAdmin ? '教师管理员' : '教师'
 }
 
 export function InvitePeopleModal({ companyId, companyName, onClose }: Props) {
-  const [mode, setMode] = useState<InviteMode>('link')
+  const mode = 'email'
   const [list, setList] = useState<ApiInvitation[]>([])
   const [loadingList, setLoadingList] = useState(true)
   const [listErr, setListErr] = useState<string | null>(null)
   const [email, setEmail] = useState('')
-  const [role, setRole] = useState<'member' | 'admin'>('member')
+  const [isAdmin, setIsAdmin] = useState(false)
   const [note, setNote] = useState('')
   const [sendEmail, setSendEmail] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -80,9 +78,7 @@ export function InvitePeopleModal({ companyId, companyName, onClose }: Props) {
     }
     setBusy(true)
     try {
-      const payload = mode === 'email'
-        ? { email: trimmedEmail, role, note: note.trim() || null, sendEmail: emailCapable && sendEmail }
-        : { multiUse: true, role, note: note.trim() || null }
+      const payload = { email: trimmedEmail, isAdmin, note: note.trim() || null, sendEmail: emailCapable && sendEmail }
       const invitation = await toastAction(companiesApi.createInvitation(companyId, payload), {
         loading: '正在创建邀请',
         success: mode === 'email' ? '电子邮件邀请已创建' : '邀请链接已创建',
@@ -124,21 +120,10 @@ export function InvitePeopleModal({ companyId, companyName, onClose }: Props) {
       <DialogContent className="max-h-[88vh] max-w-[600px] gap-0 overflow-hidden bg-card p-0" showCloseButton={!busy}>
         <DialogHeader className="border-b border-[var(--im-divider-weak)] px-6 py-5 pe-14">
           <DialogTitle>邀请参加 {companyName}</DialogTitle>
-          <DialogDescription>通过可分享链接或电子邮件将人员添加到此工作区。</DialogDescription>
+          <DialogDescription>邀请指定邮箱的教师。学生请使用课程邀请。</DialogDescription>
         </DialogHeader>
 
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
-          <Tabs value={mode} onValueChange={(value) => {
-            setMode(value as InviteMode)
-            setCreated(null)
-            setFormErr(null)
-          }}>
-            <TabsList>
-              <TabsTrigger value="link">邀请链接</TabsTrigger>
-              <TabsTrigger value="email">通过电子邮件</TabsTrigger>
-            </TabsList>
-          </Tabs>
-
           <FieldGroup>
             {mode === 'email' ? (
               <Field>
@@ -163,11 +148,11 @@ export function InvitePeopleModal({ companyId, companyName, onClose }: Props) {
             <div className="grid grid-cols-2 gap-3">
               <Field>
                 <FieldLabel>角色</FieldLabel>
-                <Select value={role} onValueChange={(value) => setRole(value as typeof role)}>
+                <Select value={isAdmin ? 'admin' : 'teacher'} onValueChange={(value) => setIsAdmin(value === 'admin')}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="member">成员</SelectItem>
-                    <SelectItem value="admin">管理员</SelectItem>
+                    <SelectItem value="teacher">教师</SelectItem>
+                    <SelectItem value="admin">教师管理员</SelectItem>
                   </SelectContent>
                 </Select>
               </Field>
@@ -232,7 +217,7 @@ function CreatedInviteCard({ invite, onDone }: { invite: ApiInvitationWithToken;
     <Card>
       <CardHeader>
         <CardTitle>{invite.emailDelivery?.ok ? '邀请已发送' : '邀请已可分享'}</CardTitle>
-        <CardDescription>{invite.email ? `该邀请仅限 ${invite.email} 使用。` : `知道链接的任何人都可以作为${invitationRoleLabel(invite.role)}加入。`}</CardDescription>
+        <CardDescription>{invite.email ? `该邀请仅限 ${invite.email} 使用。` : `知道链接的任何人都可以作为${invitationRoleLabel(invite.isAdmin)}加入。`}</CardDescription>
       </CardHeader>
       <CardContent className="flex gap-2">
         <Input readOnly value={invite.url} className="font-mono" onFocus={(event) => event.currentTarget.select()} />
@@ -247,7 +232,7 @@ function InvitationRow({ invitation, onRevoke, historical }: { invitation: ApiIn
   return (
     <Item variant="outline">
       <ItemContent>
-        <ItemTitle>{invitation.email ?? '可分享链接'} <Badge variant={invitation.status === 'active' ? 'secondary' : 'outline'}>{INVITATION_STATUS_LABELS[invitation.status]}</Badge> <Badge variant="outline">{invitationRoleLabel(invitation.role)}</Badge></ItemTitle>
+        <ItemTitle>{invitation.email ?? '可分享链接'} <Badge variant={invitation.status === 'active' ? 'secondary' : 'outline'}>{INVITATION_STATUS_LABELS[invitation.status]}</Badge> <Badge variant="outline">{invitationRoleLabel(invitation.isAdmin)}</Badge></ItemTitle>
         <ItemDescription>
           {!invitation.email && `${invitation.useCount}/${invitation.maxUses} 已使用 · `}
           {invitation.status === 'active' ? `${relativeFrom(invitation.expiresAt)}后过期` : invitation.note ?? '历史邀请'}

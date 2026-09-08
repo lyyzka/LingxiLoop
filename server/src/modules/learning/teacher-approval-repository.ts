@@ -72,7 +72,7 @@ export async function findTeacherMembershipApprovalTarget(
          ON member.project_id=course.project_id AND member.company_id=course.company_id
         AND member.status='ACTIVE'
         WHERE member.company_id=$1 AND course.id=$2
-          AND member.user_id=$3 AND member.role IN ('OWNER','TEACHER')
+          AND member.user_id=$3 AND member.role = 'TEACHER'
      ) AS enabled,
      (SELECT participant.name FROM participants participant
        WHERE participant.company_id=$1 AND participant.id=$3 LIMIT 1) AS label`,
@@ -180,7 +180,7 @@ export async function findTeacherMembershipApprovalVersion(
         AND teacher_room.course_id=course.id
       WHERE member.company_id=$1 AND teacher_room.conversation_id=$2
         AND member.user_id=$3 AND member.status='ACTIVE'
-        AND member.role IN ('OWNER','TEACHER')`,
+        AND member.role = 'TEACHER'`,
     [companyId, channelId, userId],
   )
   return Boolean(rows[0])

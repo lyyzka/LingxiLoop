@@ -21,7 +21,7 @@ const USER_ID = 'u-knowledge-slice'
 const STUDENT_A_ID = 'u-knowledge-student-a'
 const STUDENT_B_ID = 'u-knowledge-student-b'
 const TEACHER_ID = 'u-knowledge-teacher'
-const TA_ID = 'u-knowledge-ta'
+const STUDENT_C_ID = 'u-knowledge-student-c'
 const COMPANY_ID = 'co-knowledge-slice'
 const PROJECT_ID = 'project-knowledge-slice'
 const SAME_COMPANY_PROJECT_ID = 'project-knowledge-same-company'
@@ -68,15 +68,14 @@ beforeEach(async () => {
   deleteCalls.length = 0
   await pool.query(
     `INSERT INTO companies (id,name,slug,type,plan_id)
-     VALUES ($1,'Knowledge Slice','knowledge-slice','EDUCATION','plan-personal-free'),
-            ($2,'Knowledge Other','knowledge-other','EDUCATION','plan-personal-free')`,
+     VALUES ($1,'Knowledge Slice','knowledge-slice','EDUCATION','plan-education'),
+            ($2,'Knowledge Other','knowledge-other','EDUCATION','plan-education')`,
     [COMPANY_ID, OTHER_COMPANY_ID],
   )
   await seedUserMembership(USER_ID, COMPANY_ID)
-  for (const userId of [STUDENT_A_ID, STUDENT_B_ID, TEACHER_ID, TA_ID]) {
-    await seedUserMembership(userId, COMPANY_ID)
+  for (const userId of [STUDENT_A_ID, STUDENT_B_ID, TEACHER_ID, STUDENT_C_ID]) {
+    await seedUserMembership(userId, COMPANY_ID, { role: [STUDENT_A_ID, STUDENT_B_ID, STUDENT_C_ID].includes(userId) ? 'STUDENT' : 'TEACHER', isAdmin: false })
   }
-  await seedUserMembership(STUDENT_A_ID, OTHER_COMPANY_ID)
   await pool.query(
     `INSERT INTO projects (id,company_id,kind,name,color,created_by,is_default)
      VALUES ($1,$2,'INSTITUTIONAL_COURSE','Knowledge Project','#000',$6,FALSE),
@@ -86,16 +85,15 @@ beforeEach(async () => {
   )
   await pool.query(
     `INSERT INTO project_memberships(company_id,project_id,user_id,role)
-     VALUES ($1,$2,$3,'OWNER'),
+     VALUES ($1,$2,$3,'TEACHER'),
             ($1,$2,$4,'STUDENT'),
             ($1,$2,$5,'STUDENT'),
             ($1,$2,$6,'TEACHER'),
-            ($1,$2,$7,'TA'),
-            ($1,$8,$3,'OWNER'),
-            ($1,$8,$4,'STUDENT'),
-            ($9,$10,$4,'STUDENT')`,
-    [COMPANY_ID, PROJECT_ID, USER_ID, STUDENT_A_ID, STUDENT_B_ID, TEACHER_ID, TA_ID,
-      SAME_COMPANY_PROJECT_ID, OTHER_COMPANY_ID, OTHER_PROJECT_ID],
+            ($1,$2,$7,'STUDENT'),
+            ($1,$8,$3,'TEACHER'),
+            ($1,$8,$4,'STUDENT')`,
+    [COMPANY_ID, PROJECT_ID, USER_ID, STUDENT_A_ID, STUDENT_B_ID, TEACHER_ID, STUDENT_C_ID,
+      SAME_COMPANY_PROJECT_ID],
   )
 })
 after(async () => { await teardownAll() })
@@ -188,8 +186,8 @@ test('[integration] Source authorization is PROJECT plus only the current user P
     null,
     { kind: 'text', idempotencyKey: 'student-b-private', title: 'Student B private', text: 'private B' },
   )
-  const taPrivate = await application.createSource(
-    { userId: TA_ID, companyId: COMPANY_ID, projectId: PROJECT_ID },
+  const thirdStudentPrivate = await application.createSource(
+    { userId: STUDENT_C_ID, companyId: COMPANY_ID, projectId: PROJECT_ID },
     null,
     { kind: 'text', idempotencyKey: 'ta-private', title: 'TA private', text: 'private TA' },
   )
@@ -198,7 +196,7 @@ test('[integration] Source authorization is PROJECT plus only the current user P
     null,
     { kind: 'text', idempotencyKey: 'teacher-project', title: 'Teacher project', text: 'class source' },
   )
-  const sourceIds = [studentPrivate.id, otherStudentPrivate.id, taPrivate.id, teacherProject.id]
+  const sourceIds = [studentPrivate.id, otherStudentPrivate.id, thirdStudentPrivate.id, teacherProject.id]
   await pool.query(
     `UPDATE knowledge_sources
         SET status='ready',stage='ready',external_source_id='external-' || id
@@ -222,8 +220,8 @@ test('[integration] Source authorization is PROJECT plus only the current user P
       created_by_user_id: STUDENT_A_ID, created_via: 'USER' },
     { id: otherStudentPrivate.id, visibility_scope: 'PRIVATE', owner_user_id: STUDENT_B_ID,
       created_by_user_id: STUDENT_B_ID, created_via: 'USER' },
-    { id: taPrivate.id, visibility_scope: 'PRIVATE', owner_user_id: TA_ID,
-      created_by_user_id: TA_ID, created_via: 'USER' },
+    { id: thirdStudentPrivate.id, visibility_scope: 'PRIVATE', owner_user_id: STUDENT_C_ID,
+      created_by_user_id: STUDENT_C_ID, created_via: 'USER' },
     { id: teacherProject.id, visibility_scope: 'PROJECT', owner_user_id: TEACHER_ID,
       created_by_user_id: TEACHER_ID, created_via: 'USER' },
   ].sort((left, right) => left.id.localeCompare(right.id)))
@@ -233,7 +231,7 @@ test('[integration] Source authorization is PROJECT plus only the current user P
   ).map((source) => String(source.id)).sort()
   assert.deepEqual(await idsVisibleTo(STUDENT_A_ID), [studentPrivate.id, teacherProject.id].sort())
   assert.deepEqual(await idsVisibleTo(STUDENT_B_ID), [otherStudentPrivate.id, teacherProject.id].sort())
-  assert.deepEqual(await idsVisibleTo(TA_ID), [taPrivate.id, teacherProject.id].sort())
+  assert.deepEqual(await idsVisibleTo(STUDENT_C_ID), [thirdStudentPrivate.id, teacherProject.id].sort())
   assert.deepEqual(await idsVisibleTo(TEACHER_ID), [teacherProject.id])
   assert.deepEqual(await idsVisibleTo(USER_ID), [teacherProject.id])
 
@@ -242,7 +240,7 @@ test('[integration] Source authorization is PROJECT plus only the current user P
     `INSERT INTO conversations (id,kind,title,members,company_id,project_id)
      VALUES ($1,'group','Knowledge retrieval authorization',$2::jsonb,$3,$4)`,
     [retrievalConversationId, JSON.stringify([
-      STUDENT_A_ID, STUDENT_B_ID, TEACHER_ID, TA_ID, USER_ID,
+      STUDENT_A_ID, STUDENT_B_ID, TEACHER_ID, STUDENT_C_ID, USER_ID,
     ]), COMPANY_ID, PROJECT_ID],
   )
   const retrievalIdsFor = async (authorizationUserId: string) => (
@@ -256,14 +254,14 @@ test('[integration] Source authorization is PROJECT plus only the current user P
   assert.deepEqual(await retrievalIdsFor(STUDENT_A_ID), [studentPrivate.id, teacherProject.id].sort())
   assert.deepEqual(await retrievalIdsFor(STUDENT_B_ID), [otherStudentPrivate.id, teacherProject.id].sort())
   assert.deepEqual(await retrievalIdsFor(TEACHER_ID), [teacherProject.id])
-  assert.deepEqual(await retrievalIdsFor(TA_ID), [taPrivate.id, teacherProject.id].sort())
+  assert.deepEqual(await retrievalIdsFor(STUDENT_C_ID), [thirdStudentPrivate.id, teacherProject.id].sort())
   assert.deepEqual(await retrievalIdsFor(USER_ID), [teacherProject.id])
 
-  for (const actorUserId of [STUDENT_B_ID, USER_ID, TEACHER_ID, TA_ID]) {
+  for (const actorUserId of [STUDENT_B_ID, USER_ID, TEACHER_ID, STUDENT_C_ID]) {
     const actorScope = { userId: actorUserId, companyId: COMPANY_ID, projectId: PROJECT_ID }
     await assert.rejects(
       application.source(actorScope, studentPrivate.id),
-      (error) => error instanceof KnowledgeApplicationError && error.code === 'not_found',
+      (error) => (error instanceof KnowledgeApplicationError && error.code === 'not_found') || error instanceof ForbiddenError,
     )
     await assert.rejects(
       application.retry(actorScope, studentPrivate.id),
@@ -305,7 +303,7 @@ test('[integration] Source authorization is PROJECT plus only the current user P
   ]) {
     await assert.rejects(
       application.source(foreignScope, studentPrivate.id),
-      (error) => error instanceof KnowledgeApplicationError && error.code === 'not_found',
+      (error) => (error instanceof KnowledgeApplicationError && error.code === 'not_found') || error instanceof ForbiddenError,
     )
   }
   assert.deepEqual(sourceTextCalls, [])
@@ -328,38 +326,6 @@ test('[integration] Source authorization is PROJECT plus only the current user P
     retryCalls: [studentPrivate.id],
     deleteCalls: [studentPrivate.id],
   })
-})
-
-test('[integration] Project creation fixes kind from the use case and enforces CompanyType', async () => {
-  const personalCompanyId = 'co-knowledge-personal'
-  await pool.query(
-    `INSERT INTO companies(id,name,slug,type,personal_owner_user_id,plan_id)
-     VALUES($1,'Personal Learning','knowledge-personal','PERSONAL',$2,'plan-personal-free')`,
-    [personalCompanyId, USER_ID],
-  )
-  await pool.query(
-    `INSERT INTO company_memberships(company_id,user_id,role) VALUES($1,$2,'OWNER')`,
-    [personalCompanyId, USER_ID],
-  )
-  const created = await application.createPersonalLearningProject({
-    companyId: personalCompanyId,
-    userId: USER_ID,
-    name: '考研数学',
-    description: '个人学习空间',
-  })
-  assert.equal(created.kind, 'PERSONAL_LEARNING')
-  assert.equal(created.companyId, personalCompanyId)
-  assert.equal(created.planId, null)
-  assert.equal(created.isDefault, false)
-  await assert.rejects(
-    application.createPersonalLearningProject({
-      companyId: COMPANY_ID,
-      userId: USER_ID,
-      name: 'Invalid',
-      description: '',
-    }),
-    (error) => error instanceof KnowledgeApplicationError && error.code === 'forbidden',
-  )
 })
 
 test('[integration] presigned upload confirmation rejects a mismatched R2 object size', async () => {

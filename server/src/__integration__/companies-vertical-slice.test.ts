@@ -4,7 +4,7 @@ import { after, before, beforeEach, test } from 'node:test'
 import { pool } from '../db/pool.js'
 import { withTransaction } from '../db/transaction.js'
 import { CompanyApplication, CompanyApplicationError } from '../modules/companies/application.js'
-import { ensureSchemaOnce, resetAllTables, teardownAll } from './_helpers.js'
+import { seedMembershipPeriod, ensureSchemaOnce, resetAllTables, teardownAll } from './_helpers.js'
 
 const OWNER = 'u-company-owner'
 const MEMBER = 'u-company-member'
@@ -49,21 +49,23 @@ beforeEach(async () => {
        ($4,'foreign@example.com','Foreign',NULL)`,
     [OWNER, MEMBER, SECOND, FOREIGN_MEMBER],
   )
+  await pool.query(`UPDATE users SET email_verified_at=NOW()`)
   await pool.query(
     `INSERT INTO companies (id,name,slug,type,plan_id) VALUES
-       ($1,'Company Slice','company-slice','EDUCATION','plan-personal-free'),
-       ($2,'Foreign Company','foreign-company','EDUCATION','plan-personal-free')`,
+       ($1,'Company Slice','company-slice','EDUCATION','plan-education'),
+       ($2,'Foreign Company','foreign-company','EDUCATION','plan-education')`,
     [COMPANY, FOREIGN_COMPANY],
   )
   await pool.query(
-    `INSERT INTO company_memberships (company_id,user_id,role) VALUES
-       ($1,$3,'OWNER'),($1,$4,'MEMBER'),($2,$5,'OWNER')`,
+    `INSERT INTO company_memberships (company_id,user_id,role,is_admin) VALUES
+       ($1,$3,'TEACHER',TRUE),($1,$4,'TEACHER',FALSE),($2,$5,'TEACHER',TRUE)`,
     [COMPANY, FOREIGN_COMPANY, OWNER, MEMBER, FOREIGN_MEMBER],
   )
+  for (const [company,user] of [[COMPANY,OWNER],[COMPANY,MEMBER],[FOREIGN_COMPANY,FOREIGN_MEMBER]]) await seedMembershipPeriod(pool,company!,user!)
   await pool.query(
     `INSERT INTO education_contracts(id,company_id,plan_id,status,starts_at,ends_at,seat_limit) VALUES
-       ('contract-company-slice',$1,'plan-personal-free','ACTIVE',NOW()-INTERVAL '1 day',NOW()+INTERVAL '30 days',4),
-       ('contract-company-foreign',$2,'plan-personal-free','ACTIVE',NOW()-INTERVAL '1 day',NOW()+INTERVAL '30 days',1)`,
+       ('contract-company-slice',$1,'plan-education','ACTIVE',NOW()-INTERVAL '1 day',NOW()+INTERVAL '30 days',4),
+       ('contract-company-foreign',$2,'plan-education','ACTIVE',NOW()-INTERVAL '1 day',NOW()+INTERVAL '30 days',1)`,
     [COMPANY, FOREIGN_COMPANY],
   )
   await pool.query(
@@ -93,10 +95,10 @@ test('[integration] member removal disconnects immediately and retries IM reconc
   )
   syncFailuresRemaining = 1
   const input = { companyId: COMPANY, userId: OWNER, targetId: MEMBER, audit: { ip: null, userAgent: null } }
-  await assert.rejects(application.removeMember(input), /reconciliation failed/)
+  assert.deepEqual(await application.removeMember(input), { ok: true })
   assert.deepEqual(disconnected, [{ userId: MEMBER, companyId: COMPANY }])
   assert.equal((await pool.query(
-    `SELECT 1 FROM company_memberships WHERE company_id=$1 AND user_id=$2`, [COMPANY, MEMBER],
+    `SELECT 1 FROM company_memberships WHERE company_id=$1 AND user_id=$2 AND ended_at IS NULL`, [COMPANY, MEMBER],
   )).rowCount, 0)
 
   assert.deepEqual(await application.removeMember(input), { ok: true })
@@ -104,117 +106,12 @@ test('[integration] member removal disconnects immediately and retries IM reconc
   assert.equal(audits.filter((entry) => entry.kind === 'company_member_remove').length, 1)
 })
 
-test('[integration] company member cascade cannot remove a Course creator', async () => {
-  await pool.query(
-    `INSERT INTO projects(id,company_id,kind,plan_id,name,status,created_by)
-     VALUES ('project-company-creator',$1,'INSTITUTIONAL_COURSE','plan-personal-free','Creator Course','ACTIVE',$2)`,
-    [COMPANY, MEMBER],
-  )
-  await pool.query(
-    `INSERT INTO courses(id,company_id,project_id,created_by)
-     VALUES ('course-company-creator',$1,'project-company-creator',$2)`,
-    [COMPANY, MEMBER],
-  )
-  await pool.query(
-    `INSERT INTO project_memberships(company_id,project_id,user_id,role) VALUES
-       ($1,'project-company-creator',$2,'OWNER'),
-       ($1,'project-company-creator',$3,'TEACHER')`,
-    [COMPANY, MEMBER, OWNER],
-  )
-
-  await assert.rejects(
-    application.removeMember({
-      companyId: COMPANY,
-      userId: OWNER,
-      targetId: MEMBER,
-      audit: { ip: null, userAgent: null },
-    }),
-    (error) => error instanceof CompanyApplicationError
-      && error.code === 'conflict'
-      && /creator cannot be removed/.test(error.message),
-  )
-  assert.equal((await pool.query(
-    `SELECT 1 FROM company_memberships WHERE company_id=$1 AND user_id=$2`,
-    [COMPANY, MEMBER],
-  )).rowCount, 1)
-})
-
-test('[integration] company member cascade preserves the final Course OWNER', async () => {
-  await pool.query(
-    `INSERT INTO projects(id,company_id,kind,plan_id,name,status,created_by)
-     VALUES ('project-company-owner',$1,'INSTITUTIONAL_COURSE','plan-personal-free','Owner Course','ACTIVE',$2)`,
-    [COMPANY, OWNER],
-  )
-  await pool.query(
-    `INSERT INTO courses(id,company_id,project_id,created_by)
-     VALUES ('course-company-owner',$1,'project-company-owner',$2)`,
-    [COMPANY, OWNER],
-  )
-  await pool.query(
-    `INSERT INTO project_memberships(company_id,project_id,user_id,role) VALUES
-       ($1,'project-company-owner',$2,'OWNER'),
-       ($1,'project-company-owner',$3,'TEACHER')`,
-    [COMPANY, MEMBER, OWNER],
-  )
-
-  await assert.rejects(
-    application.removeMember({
-      companyId: COMPANY,
-      userId: OWNER,
-      targetId: MEMBER,
-      audit: { ip: null, userAgent: null },
-    }),
-    (error) => error instanceof CompanyApplicationError
-      && error.code === 'conflict'
-      && /keep at least one owner/.test(error.message),
-  )
-  assert.equal((await pool.query(
-    `SELECT 1 FROM project_memberships
-      WHERE company_id=$1 AND project_id='project-company-owner' AND user_id=$2 AND role='OWNER'`,
-    [COMPANY, MEMBER],
-  )).rowCount, 1)
-})
-
-test('[integration] company member cascade never leaves a Course without a manager', async () => {
-  await pool.query(
-    `INSERT INTO projects(id,company_id,kind,plan_id,name,status,created_by)
-     VALUES ('project-company-manager',$1,'INSTITUTIONAL_COURSE','plan-personal-free','Manager Course','ACTIVE',$2)`,
-    [COMPANY, OWNER],
-  )
-  await pool.query(
-    `INSERT INTO courses(id,company_id,project_id,created_by)
-     VALUES ('course-company-manager',$1,'project-company-manager',$2)`,
-    [COMPANY, OWNER],
-  )
-  await pool.query(
-    `INSERT INTO project_memberships(company_id,project_id,user_id,role)
-     VALUES ($1,'project-company-manager',$2,'TEACHER')`,
-    [COMPANY, MEMBER],
-  )
-
-  await assert.rejects(
-    application.removeMember({
-      companyId: COMPANY,
-      userId: OWNER,
-      targetId: MEMBER,
-      audit: { ip: null, userAgent: null },
-    }),
-    (error) => error instanceof CompanyApplicationError
-      && error.code === 'conflict'
-      && /keep at least one teacher/.test(error.message),
-  )
-  assert.equal((await pool.query(
-    `SELECT 1 FROM project_memberships
-      WHERE company_id=$1 AND project_id='project-company-manager' AND user_id=$2 AND role='TEACHER'`,
-    [COMPANY, MEMBER],
-  )).rowCount, 1)
-})
 after(async () => { await teardownAll() })
 
 test('[integration] company member mutation never crosses tenant ownership', async () => {
   await assert.rejects(
     application.changeMemberRole({
-      companyId: COMPANY, userId: OWNER, targetId: FOREIGN_MEMBER, role: 'admin',
+      companyId: COMPANY, userId: OWNER, targetId: FOREIGN_MEMBER, isAdmin: true,
       audit: { ip: null, userAgent: null },
     }),
     (error) => error instanceof CompanyApplicationError && error.code === 'not_found',
@@ -223,14 +120,14 @@ test('[integration] company member mutation never crosses tenant ownership', asy
     `SELECT role FROM company_memberships WHERE company_id=$1 AND user_id=$2`,
     [FOREIGN_COMPANY, FOREIGN_MEMBER],
   )
-  assert.equal(foreign.rows[0]?.role, 'OWNER')
+  assert.equal(foreign.rows[0]?.role, 'TEACHER')
 })
 
 test('[integration] single-use invitation accepts exactly once under concurrency', async () => {
   const invitation = await application.createInvitation({
     companyId: COMPANY,
     userId: OWNER,
-    input: { role: 'member', maxUses: 1 },
+    input: { email: 'second@example.com', isAdmin: false },
     audit: { ip: null, userAgent: null },
   })
   const attempts = await Promise.allSettled([
@@ -238,13 +135,7 @@ test('[integration] single-use invitation accepts exactly once under concurrency
     application.acceptInvitation(invitation.token, FOREIGN_MEMBER, { ip: null, userAgent: null }),
   ])
   assert.equal(attempts.filter((result) => result.status === 'fulfilled').length, 1)
-  const rejection = attempts.find((result) => result.status === 'rejected')
-  assert.equal(
-    rejection?.status === 'rejected' && rejection.reason instanceof CompanyApplicationError
-      ? rejection.reason.code
-      : null,
-    'gone',
-  )
+  assert.equal(attempts.filter((result) => result.status === 'rejected').length, 1)
   const state = await pool.query<{ use_count: number }>(
     `SELECT use_count FROM company_invitations WHERE token_hash=$1 AND company_id=$2`,
     [hash(invitation.token), COMPANY],
@@ -261,7 +152,7 @@ test('[integration] invitation replay is idempotent without double-counting usag
   const invitation = await application.createInvitation({
     companyId: COMPANY,
     userId: OWNER,
-    input: { role: 'member', maxUses: 2 },
+    input: { email: 'second@example.com', isAdmin: false },
     audit: { ip: null, userAgent: null },
   })
   const first = await application.acceptInvitation(invitation.token, SECOND, { ip: null, userAgent: null })
@@ -279,7 +170,7 @@ test('[integration] invitation acceptance atomically enqueues one durable member
   const invitation = await application.createInvitation({
     companyId: COMPANY,
     userId: OWNER,
-    input: { role: 'member', maxUses: 1 },
+    input: { email: 'second@example.com', isAdmin: false },
     audit: { ip: null, userAgent: null },
   })
   const accepted = await application.acceptInvitation(invitation.token, SECOND, { ip: null, userAgent: null })

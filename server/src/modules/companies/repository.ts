@@ -1,15 +1,14 @@
+import { HttpError } from '../../http/errors.js'
 import type { Queryable } from '../../db/queryable.js'
 import {
   type CompanyRole,
-  type CompanyRoleWire,
-  companyRoleFromWire,
   companyRoleToWire,
 } from '../../domain/access/public.js'
 import type { InvitationRow } from './contracts.js'
 
 export function listCompanies(db: Queryable, userId: string) {
   return db.query(
-    `SELECT company.id,company.name,company.slug,company.status,company.created_at AS "createdAt",LOWER(membership.role) AS role
+    `SELECT company.id,company.name,company.slug,company.status,company.created_at AS "createdAt",LOWER(membership.role) AS role,membership.is_admin AS "isAdmin"
        FROM companies company
        JOIN company_memberships membership ON membership.company_id=company.id AND membership.user_id=$1
       WHERE membership.status='ACTIVE' AND company.status<>'DELETED'
@@ -30,7 +29,7 @@ export async function findCompanyForMember(db: Queryable, companyId: string, use
   const { rows } = await db.query<{
     id: string; name: string; slug: string; description: string; role: string; status: string; createdAt: string
   }>(
-    `SELECT company.id,company.name,company.slug,company.description,company.status,LOWER(membership.role) AS role,
+    `SELECT company.id,company.name,company.slug,company.description,company.status,LOWER(membership.role) AS role,membership.is_admin AS "isAdmin",
             company.created_at AS "createdAt"
        FROM companies company
        JOIN company_memberships membership ON membership.company_id=company.id
@@ -76,11 +75,11 @@ export async function companyRole(db: Queryable, companyId: string, userId: stri
 
 export function listMembers(db: Queryable, companyId: string) {
   return db.query(
-    `SELECT user_account.id,user_account.display_name AS name,user_account.email,LOWER(membership.role) AS role,
+    `SELECT user_account.id,user_account.display_name AS name,user_account.email,LOWER(membership.role) AS role,membership.is_admin AS "isAdmin",
             membership.created_at AS "joinedAt",
             COALESCE(jsonb_agg(jsonb_build_object(
               'courseId',course.id,'projectKind',project.kind,'name',project.name,'role',
-              CASE WHEN project_member.role IN ('STUDENT','OBSERVER') THEN 'learner' ELSE 'teacher' END
+              CASE WHEN project_member.role = 'STUDENT' THEN 'learner' ELSE 'teacher' END
             )) FILTER (WHERE course.id IS NOT NULL),'[]'::jsonb) AS courses
        FROM company_memberships membership
        JOIN users user_account ON user_account.id=membership.user_id
@@ -91,8 +90,8 @@ export function listMembers(db: Queryable, companyId: string) {
          ON course.project_id=project_member.project_id AND course.company_id=project_member.company_id
        LEFT JOIN projects project ON project.id=project_member.project_id AND project.company_id=project_member.company_id
       WHERE membership.company_id=$1 AND membership.status='ACTIVE'
-      GROUP BY user_account.id,user_account.display_name,user_account.email,membership.role,membership.created_at
-      ORDER BY CASE membership.role WHEN 'OWNER' THEN 0 WHEN 'ADMIN' THEN 1 ELSE 2 END,membership.created_at`,
+      GROUP BY user_account.id,user_account.display_name,user_account.email,membership.role,membership.is_admin,membership.created_at
+      ORDER BY membership.is_admin DESC,membership.created_at`,
     [companyId],
   ).then((result) => result.rows)
 }
@@ -106,64 +105,43 @@ export async function memberRole(db: Queryable, companyId: string, userId: strin
   return rows[0]?.role ?? null
 }
 
-export async function setMemberRole(
-  db: Queryable,
-  companyId: string,
-  userId: string,
-  role: CompanyRoleWire,
-): Promise<void> {
-  await db.query(
-    `UPDATE company_memberships SET role=$3,updated_at=NOW()
-      WHERE company_id=$1 AND user_id=$2 AND status='ACTIVE'`,
-    [companyId, userId, companyRoleFromWire(role)],
-  )
+export async function setMemberRole(db: Queryable, companyId: string, userId: string, isAdmin: boolean): Promise<void> {
+  const result = await db.query(`UPDATE company_memberships SET is_admin=$3,updated_at=NOW()
+    WHERE company_id=$1 AND user_id=$2 AND status='ACTIVE' AND role='TEACHER'`, [companyId,userId,isAdmin])
+  if (result.rowCount !== 1) throw new Error('administrator permission requires an active teacher')
 }
 
-export async function lockTeachingCourses(db: Queryable, companyId: string, userId: string) {
-  const { rows } = await db.query<{
-    id: string
-    name: string
-    role: 'OWNER' | 'TEACHER' | null
-    course_created_by: string
-    project_created_by: string | null
-  }>(
-    `SELECT course.id,project.name,membership.role,
-            course.created_by AS course_created_by,project.created_by AS project_created_by
-       FROM courses course
-       JOIN projects project ON project.id=course.project_id AND project.company_id=course.company_id
-       LEFT JOIN project_memberships membership ON membership.project_id=course.project_id
-        AND membership.company_id=course.company_id AND membership.user_id=$2
-        AND membership.status='ACTIVE'
-      WHERE course.company_id=$1
-        AND (membership.role IN ('OWNER','TEACHER')
-          OR course.created_by=$2 OR project.created_by=$2)
-      ORDER BY course.id
-      FOR UPDATE OF course,project`,
-    [companyId, userId],
-  )
-  return rows
-}
-
-export async function courseManagementCounts(
-  db: Queryable,
-  companyId: string,
-  courseId: string,
-): Promise<{ owners: number; managers: number }> {
-  const { rows } = await db.query<{ owners: number; managers: number }>(
-    `SELECT COUNT(*) FILTER(WHERE membership.role='OWNER')::int AS owners,
-            COUNT(*) FILTER(WHERE membership.role IN ('OWNER','TEACHER'))::int AS managers
-       FROM project_memberships membership
-       JOIN courses course ON course.project_id=membership.project_id AND course.company_id=membership.company_id
-      WHERE membership.company_id=$1 AND course.id=$2
-        AND membership.status='ACTIVE'`,
-    [companyId, courseId],
-  )
-  return rows[0] ?? { owners: 0, managers: 0 }
+export async function assertAdministratorCanDepart(db: Queryable, companyId: string, userId: string): Promise<void> {
+  const { rows } = await db.query<{ user_id: string }>(`SELECT user_id FROM company_memberships
+    WHERE company_id=$1 AND is_admin AND status='ACTIVE' AND ended_at IS NULL ORDER BY user_id FOR UPDATE`, [companyId])
+  if (rows.length === 1 && rows[0]?.user_id === userId) throw new HttpError(409, 'assign another teacher administrator first')
 }
 
 export async function removeMemberState(db: Queryable, companyId: string, userId: string): Promise<void> {
-  await db.query(`DELETE FROM organization_seats WHERE company_id=$1 AND user_id=$2`, [companyId, userId])
-  await db.query(`DELETE FROM company_memberships WHERE company_id=$1 AND user_id=$2`, [companyId, userId])
+  await db.query(`SELECT 1 FROM users WHERE id=$1 FOR UPDATE`, [userId])
+  await db.query(`UPDATE company_membership_periods SET ended_at=NOW() WHERE id IN
+    (SELECT period_id FROM company_memberships WHERE company_id=$1 AND user_id=$2) AND ended_at IS NULL`, [companyId,userId])
+  await db.query(`UPDATE company_memberships SET status='SUSPENDED',is_admin=FALSE,ended_at=NOW(),updated_at=NOW()
+    WHERE company_id=$1 AND user_id=$2 AND ended_at IS NULL`, [companyId,userId])
+  await db.query(`UPDATE project_memberships SET status='SUSPENDED',updated_at=NOW() WHERE company_id=$1 AND user_id=$2`, [companyId,userId])
+  await db.query(`UPDATE organization_seats SET status='REVOKED',revoked_at=NOW() WHERE company_id=$1 AND user_id=$2`, [companyId,userId])
+  await db.query(`UPDATE users SET departed_at=NOW(),access_revoked_at=NOW() WHERE id=$1`, [userId])
+  await db.query(`DELETE FROM ws_tickets WHERE user_id=$1`, [userId])
+  await db.query(`UPDATE agent_routines SET status='paused',next_run_at=NULL,version=version+1,pause_reason='principal_departed',updated_at=NOW()
+    WHERE company_id=$1 AND created_by=$2 AND status='active'`, [companyId,userId])
+  await db.query(`UPDATE calendar_events SET status='cancelled',updated_at=NOW() WHERE company_id=$1 AND created_by=$2 AND status IN ('active','paused')`, [companyId,userId])
+  await db.query(`UPDATE knowledge_source_jobs job SET status='failed',leased_by=NULL,leased_until=NULL,last_error='principal departed',updated_at=NOW()
+    FROM knowledge_sources source WHERE source.id=job.source_id AND source.company_id=$1 AND source.owner_user_id=$2
+      AND job.status IN ('queued','processing')`, [companyId,userId])
+  await db.query(`UPDATE presentation_jobs job SET status='cancelled',lease_token=NULL,lease_expires_at=NULL,updated_at=NOW()
+    FROM presentations presentation WHERE presentation.id=job.presentation_id AND presentation.company_id=job.company_id
+      AND job.company_id=$1 AND presentation.authorization_user_id=$2 AND job.status IN ('queued','running')`, [companyId,userId])
+  await db.query(`UPDATE company_invitations SET revoked_at=NOW() WHERE company_id=$1 AND invited_by=$2 AND revoked_at IS NULL`, [companyId,userId])
+  await db.query(`UPDATE project_invitations SET revoked_at=NOW() WHERE company_id=$1 AND invited_by=$2 AND revoked_at IS NULL`, [companyId,userId])
+  await db.query(`INSERT INTO company_onboarding_effects(id,company_id,member_id,kind,revoked_at)
+    VALUES(gen_random_uuid()::text,$1,$2,'access.revoke',NOW()) ON CONFLICT(company_id,member_id,kind) DO UPDATE
+      SET id=EXCLUDED.id,status='pending',revoked_at=EXCLUDED.revoked_at,attempts=0,available_at=NOW(),lease_token=NULL,
+          lease_expires_at=NULL,error=NULL,completed_at=NULL,updated_at=NOW()`, [companyId,userId])
   await db.query(
     `UPDATE participants SET departed_at=NOW(),status='offboarded'
       WHERE company_id=$1 AND id=$2 AND kind='human'`,
@@ -214,7 +192,7 @@ export async function invitationWithCompany(db: Queryable, tokenHash: string) {
     company_name: string; company_slug: string; inviter_name: string | null
   }>(
     `SELECT invitation.token_hash,invitation.company_id,invitation.invited_by,invitation.email,
-            invitation.role,invitation.note,invitation.max_uses,invitation.use_count,
+            invitation.role,invitation.is_admin,invitation.note,invitation.max_uses,invitation.use_count,
             invitation.created_at,invitation.expires_at,invitation.revoked_at,
             invitation.last_accepted_at,invitation.last_accepted_by,
             company.name AS company_name,company.slug AS company_slug,user_account.display_name AS inviter_name
@@ -246,12 +224,12 @@ export async function lockCompany(db: Queryable, companyId: string) {
 
 export async function listInvitations(db: Queryable, companyId: string) {
   const { rows } = await db.query<{
-    token_hash: string; email: string | null; role: CompanyRole; note: string | null
+    token_hash: string; email: string | null; role: CompanyRole; is_admin: boolean; note: string | null
     max_uses: number; use_count: number; created_at: string; expires_at: string
     revoked_at: string | null; last_accepted_at: string | null; last_accepted_by: string | null
     invited_by: string; inviter_name: string | null
   }>(
-    `SELECT invitation.token_hash,invitation.email,invitation.role,invitation.note,
+    `SELECT invitation.token_hash,invitation.email,invitation.role,invitation.is_admin,invitation.note,
             invitation.max_uses,invitation.use_count,invitation.created_at,invitation.expires_at,
             invitation.revoked_at,invitation.last_accepted_at,invitation.last_accepted_by,
             invitation.invited_by,user_account.display_name AS inviter_name
@@ -285,14 +263,14 @@ export async function revokeActiveEmailInvitations(db: Queryable, companyId: str
 
 export async function insertInvitation(db: Queryable, args: {
   tokenHash: string; companyId: string; invitedBy: string; email: string | null
-  role: CompanyRoleWire; note: string | null; maxUses: number; expiresAt: Date
+  isAdmin: boolean; note: string | null; maxUses: number; expiresAt: Date
 }): Promise<void> {
   await db.query(
     `INSERT INTO company_invitations
-       (token_hash,company_id,invited_by,email,role,note,max_uses,expires_at)
+       (token_hash,company_id,invited_by,email,is_admin,note,max_uses,expires_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
     [args.tokenHash, args.companyId, args.invitedBy, args.email,
-      companyRoleFromWire(args.role), args.note, args.maxUses, args.expiresAt],
+      args.isAdmin, args.note, args.maxUses, args.expiresAt],
   )
 }
 
@@ -320,7 +298,7 @@ export async function revokeInvitation(db: Queryable, companyId: string, tokenHa
 
 export async function lockInvitation(db: Queryable, tokenHash: string): Promise<InvitationRow | null> {
   const { rows } = await db.query<InvitationRow>(
-    `SELECT token_hash,company_id,invited_by,email,role,note,max_uses,use_count,
+    `SELECT token_hash,company_id,invited_by,email,role,is_admin,note,max_uses,use_count,
             created_at,expires_at,revoked_at,last_accepted_at,last_accepted_by
        FROM company_invitations WHERE token_hash=$1 FOR UPDATE`,
     [tokenHash],
@@ -328,34 +306,11 @@ export async function lockInvitation(db: Queryable, tokenHash: string): Promise<
   return rows[0] ?? null
 }
 
-export async function insertAcceptedMembership(db: Queryable, args: {
-  invitation: InvitationRow; userId: string; displayName: string; avatarUrl: string | null
-}): Promise<void> {
-  await db.query(
-    `INSERT INTO company_memberships (company_id,user_id,role) VALUES ($1,$2,$3)`,
-    [args.invitation.company_id, args.userId, args.invitation.role],
-  )
-  await db.query(
-    `INSERT INTO participants (id,kind,name,role,initial,avatar_bg,avatar_url,status,company_id)
-     VALUES ($1,'human',$2,NULL,$3,'#FF8870',$4,'avail',$5)
-     ON CONFLICT (id,company_id) DO UPDATE SET
-       name=EXCLUDED.name,initial=EXCLUDED.initial,avatar_url=EXCLUDED.avatar_url,
-       status='avail',departed_at=NULL`,
-    [args.userId, args.displayName, args.displayName.charAt(0).toUpperCase(), args.avatarUrl, args.invitation.company_id],
-  )
-  await db.query(
-    `UPDATE company_invitations
-        SET use_count=use_count+1,last_accepted_at=NOW(),last_accepted_by=$2
-      WHERE token_hash=$1`,
-    [args.invitation.token_hash, args.userId],
-  )
-}
-
 export async function companyMembershipSummary(db: Queryable, companyId: string, userId: string) {
   const { rows } = await db.query<{
     name: string; slug: string; role: CompanyRole; status: import('../../domain/public.js').CompanyStatus
   }>(
-    `SELECT company.name,company.slug,company.status,membership.role
+    `SELECT company.name,company.slug,company.status,membership.role,membership.is_admin AS "isAdmin"
        FROM companies company
        JOIN company_memberships membership ON membership.company_id=company.id AND membership.user_id=$2
       WHERE company.id=$1 AND membership.status='ACTIVE'`,
@@ -363,4 +318,8 @@ export async function companyMembershipSummary(db: Queryable, companyId: string,
   )
   const row = rows[0]
   return row ? { ...row, role: companyRoleToWire(row.role) } : null
+}
+
+export async function lockEducationAdmissions(db: Queryable): Promise<void> {
+  await db.query(`SELECT pg_advisory_xact_lock(1282006535)`)
 }

@@ -88,7 +88,7 @@ function resolvedProject(context: ResolvedAccessContext): { companyId: string; p
 
 function learnerReadFilter(context: ResolvedAccessContext): string | null {
   const role = context.projectMembership?.role
-  return role === 'OWNER' || role === 'TEACHER' ? null : context.actorUserId
+  return role === 'TEACHER' ? null : context.actorUserId
 }
 
 function isExactActionReplay(

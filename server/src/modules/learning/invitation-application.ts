@@ -1,24 +1,9 @@
+import { acceptEducationInvitation } from '../companies/admission.js'
 import type { Queryable } from '../../db/queryable.js'
-import { createPermissionService, resolvePlanEntitlements } from '../access/public.js'
+import { createPermissionService } from '../access/public.js'
 import type { CreateProjectInvitationInput, LearningScope } from './contracts.js'
-import { enqueueLearningEffect } from './effects-repository.js'
 import { LearningApplicationError } from './errors.js'
-import {
-  companyMembershipRole,
-  countActiveProjectStudents,
-  courseMembershipRole,
-  findVerifiedUser,
-  insertAcceptedStudentMembership,
-  insertProjectInvitation,
-  invitationViewer,
-  joinInvitationCompany,
-  listProjectInvitations,
-  lockProjectInvitation,
-  priorProjectAcceptance,
-  projectInvitationPreview,
-  recordProjectAcceptance,
-  revokeProjectInvitation,
-} from './repository.js'
+import { insertProjectInvitation, invitationViewer, listProjectInvitations, projectInvitationPreview, revokeProjectInvitation } from './repository.js'
 
 export interface LearningInvitationInfrastructure {
   transaction<T>(work: (db: Queryable) => Promise<T>): Promise<T>
@@ -165,126 +150,10 @@ export class LearningInvitationApplication {
   }
 
   async accept(userId: string, token: string) {
-    const tokenHash = this.infrastructure.hashInvitationToken(token)
-    const user = await findVerifiedUser(this.db, userId)
-    if (!user) throw new LearningApplicationError('unauthorized', 'session points to missing user')
-    if (!user.email_verified_at) {
-      throw new LearningApplicationError(
-        'forbidden',
-        'a verified email is required to accept a Project invitation',
-      )
-    }
-    const result = await this.infrastructure.transaction(async (db) => {
-      const invitation = await lockProjectInvitation(db, tokenHash, userId)
-      if (!invitation) throw new LearningApplicationError('not_found', 'invitation not found')
-      if (invitation.revoked_at) throw new LearningApplicationError('gone', 'invitation revoked')
-      if (new Date(invitation.expires_at).getTime() < Date.now()) {
-        throw new LearningApplicationError('gone', 'invitation expired')
-      }
-      if (invitation.project_status !== 'ACTIVE') {
-        throw new LearningApplicationError('gone', 'course archived')
-      }
-      if (invitation.company_status !== 'ACTIVE' && invitation.company_status !== 'TRIAL') {
-        throw new LearningApplicationError('gone', 'company is not accepting memberships')
-      }
-      if (invitation.email && invitation.email !== user.email.toLowerCase()) {
-        throw new LearningApplicationError(
-          'forbidden',
-          `this invitation is reserved for ${invitation.email}`,
-        )
-      }
-      const prior = await priorProjectAcceptance(db, tokenHash, userId)
-      const companyRole = await companyMembershipRole(db, invitation.company_id, userId)
-      const joinedCompany = !companyRole
-      if (joinedCompany) {
-        await joinInvitationCompany(db, {
-          companyId: invitation.company_id,
-          userId,
-          displayName: user.display_name,
-          avatarUrl: user.avatar_url ?? this.infrastructure.avatarForEmail(user.email),
-        })
-      }
-      const existingRole = await courseMembershipRole(db, invitation.course_id, userId)
-      if (prior && !existingRole) {
-        throw new LearningApplicationError(
-          'gone',
-          'this invitation was already accepted and no longer grants course access',
-        )
-      }
-      const addsStudent = !prior && !existingRole
-      if (addsStudent && invitation.use_count >= invitation.max_uses) {
-        throw new LearningApplicationError('gone', 'invitation already used')
-      }
-      if (addsStudent) {
-        const entitlements = await resolvePlanEntitlements(db, invitation.project_plan_id)
-        const studentLimit = entitlements.number('teacher.student_limit')
-        if (
-          studentLimit !== null
-          && await countActiveProjectStudents(db, invitation.company_id, invitation.project_id)
-            >= studentLimit
-        ) {
-          throw new LearningApplicationError('forbidden', 'Teacher Free Student limit reached')
-        }
-        await insertAcceptedStudentMembership(db, { invitation, userId })
-        await recordProjectAcceptance(db, { tokenHash, userId })
-      }
-      const role = existingRole ?? 'learner'
-      await this.infrastructure.auditInTransaction(db, {
-        kind: 'project_invitation_accept',
-        userId,
-        companyId: invitation.company_id,
-        detail: { courseId: invitation.course_id, role },
-      })
-      await enqueueLearningEffect(db, {
-        companyId: invitation.company_id,
-        courseId: invitation.course_id,
-        kind: 'study_room.sync',
-      })
-      await enqueueLearningEffect(db, {
-        companyId: invitation.company_id,
-        courseId: invitation.course_id,
-        kind: 'teacher_room.sync',
-      })
-      await enqueueLearningEffect(db, {
-        companyId: invitation.company_id,
-        courseId: invitation.course_id,
-        kind: 'member_onboarding.seed',
-        effectKey: userId,
-        payload: { userId },
-      })
-      return {
-        companyId: invitation.company_id,
-        companyName: invitation.company_name,
-        companySlug: invitation.company_slug,
-        companyRole: companyRole ?? 'member',
-        companyStatus: invitation.company_status,
-        courseId: invitation.course_id,
-        courseName: invitation.course_name,
-        projectId: invitation.project_id,
-        roomId: invitation.room_id,
-        role,
-        alreadyMember: Boolean(existingRole),
-        joinedCompany,
-      }
+    return this.infrastructure.transaction(async (db) => {
+      const result = await acceptEducationInvitation(db, userId, this.infrastructure.hashInvitationToken(token), 'project')
+      if (!result.course) throw new LearningApplicationError('not_found', 'course not found')
+      return { ...result, course: result.course }
     })
-    return {
-      ok: true as const,
-      alreadyMember: result.alreadyMember,
-      joinedCompany: result.joinedCompany,
-      company: {
-        id: result.companyId,
-        name: result.companyName,
-        slug: result.companySlug,
-        role: result.companyRole,
-        status: result.companyStatus,
-      },
-      course: {
-        id: result.courseId,
-        name: result.courseName,
-        projectId: result.projectId,
-        studyRoomId: result.roomId,
-        role: result.role,
-      },
-    }
   }
 }

@@ -3,8 +3,8 @@ import { after, before, beforeEach, test } from 'node:test'
 import { pool } from '../db/pool.js'
 import { LearningApplicationError } from '../modules/learning/application.js'
 import { learningApplication } from '../modules/learning/facade.js'
-import { ensureTeacherPlans } from '../modules/entitlements/public.js'
-import { ensureSchemaOnce, resetAllTables, teardownAll } from './_helpers.js'
+import { ensureEducationPlan } from '../modules/entitlements/public.js'
+import { seedUserMembership, ensureSchemaOnce, resetAllTables, teardownAll } from './_helpers.js'
 
 const TEACHER = 'u-activity-import-teacher'
 const COMPANY = 'co-activity-import'
@@ -13,35 +13,23 @@ const PROJECT = 'project-activity-import'
 before(async () => { await ensureSchemaOnce() })
 beforeEach(async () => {
   await resetAllTables()
-  await ensureTeacherPlans(pool)
+  await ensureEducationPlan(pool)
   await pool.query(
     `INSERT INTO users(id,email,display_name)
      VALUES ($1,'activity-import@test.local','Activity Import Teacher')`,
     [TEACHER],
   )
-  await pool.query(
-    `INSERT INTO companies(id,name,slug,type,status,personal_owner_user_id,plan_id)
-     VALUES ($1,'Activity Import','activity-import','PERSONAL','ACTIVE',$2,'plan-personal-free')`,
-    [COMPANY, TEACHER],
-  )
-  await pool.query(
-    `INSERT INTO company_memberships(company_id,user_id,role,status)
-     VALUES ($1,$2,'OWNER','ACTIVE')`,
-    [COMPANY, TEACHER],
-  )
-  await pool.query(
-    `INSERT INTO participants(id,company_id,kind,name,initial,avatar_bg,status)
-     VALUES ($1,$2,'human','Activity Import Teacher','A','#667085','avail')`,
-    [TEACHER, COMPANY],
-  )
+  await pool.query(`INSERT INTO companies(id,name,slug,type,status,plan_id)
+    VALUES($1,'Activity Import','activity-import','EDUCATION','ACTIVE','plan-education')`,[COMPANY])
+  await seedUserMembership(TEACHER,COMPANY)
   await pool.query(
     `INSERT INTO projects(id,company_id,kind,plan_id,name,status,created_by)
-     VALUES ($1,$2,'TEACHING','plan-teacher-free','Import Project','ACTIVE',$3)`,
+     VALUES ($1,$2,'TEACHING','plan-education','Import Project','ACTIVE',$3)`,
     [PROJECT, COMPANY, TEACHER],
   )
   await pool.query(
     `INSERT INTO project_memberships(company_id,project_id,user_id,role,status)
-     VALUES ($1,$2,$3,'OWNER','ACTIVE')`,
+     VALUES ($1,$2,$3,'TEACHER','ACTIVE')`,
     [COMPANY, PROJECT, TEACHER],
   )
   await pool.query(

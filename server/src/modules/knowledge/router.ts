@@ -6,7 +6,6 @@ import { requireAuth, requireCompany, requireWorkspace } from '../../http/reques
 import { permissionService } from '../access/public.js'
 import { KnowledgeApplicationError } from './application.js'
 import {
-  createProjectRequestSchema,
   createSourceRequestSchema,
   moveConversationRequestSchema,
   presignSourceRequestSchema,
@@ -47,21 +46,6 @@ knowledgeRouter.get('/projects', safe(async (req, res) => {
   const identity = await requireCompany(req)
   await permissionService.assertCan({ actorUserId: identity.userId, action: 'project:list', companyId: identity.companyId })
   res.json(await knowledgeApplication.projects(identity.companyId, requireAuth(req)))
-}))
-
-knowledgeRouter.post('/projects', safe(async (req, res) => {
-  const identity = await requireCompany(req)
-  await permissionService.assertCan({
-    actorUserId: identity.userId,
-    action: 'project:create_personal_learning',
-    companyId: identity.companyId,
-  })
-  const input = parse(createProjectRequestSchema.safeParse(req.body ?? {}))
-  try {
-    res.status(201).json(await knowledgeApplication.createPersonalLearningProject({ ...identity, ...input }))
-  } catch (error) {
-    mapKnowledgeError(error)
-  }
 }))
 
 knowledgeRouter.put('/projects/:id', safe(async (req, res) => {

@@ -3,7 +3,7 @@ import { after, before, beforeEach, test } from 'node:test'
 import { pool } from '../db/pool.js'
 import { TrustApplicationError } from '../modules/trust/application.js'
 import { trustApplication } from '../modules/trust/facade.js'
-import { ensureSchemaOnce, resetAllTables, teardownAll } from './_helpers.js'
+import { seedMembershipPeriod, ensureSchemaOnce, resetAllTables, teardownAll } from './_helpers.js'
 
 const ADMIN = 'u-trust-admin'
 const TEACHER = 'u-trust-teacher'
@@ -22,18 +22,20 @@ beforeEach(async () => {
   )
   await pool.query(
     `INSERT INTO companies(id,name,slug,type,status,plan_id)
-     VALUES ($1,'Trust School','trust-school','EDUCATION','ACTIVE','plan-personal-free')`,
+     VALUES ($1,'Trust School','trust-school','EDUCATION','ACTIVE','plan-education')`,
     [COMPANY],
   )
   await pool.query(
-    `INSERT INTO company_memberships(company_id,user_id,role,status) VALUES
-       ($1,$2,'ADMIN','ACTIVE'),($1,$3,'MEMBER','ACTIVE')`,
+    `INSERT INTO company_memberships(company_id,user_id,role,status,is_admin) VALUES
+       ($1,$2,'TEACHER','ACTIVE',TRUE),($1,$3,'TEACHER','ACTIVE',FALSE)`,
     [COMPANY,ADMIN,TEACHER],
   )
+  await seedMembershipPeriod(pool,COMPANY,ADMIN)
+  await seedMembershipPeriod(pool,COMPANY,TEACHER)
   await pool.query(
     `INSERT INTO education_contracts
        (id,company_id,plan_id,status,starts_at,ends_at,seat_limit)
-     VALUES ($1,$2,'plan-personal-free','ACTIVE',NOW()-INTERVAL '1 day',NOW()+INTERVAL '30 days',5)`,
+     VALUES ($1,$2,'plan-education','ACTIVE',NOW()-INTERVAL '1 day',NOW()+INTERVAL '30 days',5)`,
     [CONTRACT,COMPANY],
   )
   await pool.query(
@@ -49,7 +51,7 @@ beforeEach(async () => {
   )
   await pool.query(
     `INSERT INTO projects(id,company_id,kind,plan_id,name,status,created_by)
-     VALUES ($1,$2,'INSTITUTIONAL_COURSE','plan-personal-free','Trust Course','ACTIVE',$3)`,
+     VALUES ($1,$2,'INSTITUTIONAL_COURSE','plan-education','Trust Course','ACTIVE',$3)`,
     [PROJECT,COMPANY,TEACHER],
   )
   await pool.query(

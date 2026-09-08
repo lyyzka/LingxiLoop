@@ -8,7 +8,7 @@ import { applyLocalUpdate } from '../modules/documents/public.js'
 import { createWsTicket } from '../modules/identity/public.js'
 import { __setCreateNotebookOverrideForTesting, __setUpdateNotebookOverrideForTesting } from '../modules/knowledge/provider.js'
 import { attachWebSocket } from '../ws.js'
-import { buildApiTestApp, ensureSchemaOnce, installFakeWukong, resetAllTables, teardownAll } from './_helpers.js'
+import { seedUserMembership, buildApiTestApp, ensureSchemaOnce, installFakeWukong, resetAllTables, teardownAll } from './_helpers.js'
 
 const OWNER = 'u-course-owner'
 const LEARNER = 'u-course-learner'
@@ -69,30 +69,28 @@ async function seedCompany(companyId = 'co-courses'): Promise<void> {
     [LEARNER],
   )
   await pool.query(
-    `INSERT INTO companies (id,name,slug,type,personal_owner_user_id,plan_id)
-     VALUES ($1,'Course test',$1,'PERSONAL',$2,'plan-personal-free')`,
-    [companyId, OWNER],
+    `INSERT INTO companies (id,name,slug,type,plan_id)
+     VALUES ($1,'Course test',$1,'EDUCATION','plan-education')`,
+    [companyId],
   )
-  await pool.query(
-    `INSERT INTO company_memberships(company_id,user_id,role) VALUES($1,$2,'OWNER')`,
-    [companyId, OWNER],
-  )
+  await seedUserMembership(OWNER,companyId)
   await pool.query(
     `INSERT INTO participants(id,company_id,kind,name,initial,avatar_bg,status) VALUES
        ($1,$3,'human','Owner','O','#667085','avail'),
-       ($2,$3,'human','Learner','L','#667085','avail')`,
+       ($2,$3,'human','Learner','L','#667085','avail') ON CONFLICT DO NOTHING`,
     [OWNER, LEARNER, companyId],
   )
   await pool.query(
     `INSERT INTO projects (id,company_id,kind,name,description,color,created_by,is_default)
-     VALUES ($1,$2,'PERSONAL_LEARNING','我的学习','','#64748b',$3,TRUE)`,
+     VALUES ($1,$2,'TEACHING','课程','','#64748b',$3,TRUE)`,
     [`general-${companyId}`, companyId, OWNER],
   )
   await pool.query(
     `INSERT INTO project_memberships(company_id,project_id,user_id,role)
-     VALUES ($1,$2,$3,'OWNER')`,
+     VALUES ($1,$2,$3,'TEACHER')`,
     [companyId, `general-${companyId}`, OWNER],
   )
+  await pool.query(`INSERT INTO courses(id,company_id,project_id,created_by) VALUES($1,$2,$3,$4)`,[`general-course-${companyId}`,companyId,`general-${companyId}`,OWNER])
 }
 
 async function createCourse(name: string, companyId = 'co-courses') {
@@ -149,77 +147,17 @@ interface DashboardSpace {
   lifecycleAction: 'END' | 'ENTER_READ_ONLY' | 'ENTER_RETENTION' | 'ARCHIVE' | null
 }
 
-test('[integration] learning dashboard crosses Companies only through actor memberships and returns real attempt facts', async () => {
+test('[integration] learning dashboard stays in the current company and follows course grants and returns real attempt facts', async () => {
   await seedCompany('co-dashboard-a')
   const courseA = await createCourse('Dashboard A', 'co-dashboard-a')
-  await pool.query(
-    `INSERT INTO companies (id,name,slug,type,plan_id)
-     VALUES ('co-dashboard-b','Dashboard school','co-dashboard-b','EDUCATION','plan-personal-free')`,
-  )
-  await pool.query(
-    `INSERT INTO company_memberships (company_id,user_id,role)
-     VALUES ('co-dashboard-b',$1,'OWNER')`,
-    [OWNER],
-  )
-  await pool.query(
-    `INSERT INTO education_contracts
-       (id,company_id,plan_id,status,starts_at,ends_at,seat_limit)
-     VALUES ('contract-dashboard-b','co-dashboard-b','plan-personal-free','ACTIVE',
-       NOW()-INTERVAL '1 day',NOW()+INTERVAL '30 days',1)`,
-  )
-  await pool.query(
-    `INSERT INTO organization_seats (id,company_id,contract_id,user_id,status)
-     VALUES ('seat-dashboard-b','co-dashboard-b','contract-dashboard-b',$1,'ACTIVE')`,
-    [OWNER],
-  )
-  await pool.query(
-    `INSERT INTO projects
-       (id,company_id,kind,name,description,color,created_by,is_default)
-     VALUES ('project-dashboard-b','co-dashboard-b','INSTITUTIONAL_COURSE',
-       'Dashboard B','','#2563eb',$1,FALSE)`,
-    [OWNER],
-  )
-  await pool.query(
-    `INSERT INTO courses (id,company_id,project_id,created_by)
-     VALUES ('course-dashboard-b','co-dashboard-b','project-dashboard-b',$1)`,
-    [OWNER],
-  )
-  await pool.query(
-    `INSERT INTO project_memberships (company_id,project_id,user_id,role)
-     VALUES ('co-dashboard-b','project-dashboard-b',$1,'OWNER')`,
-    [OWNER],
-  )
-  await pool.query(
-    `INSERT INTO companies (id,name,slug,type,plan_id)
-     VALUES ('co-dashboard-no-seat','No seat school','co-dashboard-no-seat','EDUCATION','plan-personal-free')`,
-  )
-  await pool.query(
-    `INSERT INTO company_memberships (company_id,user_id,role)
-     VALUES ('co-dashboard-no-seat',$1,'OWNER')`,
-    [OWNER],
-  )
-  await pool.query(
-    `INSERT INTO projects
-       (id,company_id,kind,name,description,color,created_by,is_default)
-     VALUES ('project-dashboard-no-seat','co-dashboard-no-seat','INSTITUTIONAL_COURSE',
-       'Must stay hidden','','#dc2626',$1,FALSE)`,
-    [OWNER],
-  )
-  await pool.query(
-    `INSERT INTO courses (id,company_id,project_id,created_by)
-     VALUES ('course-dashboard-no-seat','co-dashboard-no-seat','project-dashboard-no-seat',$1)`,
-    [OWNER],
-  )
-  await pool.query(
-    `INSERT INTO project_memberships (company_id,project_id,user_id,role)
-     VALUES ('co-dashboard-no-seat','project-dashboard-no-seat',$1,'OWNER')`,
-    [OWNER],
-  )
-  await pool.query(
-    `INSERT INTO projects (id,company_id,kind,name,description,color,created_by,is_default)
-     VALUES ('project-not-member','co-dashboard-a','TEACHING','Hidden','','#000000',$1,FALSE)`,
-    [OWNER],
-  )
+  await pool.query(`UPDATE company_memberships SET is_admin=FALSE WHERE user_id=$1`,[OWNER])
+  await pool.query(`INSERT INTO projects(id,company_id,kind,name,created_by)
+    VALUES('project-dashboard-b','co-dashboard-a','INSTITUTIONAL_COURSE','Dashboard B',$1),
+          ('project-not-member','co-dashboard-a','TEACHING','Hidden',$1)`,[OWNER])
+  await pool.query(`INSERT INTO courses(id,company_id,project_id,created_by)
+    VALUES('course-dashboard-b','co-dashboard-a','project-dashboard-b',$1)`,[OWNER])
+  await pool.query(`INSERT INTO project_memberships(company_id,project_id,user_id,role)
+    VALUES('co-dashboard-a','project-dashboard-b',$1,'TEACHER')`,[OWNER])
 
   const firstPage = await fetch(`${ownerUrl}/api/learning/spaces?limit=1`)
   const first = await responseJson<{
@@ -236,36 +174,10 @@ test('[integration] learning dashboard crosses Companies only through actor memb
   assert.equal(spaces.length, 3)
   assert.equal(new Set(spaces.map((space) => space.projectId)).size, 3)
   assert.deepEqual([...new Set(spaces.map((space) => space.companyId))].sort(), [
-    'co-dashboard-a', 'co-dashboard-b',
+    'co-dashboard-a',
   ])
   assert.equal(spaces.some((space) => space.projectId === 'project-not-member'), false)
   assert.equal(spaces.some((space) => space.projectId === 'project-dashboard-no-seat'), false)
-  const personal = spaces.find((space) => space.projectId === 'general-co-dashboard-a')
-  assert.deepEqual(personal && {
-    perspective: personal.perspective,
-    canManage: personal.canManage,
-    canEditContent: personal.canEditContent,
-    canUpdateCourse: personal.canUpdateCourse,
-    canInviteMembers: personal.canInviteMembers,
-    canRevokeInvitations: personal.canRevokeInvitations,
-    canUpdateMembers: personal.canUpdateMembers,
-    canRemoveMembers: personal.canRemoveMembers,
-    canSubmit: personal.canSubmit,
-    canReview: personal.canReview,
-    lifecycleAction: personal.lifecycleAction,
-  }, {
-    perspective: 'learner',
-    canManage: false,
-    canEditContent: false,
-    canUpdateCourse: false,
-    canInviteMembers: false,
-    canRevokeInvitations: false,
-    canUpdateMembers: false,
-    canRemoveMembers: false,
-    canSubmit: true,
-    canReview: false,
-    lifecycleAction: null,
-  })
   const activeOwner = spaces.find((space) => space.projectId === courseA.projectId)
   assert.deepEqual(activeOwner && {
     perspective: activeOwner.perspective,
@@ -292,31 +204,6 @@ test('[integration] learning dashboard crosses Companies only through actor memb
     canReview: true,
     lifecycleAction: 'END',
   })
-
-  await pool.query(`UPDATE projects SET status='TRANSFER_PENDING' WHERE id=$1`, [courseA.projectId])
-  const transferPendingSpace = (await responseJson<{ data: DashboardSpace[] }>(
-    await fetch(`${ownerUrl}/api/learning/spaces?limit=100`),
-  )).data.find((space) => space.projectId === courseA.projectId)
-  assert.deepEqual(transferPendingSpace && {
-    canManage: transferPendingSpace.canManage,
-    canEditContent: transferPendingSpace.canEditContent,
-    canUpdateCourse: transferPendingSpace.canUpdateCourse,
-    canInviteMembers: transferPendingSpace.canInviteMembers,
-    canRevokeInvitations: transferPendingSpace.canRevokeInvitations,
-    canUpdateMembers: transferPendingSpace.canUpdateMembers,
-    canRemoveMembers: transferPendingSpace.canRemoveMembers,
-    lifecycleAction: transferPendingSpace.lifecycleAction,
-  }, {
-    canManage: true,
-    canEditContent: true,
-    canUpdateCourse: false,
-    canInviteMembers: false,
-    canRevokeInvitations: false,
-    canUpdateMembers: false,
-    canRemoveMembers: false,
-    lifecycleAction: null,
-  })
-  await pool.query(`UPDATE projects SET status='ACTIVE' WHERE id=$1`, [courseA.projectId])
 
   await pool.query(`UPDATE projects SET status='COURSE_ENDED' WHERE id=$1`, [courseA.projectId])
   await pool.query(`UPDATE projects SET status='READ_ONLY' WHERE id='project-dashboard-b'`)
@@ -457,31 +344,6 @@ test('[integration] learning dashboard crosses Companies only through actor memb
   )
   assert.equal(readOnlyLearners.status, 403, await readOnlyLearners.text())
   await pool.query(`UPDATE projects SET status='ACTIVE' WHERE id=$1`, [courseA.projectId])
-  await pool.query(
-    `UPDATE project_memberships SET role='TA'
-      WHERE company_id='co-dashboard-a' AND project_id=$1 AND user_id=$2`,
-    [courseA.projectId, OWNER],
-  )
-  const taOverview = await fetch(
-    `${ownerUrl}/api/projects/${courseA.projectId}/learning/overview?windowDays=30`,
-    { headers: { 'x-company-id': 'co-dashboard-a' } },
-  )
-  assert.equal((await responseJson<{ perspective: string }>(taOverview)).perspective, 'learner')
-  await pool.query(
-    `UPDATE project_memberships SET role='OWNER'
-      WHERE company_id='co-dashboard-a' AND project_id=$1 AND user_id=$2`,
-    [courseA.projectId, OWNER],
-  )
-
-  const learnerOverview = await fetch(
-    `${ownerUrl}/api/projects/general-co-dashboard-a/learning/overview`,
-    { headers: { 'x-company-id': 'co-dashboard-a' } },
-  )
-  assert.equal(
-    (await responseJson<{ perspective: string }>(learnerOverview)).perspective,
-    'learner',
-  )
-
   const learners = await fetch(
     `${ownerUrl}/api/projects/${courseA.projectId}/learning/learners`,
     { headers: { 'x-company-id': 'co-dashboard-a' } },
@@ -562,43 +424,11 @@ test('[integration] learning dashboard crosses Companies only through actor memb
     lifecycleAction: null,
   })
 
-  for (const role of ['OBSERVER', 'TA'] as const) {
-    await pool.query(
-      `UPDATE project_memberships SET role=$1
-        WHERE company_id='co-dashboard-a' AND project_id=$2 AND user_id=$3`,
-      [role, courseA.projectId, LEARNER],
-    )
-    const readOnlyLearnerSpace = (await responseJson<{ data: DashboardSpace[] }>(
-      await fetch(`${learnerUrl}/api/learning/spaces?limit=100`),
-    )).data[0]
-    assert.deepEqual(readOnlyLearnerSpace && {
-      projectId: readOnlyLearnerSpace.projectId,
-      perspective: readOnlyLearnerSpace.perspective,
-      canManage: readOnlyLearnerSpace.canManage,
-      canEditContent: readOnlyLearnerSpace.canEditContent,
-      canUpdateCourse: readOnlyLearnerSpace.canUpdateCourse,
-      canInviteMembers: readOnlyLearnerSpace.canInviteMembers,
-      canRevokeInvitations: readOnlyLearnerSpace.canRevokeInvitations,
-      canUpdateMembers: readOnlyLearnerSpace.canUpdateMembers,
-      canRemoveMembers: readOnlyLearnerSpace.canRemoveMembers,
-      canSubmit: readOnlyLearnerSpace.canSubmit,
-      canReview: readOnlyLearnerSpace.canReview,
-      lifecycleAction: readOnlyLearnerSpace.lifecycleAction,
-    }, {
-      projectId: courseA.projectId,
-      perspective: 'learner',
-      canManage: false,
-      canEditContent: false,
-      canUpdateCourse: false,
-      canInviteMembers: false,
-      canRevokeInvitations: false,
-      canUpdateMembers: false,
-      canRemoveMembers: false,
-      canSubmit: false,
-      canReview: false,
-      lifecycleAction: null,
-    })
+  for (const role of ['OBSERVER','TA','TEACHER']) {
+    await assert.rejects(pool.query(`UPDATE project_memberships SET role=$1 WHERE project_id=$2 AND user_id=$3`,
+      [role,courseA.projectId,LEARNER]))
   }
+
 })
 
 test('[integration] learner sees only enrolled courses and receives opaque 404 for another Project', async () => {
@@ -623,41 +453,9 @@ test('[integration] learner sees only enrolled courses and receives opaque 404 f
   assert.equal(denied.status, 404)
 })
 
-test('[integration] Education Company cannot use the Teaching creation entrypoint', async () => {
-  await pool.query(
-    `INSERT INTO users(id,email,display_name,email_verified_at)
-     VALUES($1,'owner@test.local','Owner',NOW())`,
-    [OWNER],
-  )
-  await pool.query(
-    `INSERT INTO companies(id,name,slug,type,plan_id)
-     VALUES('co-education-course','Education','education-course','EDUCATION','plan-personal-free')`,
-  )
-  await pool.query(
-    `INSERT INTO company_memberships(company_id,user_id,role)
-     VALUES('co-education-course',$1,'OWNER')`,
-    [OWNER],
-  )
-  await pool.query(
-    `INSERT INTO education_contracts(id,company_id,plan_id,status,starts_at,ends_at,seat_limit)
-     VALUES('contract-education-course','co-education-course','plan-personal-free','ACTIVE',
-       NOW()-INTERVAL '1 day',NOW()+INTERVAL '30 days',1)`,
-  )
-  await pool.query(
-    `INSERT INTO organization_seats(id,company_id,contract_id,user_id,status)
-     VALUES('seat-education-course','co-education-course','contract-education-course',$1,'ACTIVE')`,
-    [OWNER],
-  )
-  const response = await fetch(`${ownerUrl}/api/courses`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-company-id': 'co-education-course' },
-    body: JSON.stringify({ name: 'Institutional course' }),
-  })
-  assert.equal(response.status, 403)
-  assert.equal(
-    (await pool.query(`SELECT COUNT(*)::int AS count FROM projects WHERE company_id='co-education-course'`)).rows[0].count,
-    0,
-  )
+test('[integration] company teachers can create Teaching courses', async () => {
+  await seedCompany()
+  assert.equal((await createCourse('Teaching course')).projectKind,'TEACHING')
 })
 
 test('[integration] Project invitation replay is idempotent and never grants or downgrades Teacher', async () => {
@@ -668,10 +466,7 @@ test('[integration] Project invitation replay is idempotent and never grants or 
   assert.equal(replay.status, 200)
   assert.equal((await pool.query(`SELECT use_count FROM project_invitations WHERE token_hash=$1`, [learnerInvite.id])).rows[0].use_count, 1)
 
-  await pool.query(`UPDATE project_memberships SET role='TEACHER' WHERE project_id=$1 AND user_id=$2`, [course.projectId, LEARNER])
-  const teacherInvite = await inviteAndAccept(course.projectId)
-  assert.equal((await pool.query(`SELECT role FROM project_memberships WHERE project_id=$1 AND user_id=$2`, [course.projectId, LEARNER])).rows[0].role, 'TEACHER')
-  assert.equal((await pool.query(`SELECT use_count FROM project_invitations WHERE token_hash=$1`, [teacherInvite.id])).rows[0].use_count, 0)
+  await assert.rejects(pool.query(`UPDATE project_memberships SET role='TEACHER' WHERE project_id=$1 AND user_id=$2`,[course.projectId,LEARNER]))
 
   const ended = await fetch(`${ownerUrl}/api/projects/${course.projectId}/end`, {
     method: 'POST',
@@ -728,62 +523,13 @@ test('[integration] removing a member invalidates replay of their consumed cours
   )
   assert.equal(replay.status, 410, await replay.text())
   assert.equal((await pool.query(
-    `SELECT 1 FROM project_memberships WHERE project_id=$1 AND user_id=$2`,
+    `SELECT 1 FROM project_memberships WHERE project_id=$1 AND user_id=$2 AND status='ACTIVE'`,
     [course.projectId, LEARNER],
   )).rowCount, 0)
 
   const visible = await fetch(`${learnerUrl}/api/courses`, { headers: { 'x-company-id': 'co-courses' } })
   assert.equal(visible.status, 200)
   assert.deepEqual(await visible.json(), [])
-})
-
-test('[integration] course creator OWNER is immutable while other teachers can be removed', async () => {
-  await seedCompany()
-  const course = await createCourse('Teacher invariant')
-  const teachers = ['u-company-teacher-a', 'u-company-teacher-b']
-  await pool.query(
-    `INSERT INTO users (id,email,display_name,email_verified_at) VALUES
-       ($1,'teacher-a@test.local','Teacher A',NOW()),
-       ($2,'teacher-b@test.local','Teacher B',NOW())`,
-    teachers,
-  )
-  await pool.query(
-    `INSERT INTO company_memberships (company_id,user_id,role) VALUES
-       ('co-courses',$1,'MEMBER'),('co-courses',$2,'MEMBER')`,
-    teachers,
-  )
-  await pool.query(
-    `INSERT INTO project_memberships (project_id,company_id,user_id,role) VALUES
-       ($1,'co-courses',$2,'TEACHER'),($1,'co-courses',$3,'TEACHER')`,
-    [course.projectId, ...teachers],
-  )
-  const removeOwnerFromCourse = await fetch(`${ownerUrl}/api/courses/${course.id}/members/${OWNER}`, {
-    method: 'DELETE', headers: { 'x-company-id': 'co-courses' },
-  })
-  assert.equal(removeOwnerFromCourse.status, 409, await removeOwnerFromCourse.text())
-
-  const downgradeOwner = await fetch(`${ownerUrl}/api/courses/${course.id}/members/${OWNER}`, {
-    method: 'PATCH',
-    headers: { 'content-type': 'application/json', 'x-company-id': 'co-courses' },
-    body: JSON.stringify({ role: 'learner' }),
-  })
-  assert.equal(downgradeOwner.status, 409, await downgradeOwner.text())
-
-  const removals = await Promise.all(teachers.map((teacherId) => fetch(
-    `${ownerUrl}/api/companies/co-courses/members/${teacherId}`,
-    { method: 'DELETE', headers: { 'x-company-id': 'co-courses' } },
-  )))
-  assert.deepEqual(removals.map((response) => response.status).sort(), [200, 200])
-  assert.equal((await pool.query(
-    `SELECT COUNT(*)::int AS count FROM project_memberships
-      WHERE project_id=$1 AND status='ACTIVE' AND role IN ('OWNER','TEACHER')`,
-    [course.projectId],
-  )).rows[0].count, 1)
-  assert.equal((await pool.query(
-    `SELECT COUNT(*)::int AS count FROM company_memberships
-      WHERE company_id='co-courses' AND user_id=ANY($1::text[])`,
-    [teachers],
-  )).rows[0].count, 0)
 })
 
 function waitForSocketMessage(

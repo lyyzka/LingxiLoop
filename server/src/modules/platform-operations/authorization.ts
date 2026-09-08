@@ -32,7 +32,7 @@ export async function requirePlatformAdmin(
   db: Queryable,
   request: Request & AuthedRequest,
 ): Promise<PlatformAdminIdentity> {
-  if (!request.gatewayAuthenticated || !request.authUserId) throw new HttpError(401, 'valid admin gateway assertion required')
+  if (!request.gatewayAuthenticated || !request.gatewayPlatformAdmin || !request.authUserId) throw new HttpError(401, 'valid admin gateway assertion required')
   const identity = await platformAdminIdentity(db, request.authUserId)
   if (!identity) throw new HttpError(403, 'platform administrator access required')
   return identity

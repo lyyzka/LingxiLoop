@@ -135,6 +135,7 @@ function AdminNavigation() {
       <SidebarGroupLabel>工作台</SidebarGroupLabel>
       <SidebarGroupContent><SidebarMenu>
         <SidebarMenuItem><SidebarMenuButton asChild isActive={pathname === '/'}><Link to="/" onClick={closeNavigation}><ActivityIcon /><span>运营概览</span></Link></SidebarMenuButton></SidebarMenuItem>
+        <SidebarMenuItem><SidebarMenuButton asChild isActive={pathname.startsWith('/education')}><Link to="/education" onClick={closeNavigation}><KeyRoundIcon /><span>创建教育公司</span></Link></SidebarMenuButton></SidebarMenuItem>
         <SidebarMenuItem><SidebarMenuButton asChild isActive={pathname.startsWith('/authentication')}><Link to="/authentication" onClick={closeNavigation}><KeyRoundIcon /><span>身份与安全</span></Link></SidebarMenuButton></SidebarMenuItem>
         <SidebarMenuItem><SidebarMenuButton asChild isActive={pathname.startsWith('/status')}><Link to="/status" onClick={closeNavigation}><HeartPulseIcon /><span>服务状态</span></Link></SidebarMenuButton></SidebarMenuItem>
         <SidebarMenuItem><SidebarMenuButton asChild isActive={pathname.startsWith('/observability')}><Link to="/observability" onClick={closeNavigation}><ChartNoAxesCombinedIcon /><span>AI 分析</span></Link></SidebarMenuButton></SidebarMenuItem>

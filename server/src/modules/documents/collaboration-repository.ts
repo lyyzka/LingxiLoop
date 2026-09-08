@@ -1,3 +1,4 @@
+import { createPermissionService } from '../access/public.js'
 import type { Queryable } from '../../db/queryable.js'
 
 /** One MVCC snapshot includes compaction and its remaining update tail. */
@@ -124,4 +125,13 @@ export async function listProjectDocumentIds(
     [companyId, projectId],
   )
   return rows.map((row) => row.id)
+}
+
+export async function canPersistHumanUpdate(db: Queryable, documentId: string, companyId: string, authorId: string, acceptedAt: Date): Promise<boolean> {
+  const { rows } = await db.query(`SELECT 1 FROM users WHERE id=$1 AND departed_at IS NULL
+    AND suspended_at IS NULL AND deleted_at IS NULL AND (access_revoked_at IS NULL OR access_revoked_at<$2) FOR SHARE`, [authorId,acceptedAt])
+  if (!rows[0]) return false
+  return (await createPermissionService(db, { lockDependencies: true }).can({
+    actorUserId: authorId, companyId, action: 'document:write', resource: { type: 'document', id: documentId },
+  })).allowed
 }

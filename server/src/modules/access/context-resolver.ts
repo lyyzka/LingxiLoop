@@ -42,15 +42,13 @@ export async function resolveAccessContext(
   const company = await repository.company(authoritativeCompanyId)
   if (!company) return denied('COMPANY_NOT_FOUND')
 
-  const companyMembership = platformAdmin
-    ? { role: 'OWNER' as const, status: 'ACTIVE' as const }
-    : await repository.companyMembership(company.id, request.actorUserId)
+  const companyMembership = await repository.companyMembership(company.id, request.actorUserId)
   if (!companyMembership) return denied('COMPANY_MEMBERSHIP_REQUIRED')
   if (companyMembership.status !== 'ACTIVE') return denied('COMPANY_MEMBERSHIP_INACTIVE')
 
   const projectMembership = project
-    ? platformAdmin
-      ? { role: 'OWNER' as const, status: 'ACTIVE' as const }
+    ? companyMembership.isAdmin
+      ? { role: 'TEACHER' as const, status: 'ACTIVE' as const }
       : await repository.projectMembership(company.id, project.id, request.actorUserId)
     : null
   if (project && !projectMembership) return denied('PROJECT_MEMBERSHIP_REQUIRED')
@@ -76,7 +74,7 @@ export async function resolveAccessContext(
       actorUserId: request.actorUserId,
       platformAdmin,
       company: { id: company.id, type: company.type, status: company.status },
-      companyMembership: { role: companyMembership.role, status: companyMembership.status },
+      companyMembership: { role: companyMembership.role, status: companyMembership.status, isAdmin: companyMembership.isAdmin === true },
       ...(project ? { project: { id: project.id, kind: project.kind, status: project.status } } : {}),
       ...(projectMembership
         ? { projectMembership: { role: projectMembership.role, status: projectMembership.status } }

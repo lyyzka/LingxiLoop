@@ -34,8 +34,6 @@ const COMMAND_ACTIONS = {
   ACTIVATE: 'project:activate',
   END: 'project:end',
   ENTER_READ_ONLY: 'project:enter_read_only',
-  REQUEST_TRANSFER: 'project:request_transfer',
-  CANCEL_TRANSFER: 'project:cancel_transfer',
   ENTER_RETENTION: 'project:enter_retention',
   ARCHIVE: 'project:archive',
   DELETE: 'project:delete',

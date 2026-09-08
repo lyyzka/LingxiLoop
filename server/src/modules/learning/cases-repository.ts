@@ -201,9 +201,7 @@ async function findOpenLearningCase(
        AND member.user_id=learning_case.user_id AND member.status='ACTIVE'
       WHERE learning_case.company_id=$1 AND learning_case.project_id=$2 AND learning_case.user_id=$3
         AND learning_case.knowledge_unit_id=$4 AND learning_case.status<>'CLOSED'
-        AND ((project.kind='PERSONAL_LEARNING' AND member.role='OWNER')
-          OR (project.kind IN ('TEACHING','INSTITUTIONAL_COURSE')
-            AND member.role IN ('STUDENT','OBSERVER')))
+        AND member.role = 'STUDENT'
       LIMIT 1`,
     [args.companyId, args.projectId, args.learnerId, args.knowledgeUnitId],
   )
@@ -233,9 +231,7 @@ export async function insertOrFindOpenLearningCase(
          ON member.company_id=unit.company_id AND member.project_id=unit.project_id
         AND member.user_id=$4 AND member.status='ACTIVE'
       WHERE unit.company_id=$2 AND unit.project_id=$3 AND unit.id=$5
-        AND ((project.kind='PERSONAL_LEARNING' AND member.role='OWNER')
-          OR (project.kind IN ('TEACHING','INSTITUTIONAL_COURSE')
-            AND member.role IN ('STUDENT','OBSERVER')))
+        AND member.role = 'STUDENT'
      ON CONFLICT(project_id,user_id,knowledge_unit_id) WHERE status<>'CLOSED' DO NOTHING
      RETURNING id,project_id,user_id,knowledge_unit_id,status,reason,summary,version,created_at,
                updated_at,resolved_at,closed_at`,

@@ -4,6 +4,7 @@ import test from 'node:test'
 import { env } from '../env.js'
 import { type AuthedRequest, authMiddleware, type GatewayAssertion, validRegistrationService, verifyGatewayAssertion } from '../auth.js'
 import { redis } from '../redis.js'
+import { pool } from '../db/pool.js'
 
 test('gateway assertion binds identity, method, path and freshness', () => {
   const now = Date.now()
@@ -17,6 +18,7 @@ test('gateway assertion binds identity, method, path and freshness', () => {
 })
 
 test('gateway middleware consumes a signed nonce only once', async (t) => {
+  t.mock.method(pool, 'query', async () => ({ rows: [{ active: true }] }))
   const seen = new Set<string>()
   t.mock.method(redis, 'set', async (key: string) => {
     if (seen.has(key)) return null

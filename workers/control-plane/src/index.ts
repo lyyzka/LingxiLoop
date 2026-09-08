@@ -1,4 +1,5 @@
 import { betterAuth } from 'better-auth'
+import { APIError } from 'better-auth/api'
 import { drizzleAdapter } from 'better-auth/adapters/drizzle'
 import { admin, captcha, emailOTP } from 'better-auth/plugins'
 import { drizzle } from 'drizzle-orm/d1'
@@ -22,8 +23,8 @@ type Secrets = {
   ARCANE_GITOPS_WEBHOOKS: string
 }
 type Bindings = Env & Secrets
-type Variables = { auth: ReturnType<typeof createAuth>; session: AuthSession }
-type AuthSession = { user: { id: string; name: string; email: string; emailVerified: boolean; role?: string }; session: unknown }
+type Variables = { auth: ReturnType<typeof createAuth>; session: AuthSession; registrationValidated: boolean }
+type AuthSession = { user: { id: string; name: string; email: string; emailVerified: boolean; role?: string }; session: { createdAt: Date | string } }
 type AppContext = Context<{ Bindings: Bindings; Variables: Variables }>
 type AuthSettings = {
   sessionExpiresIn: number
@@ -83,10 +84,12 @@ async function sendEmail(env: Bindings, message: { to: string; subject: string; 
   await sendSmtpEmail({ address: 'no-reply@lingxilearn.cn', password: env.ALIYUN_OTP_EMAIL_PASSWORD }, message)
 }
 
-async function originRequest(env: Bindings, path: string, init: RequestInit, identity?: { appUserId?: string; authUserId?: string }, service?: { capability: 'registration-provision' | 'registration-invitation'; emailVerified?: boolean }): Promise<Response> {
+async function originRequest(env: Bindings, path: string, init: RequestInit, identity?: { appUserId?: string; authUserId?: string; authSessionIssuedAt?: number; platformAdmin?: boolean }, service?: { capability: 'registration-provision' | 'registration-invitation'; emailVerified?: boolean }): Promise<Response> {
   const url = new URL(path, env.ORIGIN_BASE_URL)
   const assertion = {
     appUserId: identity?.appUserId ?? null,
+    authSessionIssuedAt: identity?.authSessionIssuedAt,
+    platformAdmin: identity?.platformAdmin === true,
     authUserId: identity?.authUserId ?? null,
     method: init.method ?? 'GET',
     path: url.pathname + url.search,
@@ -157,7 +160,8 @@ async function provision(env: Bindings, authUser: { id: string; email: string; n
   const claim = await env.DB.prepare(
     `SELECT invite_token,invite_kind,status FROM registration_claims WHERE auth_user_id=?`,
   ).bind(authUser.id).first<{ invite_token: string; invite_kind: string; status: string }>()
-  if (claim?.status === 'provisioned') return
+  if (!claim) throw new Error('invitation required')
+  if (claim.status === 'provisioned') return
   if (claim) {
     await env.DB.prepare(`UPDATE registration_claims SET status='provisioning',updated_at=? WHERE auth_user_id=?`)
       .bind(Date.now(), authUser.id).run()
@@ -193,7 +197,7 @@ async function provision(env: Bindings, authUser: { id: string; email: string; n
   await env.DB.batch(statements)
 }
 
-function createAuth(env: Bindings, request: Request, waitUntil: (promise: Promise<unknown>) => void, settings: AuthSettings) {
+function createAuth(env: Bindings, request: Request, waitUntil: (promise: Promise<unknown>) => void, settings: AuthSettings, registrationAllowed: () => boolean) {
   const origin = new URL(request.url).origin
   const trustedOrigins = env.AUTH_ALLOWED_HOSTS.split(',').map((host) => `https://${host.trim()}`)
   const hostname = new URL(request.url).hostname
@@ -205,6 +209,9 @@ function createAuth(env: Bindings, request: Request, waitUntil: (promise: Promis
     secret: env.BETTER_AUTH_SECRET,
     trustedOrigins,
     database: drizzleAdapter(drizzle(env.DB), { provider: 'sqlite', schema: authSchema }),
+    databaseHooks: { user: { create: { before: async () => {
+      if (!registrationAllowed()) throw new APIError('FORBIDDEN', { message: 'invitation required' })
+    } } } },
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: true,
@@ -215,7 +222,7 @@ function createAuth(env: Bindings, request: Request, waitUntil: (promise: Promis
       autoSignInAfterVerification: false,
       afterEmailVerification: async (user) => provision(env, user),
     },
-    session: { expiresIn: settings.sessionExpiresIn, cookieCache: { enabled: true, maxAge: 60 } },
+    session: { expiresIn: settings.sessionExpiresIn, cookieCache: { enabled: false } },
     rateLimit: { enabled: true, storage: 'database', window: settings.rateLimitWindow, max: settings.rateLimitMax },
     plugins: [
       admin({ defaultRole: 'user', adminRoles: ['admin'] }),
@@ -243,7 +250,7 @@ function createAuth(env: Bindings, request: Request, waitUntil: (promise: Promis
 }
 
 async function attachAuth(c: AppContext) {
-  const auth = createAuth(c.env, c.req.raw, c.executionCtx.waitUntil.bind(c.executionCtx), await loadAuthSettings(c))
+  const auth = createAuth(c.env, c.req.raw, c.executionCtx.waitUntil.bind(c.executionCtx), await loadAuthSettings(c), () => c.get('registrationValidated') === true)
   c.set('auth', auth)
   return auth
 }
@@ -258,7 +265,7 @@ async function attachSession(c: AppContext, source: 'cache' | 'database') {
 }
 
 app.post('/api/auth/ws-ticket', async (c) => {
-  await attachSession(c, 'cache')
+  await attachSession(c, 'database')
   return proxyAppRequest(c)
 })
 
@@ -275,14 +282,17 @@ app.use('/api/control/*', async (c, next) => {
 app.post('/api/auth/sign-up/email', async (c) => {
   const input = await c.req.json<{ email?: string; password?: string; name?: string; inviteToken?: string; inviteKind?: string }>()
   if (!input.email || !input.password || !input.name) return c.json({ error: '邮箱、姓名和密码均为必填项' }, 400)
-  const inviteToken = input.inviteKind === 'project' ? input.inviteToken?.trim() ?? '' : ''
+  const inviteKind = input.inviteKind
+  const inviteToken = input.inviteToken?.trim() ?? ''
+  if (!inviteToken || (inviteKind !== 'project' && inviteKind !== 'company')) return c.json({ error: '仅限邀请注册' }, 403)
   if (inviteToken) {
     const validation = await originRequest(c.env, '/api/internal/registration/invitation', {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ email: input.email, inviteToken, inviteKind: 'project' }),
+      body: JSON.stringify({ email: input.email, inviteToken, inviteKind }),
     }, undefined, { capability: 'registration-invitation' })
     if (!validation.ok) return c.json({ error: '邀请无效、已过期或与邮箱不匹配' }, validation.status === 404 ? 404 : 403)
   }
+  c.set('registrationValidated', true)
   const request = new Request(c.req.raw, { body: JSON.stringify({ email: input.email, password: input.password, name: input.name }) })
   const response = await c.get('auth').handler(request)
   if (response.ok && inviteToken) {
@@ -290,7 +300,7 @@ app.post('/api/auth/sign-up/email', async (c) => {
     if (result?.user?.id) {
       const now = Date.now()
       await c.env.DB.prepare(`INSERT INTO registration_claims(auth_user_id,token_hash,invite_token,invite_kind,email,status,created_at,updated_at) VALUES(?,?,?,?,?,'pending',?,?)`)
-        .bind(result.user.id, await sha256(inviteToken), await sealClaim(c.env.BETTER_AUTH_SECRET, inviteToken), 'project', input.email.toLowerCase(), now, now).run()
+        .bind(result.user.id, await sha256(inviteToken), await sealClaim(c.env.BETTER_AUTH_SECRET, inviteToken), inviteKind, input.email.toLowerCase(), now, now).run()
     }
   }
   return response
@@ -360,6 +370,45 @@ app.get('/api/registration/invitation', async (c) => {
   return originRequest(c.env, '/api/internal/registration/invitation', {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ inviteToken: token, inviteKind: kind }),
   }, undefined, { capability: 'registration-invitation' })
+})
+
+app.get('/api/invitations/:token', (c) => originRequest(c.env,
+  `/api/invitations/${encodeURIComponent(c.req.param('token'))}`, { method: 'GET' }))
+app.get('/api/project-invitations/:token', (c) => originRequest(c.env,
+  `/api/project-invitations/${encodeURIComponent(c.req.param('token'))}`, { method: 'GET' }))
+
+app.post('/api/registration/accept', async (c) => {
+  await attachSession(c, 'database')
+  const session = requireSession(c)
+  if (session instanceof Response) return session
+  if (!session.user.emailVerified) return c.json({ error: 'verified email required' }, 403)
+  const input = await c.req.json<{ inviteToken?: string; inviteKind?: string }>()
+  if (!input.inviteToken || (input.inviteKind !== 'company' && input.inviteKind !== 'project')) return c.json({ error: 'invitation required' }, 400)
+  const response = await originRequest(c.env, '/api/internal/registration/provision', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ authUserId: session.user.id, email: session.user.email, name: session.user.name, inviteToken: input.inviteToken, inviteKind: input.inviteKind }),
+  }, { authUserId: session.user.id }, { capability: 'registration-provision', emailVerified: true })
+  if (!response.ok) return response
+  const result = await response.json<{ appUserId: string }>()
+  await c.env.DB.prepare(`INSERT INTO app_user_links(auth_user_id,app_user_id,provisioned_at) VALUES(?,?,?)
+    ON CONFLICT(auth_user_id) DO UPDATE SET app_user_id=excluded.app_user_id,provisioned_at=excluded.provisioned_at,suspended_at=NULL`)
+    .bind(session.user.id, result.appUserId, Date.now()).run()
+  return c.json({ ok: true })
+})
+
+app.post('/api/internal/revoke-sessions', async (c) => {
+  const body = await c.req.text()
+  const timestamp = Number(c.req.header('x-lingxi-timestamp'))
+  const signature = c.req.header('x-lingxi-signature') ?? ''
+  if (!Number.isFinite(timestamp) || Math.abs(Date.now()-timestamp)>30_000
+    || !await secretMatches(await hmac(c.env.GATEWAY_HMAC_SECRET, `revoke-sessions:${timestamp}:${body}`), signature)) {
+    return c.json({ error: 'invalid revocation signature' }, 401)
+  }
+  const input = JSON.parse(body) as { appUserId?: string; revokedAt?: number }
+  if (!input.appUserId || !Number.isFinite(input.revokedAt) || input.revokedAt! > timestamp + 1000) return c.json({ error: 'invalid revocation' }, 400)
+  await c.env.DB.prepare(`DELETE FROM session WHERE userId IN (SELECT auth_user_id FROM app_user_links WHERE app_user_id=?) AND createdAt<=?`)
+    .bind(input.appUserId, input.revokedAt).run()
+  return c.json({ ok: true })
 })
 
 app.post('/api/internal/bootstrap-admin', async (c) => {
@@ -538,28 +587,24 @@ app.all('/api/control/platform/*', async (c) => {
   const link = await c.env.DB.prepare(`SELECT app_user_id FROM app_user_links WHERE auth_user_id=? AND suspended_at IS NULL`).bind(session.user.id).first<{ app_user_id: string }>()
   if (!link) return c.json({ error: 'business account is not provisioned' }, 409)
   const suffix = c.req.path.slice('/api/control/platform'.length)
-  return originRequest(c.env, `/api/admin${suffix}${new URL(c.req.url).search}`, { method: c.req.method, headers: c.req.raw.headers, body: ['GET', 'HEAD'].includes(c.req.method) ? null : c.req.raw.body }, { appUserId: link.app_user_id, authUserId: session.user.id })
+  return originRequest(c.env, `/api/admin${suffix}${new URL(c.req.url).search}`, { method: c.req.method, headers: c.req.raw.headers, body: ['GET', 'HEAD'].includes(c.req.method) ? null : c.req.raw.body }, { appUserId: link.app_user_id, authUserId: session.user.id, authSessionIssuedAt: new Date(session.session.createdAt).getTime(), platformAdmin: c.req.path.startsWith('/api/control/') && session.user.role === 'admin' })
 })
 
 app.all('/api/webhooks/*', (c) => originRequest(c.env, c.req.path + new URL(c.req.url).search, { method: c.req.method, headers: c.req.raw.headers, body: ['GET', 'HEAD'].includes(c.req.method) ? null : c.req.raw.body }))
 
 app.use('/api/*', async (c, next) => {
-  await attachSession(c, 'cache')
+  await attachSession(c, 'database')
   await next()
 })
 
 async function proxyAppRequest(c: AppContext): Promise<Response> {
-  if (/^\/api\/(?:internal|control)(?:\/|$)/i.test(decodeURIComponent(c.req.path))) return c.json({ error: 'internal service route' }, 403)
+  if (/^\/api\/(?:internal|control|admin)(?:\/|$)/i.test(decodeURIComponent(c.req.path))) return c.json({ error: 'internal service route' }, 403)
   const session = requireSession(c)
   if (session instanceof Response) return session
-  let link = await c.env.DB.prepare(`SELECT app_user_id FROM app_user_links WHERE auth_user_id=? AND suspended_at IS NULL`).bind(session.user.id).first<{ app_user_id: string }>()
-  if (!link && session.user.emailVerified) {
-    await provision(c.env, session.user)
-    link = await c.env.DB.prepare(`SELECT app_user_id FROM app_user_links WHERE auth_user_id=? AND suspended_at IS NULL`).bind(session.user.id).first<{ app_user_id: string }>()
-  }
+  const link = await c.env.DB.prepare(`SELECT app_user_id FROM app_user_links WHERE auth_user_id=? AND suspended_at IS NULL`).bind(session.user.id).first<{ app_user_id: string }>()
   if (!link) return c.json({ error: 'business account is not provisioned' }, 409)
   const path = c.req.path === '/api/session' ? '/api/auth/me' : c.req.path
-  return originRequest(c.env, path + new URL(c.req.url).search, { method: c.req.method, headers: c.req.raw.headers, body: ['GET', 'HEAD'].includes(c.req.method) ? null : c.req.raw.body }, { appUserId: link.app_user_id, authUserId: session.user.id })
+  return originRequest(c.env, path + new URL(c.req.url).search, { method: c.req.method, headers: c.req.raw.headers, body: ['GET', 'HEAD'].includes(c.req.method) ? null : c.req.raw.body }, { appUserId: link.app_user_id, authUserId: session.user.id, authSessionIssuedAt: new Date(session.session.createdAt).getTime(), platformAdmin: c.req.path.startsWith('/api/control/') && session.user.role === 'admin' })
 }
 
 app.all('/api/*', proxyAppRequest)

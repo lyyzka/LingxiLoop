@@ -4,7 +4,7 @@ import type { Storage } from '../../storage.js'
 import { normalizeStorageKey } from '../../storage.js'
 import type { DependencyReadiness, UploadCapabilities } from './contracts.js'
 import { MAX_UPLOAD_BYTES } from './contracts.js'
-import { assertDatabaseReady } from './repository.js'
+import { assertDatabaseReady, registerUploadedFile } from './repository.js'
 
 const MIME_POLICY: Record<string, { kind: 'img' | 'file'; ext: string }> = {
   'image/png': { kind: 'img', ext: 'png' },
@@ -69,12 +69,13 @@ export class PlatformApplication {
     }
   }
 
-  async presignUpload(companyId: string, input: { name: string; mime: string; size: number }) {
+  async presignUpload(companyId: string, userId: string, input: { name: string; mime: string; size: number; documentId?: string }) {
     const policy = MIME_POLICY[input.mime]
     if (!policy) throw new PlatformApplicationError('mime_not_allowed', `mime not allowed: ${input.mime}`)
     const id = randomUUID().replaceAll('-', '')
     const key = `attachments/${companyId}/${id}.${policy.ext}`
     const signed = await this.infrastructure.storage.presignPut(key, input.mime, { contentLength: input.size })
+    await registerUploadedFile(this.infrastructure.db, companyId, userId, key, input.documentId ?? null)
     return { ...signed, key, ...input, kind: policy.kind }
   }
 

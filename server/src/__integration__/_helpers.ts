@@ -13,12 +13,13 @@
  * uses its own connection / transaction lifecycle that we must not
  * subsume).
  */
+import type { Queryable } from '../db/queryable.js'
 import { randomUUID } from 'node:crypto'
 import { Webhook } from 'svix'
 import { assertMigrationsCurrent } from '../db/migrate.js'
 import { closeDatabasePools, pool } from '../db/pool.js'
 import { env } from '../env.js'
-import { ensurePersonalFreePlan } from '../modules/entitlements/public.js'
+import { ensureEducationPlan } from '../modules/entitlements/public.js'
 import { _setWukongClientForTests, WukongClient } from '../im/wukong.js'
 import type { InboundEmailPayload } from '../modules/email/contracts.js'
 import {
@@ -93,6 +94,7 @@ export function ensureSchemaOnce(): Promise<void> {
  *  ownership visible; one statement lets PostgreSQL resolve dependencies and
  *  perform a single durability sync instead of one sync per table. */
 const TABLES_TO_WIPE: readonly string[] = [
+  'audit_events',
   'lingxios.agent_work_items',
   'lingxios.agent_attempts',
   'lingxios.agent_steps',
@@ -209,7 +211,7 @@ export async function resetAllTables(): Promise<void> {
   await ensureSchemaOnce()
   storageObjects.clear()
   await pool.query(`TRUNCATE TABLE ${TABLES_TO_WIPE.join(', ')} CASCADE`)
-  await ensurePersonalFreePlan(pool)
+  await ensureEducationPlan(pool)
 }
 
 export function signInboundPayload(body: string): Record<string, string> {
@@ -243,33 +245,37 @@ export async function seedCompanyWithAgent(opts?: {
   const agentId = opts?.agentId ?? `a-${randomUUID().slice(0, 8)}`
   const dom = env.EMAIL_DOMAIN || 'lingxiloop.local'
   const agentEmail = opts?.agentEmail ?? `${agentId}.${companyId}@${dom}`
+  const { rows: ownerMemberships } = await pool.query<{ company_id: string }>(`SELECT company_id FROM company_memberships WHERE user_id='test-owner' AND ended_at IS NULL`)
+  const ownerId = ownerMemberships[0] && ownerMemberships[0].company_id!==companyId ? `test-owner-${companyId}` : 'test-owner'
   await pool.query(
-    `INSERT INTO users (id,email,display_name) VALUES ('test-owner','test-owner@test.local','Test owner')
+    `INSERT INTO users (id,email,display_name) VALUES ($1,$2,'Test owner')
      ON CONFLICT (id) DO NOTHING`,
+    [ownerId,`${ownerId}@test.local`],
   )
   await pool.query(
     `INSERT INTO companies (id, name, slug, type, plan_id)
-     VALUES ($1, $2, $3, 'EDUCATION', 'plan-personal-free')
+     VALUES ($1, $2, $3, 'EDUCATION', 'plan-education')
      ON CONFLICT DO NOTHING`,
     [companyId, `Test ${companyId}`, companyId],
   )
   await pool.query(
-    `INSERT INTO company_memberships (company_id,user_id,role) VALUES ($1,'test-owner','OWNER')
+    `INSERT INTO company_memberships (company_id,user_id,role,is_admin) VALUES ($1,$2,'TEACHER',TRUE)
      ON CONFLICT DO NOTHING`,
-    [companyId],
+    [companyId,ownerId],
   )
-  await seedActiveEducationSeat(companyId, 'test-owner')
+  await seedMembershipPeriod(pool, companyId, ownerId)
+  await seedActiveEducationSeat(companyId, ownerId)
   // Integration-only Education fixture with an explicit Institutional Course Project.
   await pool.query(
     `INSERT INTO projects (id, company_id, kind, name, description, color, created_by, is_default)
-     SELECT $2, $1, 'INSTITUTIONAL_COURSE', '学校课程', '测试公司的默认课程空间', '#667085', 'test-owner', TRUE
+     SELECT $2, $1, 'INSTITUTIONAL_COURSE', '学校课程', '测试公司的默认课程空间', '#667085', $3, TRUE
       WHERE NOT EXISTS (SELECT 1 FROM projects WHERE company_id=$1 AND is_default=TRUE)`,
-    [companyId, projectId],
+    [companyId, projectId,ownerId],
   )
   await pool.query(
     `INSERT INTO project_memberships (project_id,company_id,user_id,role)
-     VALUES ($1,$2,'test-owner','OWNER') ON CONFLICT DO NOTHING`,
-    [projectId, companyId],
+     VALUES ($1,$2,$3,'TEACHER') ON CONFLICT DO NOTHING`,
+    [projectId, companyId,ownerId],
   )
   // participants composite PK is (id, company_id) — see the v1 baseline migration.
   await pool.query(
@@ -352,7 +358,7 @@ export async function buildApiTestApp(userId: string): Promise<import('express')
  *  /participants visibility, etc. Without this, ensureParticipantAddress
  *  returns null and email-reply paths 500. */
 export async function seedUserMembership(userId: string, companyId: string, opts?: {
-  email?: string; displayName?: string;
+  email?: string; displayName?: string; role?: 'TEACHER' | 'STUDENT'; isAdmin?: boolean;
 }): Promise<void> {
   const displayName = opts?.displayName ?? userId
   const authEmail = opts?.email ?? `${userId}@test.local`
@@ -363,11 +369,12 @@ export async function seedUserMembership(userId: string, companyId: string, opts
     [userId, authEmail, displayName],
   )
   await pool.query(
-    `INSERT INTO company_memberships (company_id, user_id, role)
-     VALUES ($1, $2, 'OWNER')
+    `INSERT INTO company_memberships (company_id, user_id, role, is_admin)
+     VALUES ($1, $2, $3, $4)
      ON CONFLICT DO NOTHING`,
-    [companyId, userId],
+    [companyId, userId, opts?.role ?? 'TEACHER', opts?.isAdmin ?? opts?.role !== 'STUDENT'],
   )
+  await seedMembershipPeriod(pool, companyId, userId)
   await seedActiveEducationSeat(companyId, userId)
   // Mirror what production onboarding does: a human is also a participant
   // in the company. We leave participants.email NULL so ensureParticipantAddress
@@ -386,7 +393,7 @@ async function seedActiveEducationSeat(companyId: string, userId: string): Promi
   await pool.query(
     `INSERT INTO education_contracts
        (id,company_id,plan_id,status,starts_at,ends_at,seat_limit)
-     VALUES ($1,$2,'plan-personal-free','ACTIVE',NOW()-INTERVAL '1 day',NOW()+INTERVAL '30 days',100)
+     VALUES ($1,$2,'plan-education','ACTIVE',NOW()-INTERVAL '1 day',NOW()+INTERVAL '30 days',100)
      ON CONFLICT (id) DO NOTHING`,
     [contractId, companyId],
   )
@@ -414,4 +421,25 @@ export async function teardownAll(server?: import('node:http').Server): Promise<
     redis.disconnect()
     sub.disconnect()
   } catch { /* ignore */ }
+}
+
+export async function seedMembershipPeriod(db: Queryable, companyId: string, userId: string): Promise<void> {
+  await db.query(`WITH period AS (
+    INSERT INTO company_membership_periods(membership_id,role)
+    SELECT id,role FROM company_memberships WHERE company_id=$1 AND user_id=$2 AND period_id IS NULL
+    RETURNING id,membership_id)
+    UPDATE company_memberships member SET period_id=period.id FROM period WHERE member.id=period.membership_id`, [companyId,userId])
+}
+
+export async function seedEducationWorkspace(db: Queryable, userId: string): Promise<{ companyId: string; projectId: string }> {
+  const companyId = `school-${userId}`, projectId = `course-${userId}`
+  await db.query(`INSERT INTO companies(id,name,slug,type,plan_id) VALUES($1,$1,$1,'EDUCATION','plan-education')`, [companyId])
+  await db.query(`INSERT INTO company_memberships(company_id,user_id,role,is_admin) VALUES($1,$2,'TEACHER',TRUE)`, [companyId,userId])
+  await seedMembershipPeriod(db,companyId,userId)
+  await db.query(`INSERT INTO education_contracts(id,company_id,plan_id,status,starts_at,ends_at,seat_limit)
+    VALUES($1,$1,'plan-education','ACTIVE',NOW()-INTERVAL '1 day',NOW()+INTERVAL '30 days',100)`, [companyId])
+  await db.query(`INSERT INTO organization_seats(id,company_id,contract_id,user_id,status) VALUES($1,$1,$1,$2,'ACTIVE')`, [companyId,userId])
+  await db.query(`INSERT INTO projects(id,company_id,kind,name,status,created_by) VALUES($1,$2,'TEACHING',$1,'ACTIVE',$3)`, [projectId,companyId,userId])
+  await db.query(`INSERT INTO project_memberships(project_id,company_id,user_id,role) VALUES($1,$2,$3,'TEACHER')`, [projectId,companyId,userId])
+  return { companyId,projectId }
 }

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { afterEach, beforeEach, mock, test } from 'node:test'
+import { ContextScopedPermissionService } from '../modules/access/application.js'
 import * as Y from 'yjs'
 import type { Queryable } from '../db/queryable.js'
 import {
@@ -8,11 +9,15 @@ import {
 import type { DocumentAwarenessEvent, DocumentUpdateEvent } from '../modules/documents/contracts.js'
 import { listProjectDocumentIds } from '../modules/documents/collaboration-repository.js'
 
+afterEach(() => mock.restoreAll())
+beforeEach(() => { mock.method(ContextScopedPermissionService.prototype, 'can', async () => ({ allowed: true })) })
+
 function emptyDocumentDb() {
   const calls: Array<{ text: string; params: readonly unknown[] }> = []
   const db: Queryable = {
     query: async (text, params = []) => {
       calls.push({ text, params })
+      if (text.includes('SELECT 1 FROM users')) return { rows: [{ active: true }], rowCount: 1 } as never
       if (/SELECT id FROM documents[\s\S]*FOR UPDATE/.test(text)) {
         return { rows: [{ id: params[0] }], rowCount: 1 } as never
       }

@@ -85,16 +85,31 @@ function CaptchaField({ onToken, onError }: { onToken: (token: string) => void; 
 export function AuthScreen() {
   const parameters = new URLSearchParams(location.search)
   const requestedMode = parameters.get('mode')
-  const [mode, setMode] = useState<Mode>(requestedMode === 'reset' || requestedMode === 'signup' ? requestedMode : 'login')
+  const inviteToken = parameters.get('invite') ?? undefined
+  const inviteKind = parameters.get('inviteKind') === 'project' ? 'project' : 'company'
+  const requestedReturn = parameters.get('returnTo') ?? '/'
+  const returnTo = requestedReturn.startsWith('/') && !requestedReturn.startsWith('//') && !requestedReturn.includes('\\') ? requestedReturn : '/'
+  const [invitation, setInvitation] = useState<Awaited<ReturnType<typeof authApi.invitation>> | null>(null)
+  const [mode, setMode] = useState<Mode>(requestedMode === 'reset' ? 'reset' : 'login')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [email, setEmail] = useState('')
   const [captchaToken, setCaptchaToken] = useState('')
   const [captchaRound, setCaptchaRound] = useState(0)
-  const projectInviteToken = parameters.get('inviteKind') === 'project' ? parameters.get('invite') ?? undefined : undefined
+  useEffect(() => {
+    if (!inviteToken) return
+    let cancelled = false
+    void authApi.invitation(inviteToken, inviteKind).then((value) => {
+      if (cancelled) return
+      setInvitation(value)
+      if (requestedMode === 'signup') setMode('signup')
+    }).catch((reason) => { if (!cancelled) setError(reason.message) })
+    return () => { cancelled = true }
+  }, [inviteToken, inviteKind, requestedMode])
 
   const changeMode = (next: Mode) => {
+    if (next === 'signup' && !invitation) return
     if (next === 'forgot') setEmail('')
     setMode(next); setError(null); setNotice(null); setCaptchaToken(''); setCaptchaRound((round) => round + 1)
   }
@@ -109,7 +124,7 @@ export function AuthScreen() {
 
   const copy = {
     login: ['欢迎回来', '登录后继续你的学习与协作。'],
-    signup: ['创建普通用户账号', '注册后使用邮箱验证码激活账号。'],
+    signup: ['接受邀请创建账号', '注册后使用邮箱验证码激活账号。'],
     verify: ['验证邮箱', `输入发送至 ${email || '你的邮箱'} 的 6 位验证码。`],
     forgot: ['找回密码', '我们会向账号邮箱发送一次性重置链接。'],
     reset: ['设置新密码', '新密码至少需要 8 个字符。'],
@@ -131,10 +146,10 @@ export function AuthScreen() {
           <CardContent>
             {mode === 'login' || mode === 'signup' ? (
               <Tabs value={mode} onValueChange={(value) => changeMode(value as Mode)}>
-                <TabsList className="grid w-full grid-cols-2">
+                {invitation && <TabsList className="grid w-full grid-cols-2">
                   <TabsTrigger value="login">登录</TabsTrigger>
                   <TabsTrigger value="signup">注册</TabsTrigger>
-                </TabsList>
+                </TabsList>}
                 <TabsContent value="login" className="pt-5">
                   <form onSubmit={(event) => {
                     event.preventDefault()
@@ -142,7 +157,8 @@ export function AuthScreen() {
                     void run(async () => {
                       const result = await authApi.signIn(String(data.get('email')), String(data.get('password')), captchaToken)
                       if (result.error) throw new Error(result.error.message)
-                    }, () => location.assign(parameters.get('returnTo') ?? '/'), true)
+                      if (inviteToken) await authApi.acceptInvitation(inviteToken, inviteKind)
+                    }, () => location.assign(returnTo), true)
                   }}>
                     <FieldGroup className="gap-5">
                       <Field><FieldLabel htmlFor="login-email">邮箱</FieldLabel><Input id="login-email" name="email" type="email" autoComplete="email" placeholder="m@example.com" required /></Field>
@@ -157,7 +173,7 @@ export function AuthScreen() {
                     </FieldGroup>
                   </form>
                 </TabsContent>
-                <TabsContent value="signup" className="pt-5">
+                {invitation && <TabsContent value="signup" className="pt-5">
                   <form onSubmit={(event) => {
                     event.preventDefault()
                     const data = new FormData(event.currentTarget)
@@ -168,14 +184,14 @@ export function AuthScreen() {
                       name: String(data.get('name')),
                       email: signupEmail,
                       password,
-                      inviteToken: projectInviteToken,
-                      inviteKind: projectInviteToken ? 'project' : undefined,
+                      inviteToken,
+                      inviteKind,
                     }, captchaToken), () => { setEmail(signupEmail); changeMode('verify') }, true)
                   }}>
                     <FieldGroup className="gap-5">
-                      {projectInviteToken ? <Alert><AlertTitle>课程邀请已关联</AlertTitle><AlertDescription>邮箱验证后会自动加入受邀课程。</AlertDescription></Alert> : null}
+                      <Alert><AlertTitle>{invitation.companyName} · {invitation.role === 'teacher' ? (invitation.isAdmin ? '教师管理员' : '教师') : '学生'}</AlertTitle><AlertDescription>{invitation.courseName ? `课程：${invitation.courseName}。` : ''}邮箱验证后加入。身份由邀请确定。</AlertDescription></Alert>
                       <Field><FieldLabel htmlFor="signup-name">姓名</FieldLabel><Input id="signup-name" name="name" autoComplete="name" required /></Field>
-                      <Field><FieldLabel htmlFor="signup-email">邮箱</FieldLabel><Input id="signup-email" name="email" type="email" autoComplete="email" placeholder="m@example.com" required /></Field>
+                      <Field><FieldLabel htmlFor="signup-email">邮箱</FieldLabel><Input id="signup-email" name="email" type="email" defaultValue={invitation.email ?? ''} readOnly={Boolean(invitation.email)} autoComplete="email" placeholder="m@example.com" required /></Field>
                       <Field><FieldLabel htmlFor="signup-password">密码</FieldLabel><Input id="signup-password" name="password" type="password" autoComplete="new-password" minLength={8} required /><FieldDescription>至少 8 个字符。</FieldDescription></Field>
                       <Field><FieldLabel htmlFor="confirm-password">确认密码</FieldLabel><Input id="confirm-password" name="confirmPassword" type="password" autoComplete="new-password" minLength={8} required /></Field>
                       <CaptchaField key={`signup-${captchaRound}`} onToken={setCaptchaToken} onError={captchaError} />
@@ -183,7 +199,7 @@ export function AuthScreen() {
                       <Button className="w-full" type="submit" disabled={busy || !captchaToken}>{busy ? <Spinner /> : null}{busy ? '创建中…' : '创建账号'}</Button>
                     </FieldGroup>
                   </form>
-                </TabsContent>
+                </TabsContent>}
               </Tabs>
             ) : null}
 

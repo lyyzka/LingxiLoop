@@ -1,15 +1,15 @@
 export type MembershipStatus = 'ACTIVE' | 'SUSPENDED'
 
-export type CompanyRole = 'OWNER' | 'ADMIN' | 'MEMBER'
+export type CompanyRole = 'TEACHER' | 'STUDENT'
 
-export type ProjectRole = 'OWNER' | 'TEACHER' | 'TA' | 'STUDENT' | 'OBSERVER'
+export type ProjectRole = 'TEACHER' | 'STUDENT'
 
 export const ACTIVE_MEMBERSHIP_STATUS: MembershipStatus = 'ACTIVE'
 
-export const COMPANY_ROLES: readonly CompanyRole[] = ['OWNER', 'ADMIN', 'MEMBER']
-export const PROJECT_ROLES: readonly ProjectRole[] = ['OWNER', 'TEACHER', 'TA', 'STUDENT', 'OBSERVER']
+export const COMPANY_ROLES: readonly CompanyRole[] = ['TEACHER', 'STUDENT']
+export const PROJECT_ROLES: readonly ProjectRole[] = ['TEACHER', 'STUDENT']
 
-export type CompanyRoleWire = 'owner' | 'admin' | 'member'
+export type CompanyRoleWire = 'teacher' | 'student'
 export type LearningRoleWire = 'teacher' | 'learner'
 
 export function companyRoleFromWire(role: CompanyRoleWire): CompanyRole {
@@ -25,5 +25,5 @@ export function projectRoleFromLearningWire(role: LearningRoleWire): 'TEACHER' |
 }
 
 export function projectRoleToLearningWire(role: ProjectRole): LearningRoleWire {
-  return role === 'STUDENT' || role === 'OBSERVER' ? 'learner' : 'teacher'
+  return role === 'STUDENT' ? 'learner' : 'teacher'
 }

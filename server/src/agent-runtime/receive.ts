@@ -65,7 +65,7 @@ export async function receiveAgentRequest(input: AgentRequest) {
   if (!['text','attachment'].includes(message.payload.kind) || message.payload.refs?.agentId
     || input.authenticatedUserId && input.authenticatedUserId !== message.fromUid) throw new Error('request must be committed by the authenticated human')
   const identity = { tenantId: input.companyId, agentId: input.agentId, sessionId: input.channelId, principalId: message.fromUid }
-  await loadRuntimeBinding(identity)
+  await loadRuntimeBinding({ ...identity, createdAt: new Date(message.timestamp * 1000).toISOString() })
   const human = (await pool.query<{ name: string }>("SELECT name FROM participants WHERE company_id=$1 AND id=$2 AND kind='human' AND departed_at IS NULL",
     [input.companyId,message.fromUid])).rows[0]
   if (!human) throw new Error('request author is not an active human')

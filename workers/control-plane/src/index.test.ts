@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 
 declare module 'cloudflare:test' {
   interface ProvidedEnv extends Env {
+    BETTER_AUTH_SECRET: string
     TEST_MIGRATIONS: import('@cloudflare/vitest-pool-workers/config').D1Migration[]
   }
 }
@@ -70,6 +71,13 @@ describe('control-plane trust boundaries', () => {
       env.DB.prepare(`INSERT INTO verification(id,identifier,value,expiresAt,createdAt,updatedAt) VALUES(?,?,?,?,?,?)`)
         .bind('otp-signup-verification', `email-verification-otp-${email}`, '123456:0', now + 300, now, now),
     ])
+    const encoder = new TextEncoder()
+    const material = await crypto.subtle.digest('SHA-256', encoder.encode(`registration-claim:${env.BETTER_AUTH_SECRET}`))
+    const key = await crypto.subtle.importKey('raw', material, 'AES-GCM', false, ['encrypt'])
+    const nonce = crypto.getRandomValues(new Uint8Array(12))
+    const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, key, encoder.encode('otp-invite')))
+    const sealed = btoa(String.fromCharCode(...nonce, ...ciphertext)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
+    await env.DB.prepare(`INSERT INTO registration_claims(auth_user_id,token_hash,invite_token,invite_kind,email,status,created_at,updated_at) VALUES('otp-signup-user','hash',?,'company',?,'pending',?,?)`).bind(sealed,email,now,now).run()
     fetchMock.activate()
     fetchMock.disableNetConnect()
     fetchMock.get('https://challenges.cloudflare.com').intercept({ path: '/turnstile/v0/siteverify', method: 'POST' }).reply(200, { success: true })
@@ -134,13 +142,7 @@ describe('control-plane trust boundaries', () => {
     fetchMock.disableNetConnect()
     fetchMock.get('https://challenges.cloudflare.com').intercept({ path: '/turnstile/v0/siteverify', method: 'POST' }).reply(200, { success: true })
     fetchMock.get('https://origin.example.com').intercept({ path: '/api/auth/ws-ticket', method: 'POST' }).reply(200, { ticket: 'ticket-1' })
-    let registrationAssertion: Record<string, unknown> | undefined
-    fetchMock.get('https://origin.example.com').intercept({ path: '/api/internal/registration/provision', method: 'POST' }).reply((request) => {
-      const header = new Headers(request.headers).get('x-lingxiloop-gateway')!
-      registrationAssertion = JSON.parse(atob(header.split('.')[0]!.replaceAll('-', '+').replaceAll('_', '/'))) as Record<string, unknown>
-      expect(JSON.parse(String(request.body))).toEqual({ authUserId: 'ws-user', email: 'ws@example.com', name: 'WebSocket User' })
-      return { statusCode: 200, data: { appUserId: 'app-ws-user' } }
-    })
+    await env.DB.prepare(`INSERT INTO app_user_links(auth_user_id,app_user_id,provisioned_at) VALUES('ws-user','app-ws-user',?)`).bind(now).run()
     try {
       const signIn = await SELF.fetch('https://admin.example.com/api/auth/sign-in/email', {
         method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://admin.example.com', 'x-captcha-response': 'XXXX.DUMMY.TOKEN.XXXX' },
@@ -150,8 +152,6 @@ describe('control-plane trust boundaries', () => {
         method: 'POST', headers: { cookie: signIn.headers.get('set-cookie') ?? '' },
       })
       expect({ status: response.status, body: await response.json() }).toEqual({ status: 200, body: { ticket: 'ticket-1' } })
-      expect(registrationAssertion).toMatchObject({ appUserId: null, authUserId: 'ws-user', method: 'POST', path: '/api/internal/registration/provision',
-        service: { audience: 'registration', capability: 'registration-provision', emailVerified: true, bodyHash: expect.any(String) } })
       for (const path of ['/api/internal/registration/provision', '/api/internal/registration/invitation']) {
         const denied = await SELF.fetch(`https://admin.example.com${path}`, {
           method: 'POST', headers: { cookie: signIn.headers.get('set-cookie') ?? '' },
@@ -163,6 +163,10 @@ describe('control-plane trust boundaries', () => {
   })
 
   it('rejects cross-site authentication writes and registration without CAPTCHA', async () => {
+    fetchMock.activate()
+    fetchMock.disableNetConnect()
+    fetchMock.get('https://challenges.cloudflare.com').intercept({ path: '/turnstile/v0/siteverify', method: 'POST' }).reply(200, { success: true })
+    try {
     const crossSite = await SELF.fetch('https://lingxiloop-control-plane.yangyangli0426.workers.dev/api/auth/sign-in/email', {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin: 'https://attacker.example', 'x-captcha-response': 'XXXX.DUMMY.TOKEN.XXXX' },
@@ -175,7 +179,9 @@ describe('control-plane trust boundaries', () => {
       headers: { 'content-type': 'application/json', origin: 'https://lingxiloop-control-plane.yangyangli0426.workers.dev' },
       body: JSON.stringify({ email: 'user@example.com', name: 'User', password: 'password123' }),
     })
-    expect(noInvite.status).toBe(400)
+    expect(noInvite.status).toBe(403)
+    fetchMock.assertNoPendingInterceptors()
+    } finally { fetchMock.deactivate() }
   })
 
   it('proxies Kuma status for an authenticated administrator', async () => {

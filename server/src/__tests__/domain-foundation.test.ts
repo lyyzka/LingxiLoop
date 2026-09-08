@@ -41,11 +41,11 @@ test('Permission has one canonical context-aware contract and no persistence mod
 test('User remains identity-only while contextual roles retain lowercase wire compatibility', async () => {
   const user = await readFile(new URL('../domain/identity/user.ts', import.meta.url), 'utf8')
   assert.doesNotMatch(user, /\b(?:role|plan|isTeacher|isPro|isPaid|accountType|enterprise)\b/i)
-  assert.equal(companyRoleFromWire('owner'), 'OWNER')
-  assert.equal(companyRoleToWire('ADMIN'), 'admin')
+  assert.equal(companyRoleFromWire('teacher'), 'TEACHER')
+  assert.equal(companyRoleToWire('STUDENT'), 'student')
   assert.equal(projectRoleFromLearningWire('learner'), 'STUDENT')
-  assert.equal(projectRoleToLearningWire('OWNER'), 'teacher')
-  assert.equal(projectRoleToLearningWire('OBSERVER'), 'learner')
+  assert.equal(projectRoleToLearningWire('TEACHER'), 'teacher')
+  assert.equal(projectRoleToLearningWire('STUDENT'), 'learner')
 })
 
 test('Membership and Entitlement domain values remain separate concepts', async () => {

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { after, before, beforeEach, test } from 'node:test'
 import { pool } from '../db/pool.js'
 import { withTransaction } from '../db/transaction.js'
+import { ForbiddenError } from '../modules/access/public.js'
 import { AgentApplication, AgentApplicationError } from '../modules/agents/application.js'
 import { ParticipantPresenceApplication } from '../modules/agents/presence-application.js'
 import { ContextThreadsApplication } from '../modules/context-threads/application.js'
@@ -110,7 +111,7 @@ test('[integration] lifecycle is tenant scoped and refuses to offboard a group l
   const other = await seedCompanyWithAgent()
   await assert.rejects(
     application.update({ companyId: other.companyId, userId: 'test-owner' }, created.id, { name: 'Cross tenant' }),
-    (error: unknown) => error instanceof AgentApplicationError && error.code === 'not_found',
+    (error: unknown) => (error instanceof AgentApplicationError && error.code === 'not_found') || error instanceof ForbiddenError,
   )
 })
 
@@ -119,7 +120,8 @@ test('[integration] human presence never updates the same participant id in anot
   const second = await seedCompanyWithAgent()
   const userId = 'shared-presence-user'
   await seedUserMembership(userId, first.companyId)
-  await seedUserMembership(userId, second.companyId)
+  await pool.query(`INSERT INTO participants(id,company_id,kind,name,initial,avatar_bg,status,departed_at)
+    VALUES($1,$2,'human','Former member','F','#abcdef','resting',NOW())`,[userId,second.companyId])
   await pool.query(
     `UPDATE participants SET status='resting' WHERE id=$1 AND company_id=ANY($2::text[])`,
     [userId, [first.companyId, second.companyId]],

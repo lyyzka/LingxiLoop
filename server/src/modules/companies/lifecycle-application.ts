@@ -22,7 +22,6 @@ export interface CompanyLifecycleInfrastructure {
 
 const COMMAND_ACTIONS = {
   ACTIVATE: 'company:activate',
-  REQUEST_USER_DELETION: 'company:request_user_deletion',
   ENTER_GRACE_PERIOD: 'company:enter_grace_period',
   ENTER_READ_ONLY: 'company:enter_read_only',
   OFFBOARD: 'company:offboard',

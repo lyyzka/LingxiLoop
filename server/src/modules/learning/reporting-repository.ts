@@ -4,12 +4,11 @@ export async function listLearningProjectSummaries(db: Queryable, companyId: str
   const { rows } = await db.query(
     `SELECT project.id AS project_id,project.company_id,project.kind AS project_kind,
             course.id AS course_id,project.name AS title,project.description,project.status,
-            CASE WHEN project.kind='PERSONAL_LEARNING' AND member.role='OWNER' THEN 'learner'
-                 WHEN member.role IN ('STUDENT','OBSERVER') THEN 'learner'
+            CASE WHEN member.role = 'STUDENT' THEN 'learner'
                  ELSE 'teacher' END AS perspective,
             (SELECT COUNT(*)::int FROM project_memberships learner
               WHERE learner.project_id=project.id AND learner.company_id=project.company_id
-                AND learner.status='ACTIVE' AND learner.role IN ('STUDENT','OBSERVER')) AS learner_count,
+                AND learner.status='ACTIVE' AND learner.role = 'STUDENT') AS learner_count,
             project.created_at,project.updated_at
        FROM projects project
        LEFT JOIN courses course ON course.project_id=project.id AND course.company_id=project.company_id
@@ -62,7 +61,7 @@ export async function countViewerPendingLearningReviews(
         AND attempt.project_id=evaluation.project_id
        JOIN project_memberships member ON member.project_id=attempt.project_id
          AND member.company_id=evaluation.company_id AND member.user_id=$2
-        AND member.status='ACTIVE' AND member.role IN ('OWNER','TEACHER')
+        AND member.status='ACTIVE' AND member.role = 'TEACHER'
       WHERE evaluation.company_id=$1 AND evaluation.project_id=ANY($3::text[])
         AND evaluation.status='PENDING'`,
     [companyId,userId,projectIds],
@@ -169,7 +168,7 @@ export async function listLearningProjectProgress(db: Queryable, companyId: stri
             AND attempt.learner_id=member.user_id
        ) attempt_summary ON TRUE
       WHERE member.company_id=$1 AND member.project_id=$2 AND member.status='ACTIVE'
-        AND member.role IN ('STUDENT','OBSERVER')
+        AND member.role = 'STUDENT'
       ORDER BY user_account.display_name`,
     [companyId,projectId],
   )

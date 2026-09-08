@@ -1,16 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { type CompanyStatus, companyStatusBelongsToType, transitionCompany } from '../domain/public.js'
-
-test('Personal Company deletion does not reuse Education contract states', () => {
-  assert.deepEqual(transitionCompany('PERSONAL', 'ACTIVE', 'REQUEST_USER_DELETION'), {
-    outcome: 'APPLIED', from: 'ACTIVE', to: 'USER_DELETION_PENDING',
-  })
-  assert.deepEqual(transitionCompany('PERSONAL', 'USER_DELETION_PENDING', 'DELETE'), {
-    outcome: 'APPLIED', from: 'USER_DELETION_PENDING', to: 'DELETED',
-  })
-  assert.equal(companyStatusBelongsToType('PERSONAL', 'GRACE_PERIOD'), false)
-})
+import { type CompanyStatus, transitionCompany } from '../domain/public.js'
 
 test('Education Company follows contract offboarding and retention in order', () => {
   const commands = [

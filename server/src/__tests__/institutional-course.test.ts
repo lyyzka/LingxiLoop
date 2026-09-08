@@ -25,7 +25,7 @@ test('Course kind is selected by its dedicated use case, not by request data', (
     kind: 'INSTITUTIONAL_COURSE',
     name: 'School class',
   }).success, false)
-  assert.equal(projectKindBelongsToCompanyType('INSTITUTIONAL_COURSE', 'PERSONAL'), false)
+  assert.equal(projectKindBelongsToCompanyType('INSTITUTIONAL_COURSE', 'PERSONAL' as never), false)
   assert.equal(projectKindBelongsToCompanyType('INSTITUTIONAL_COURSE', 'EDUCATION'), true)
 })
 
@@ -55,20 +55,20 @@ test('Institutional Course persistence inherits the Contract plan and assigns on
   assert.deepEqual(calls[0]?.params?.slice(0, 4), [
     'project-1', 'school-1', 'INSTITUTIONAL_COURSE', null,
   ])
-  assert.match(calls.map((call) => call.text).join('\n'), /INSERT INTO project_memberships[\s\S]*'OWNER'/)
+  assert.match(calls.map((call) => call.text).join('\n'), /INSERT INTO project_memberships[\s\S]*'TEACHER'/)
   assert.doesNotMatch(calls.map((call) => call.text).join('\n'), /INSERT INTO (?:users|organization_seats)/)
 })
 
-test('Institutional member assignment accepts four roles for an existing School Membership only', async () => {
-  for (const role of ['TEACHER', 'TA', 'STUDENT', 'OBSERVER']) {
+test('course assignment accepts existing company teachers only', async () => {
+  for (const role of ['TEACHER']) {
     assert.equal(addInstitutionalCourseMemberRequestSchema.safeParse({
       role,
       idempotencyKey: `member-${role.toLowerCase()}`,
     }).success, true)
   }
   assert.equal(addInstitutionalCourseMemberRequestSchema.safeParse({
-    role: 'OWNER',
-    idempotencyKey: 'member-owner',
+    role: 'STUDENT',
+    idempotencyKey: 'member-student',
   }).success, false)
 
   let statement = ''
@@ -84,11 +84,11 @@ test('Institutional member assignment accepts four roles for an existing School 
     companyId: 'school-1',
     courseId: 'course-1',
     userId: 'student-1',
-    role: 'OBSERVER',
-  }), { projectId: 'project-1', role: 'OBSERVER', added: true })
-  assert.deepEqual(values, ['school-1', 'course-1', 'student-1', 'OBSERVER'])
+    role: 'TEACHER',
+  }), { projectId: 'project-1', role: 'TEACHER', added: true })
+  assert.deepEqual(values, ['school-1', 'course-1', 'student-1', 'TEACHER'])
   assert.match(statement, /JOIN company_memberships[\s\S]*membership\.status='ACTIVE'/)
-  assert.match(statement, /project\.kind='INSTITUTIONAL_COURSE'/)
+  assert.match(statement, /membership\.role='TEACHER'/)
   assert.doesNotMatch(statement, /users|organization_seats/)
 
   let retryQuery = 0
@@ -97,15 +97,15 @@ test('Institutional member assignment accepts four roles for an existing School 
       retryQuery += 1
       return retryQuery === 1
         ? { rows: [], rowCount: 0 }
-        : { rows: [{ project_id: 'project-1', role: 'OBSERVER' }], rowCount: 1 }
+        : { rows: [{ project_id: 'project-1', role: 'TEACHER' }], rowCount: 1 }
     },
   } as unknown as Queryable
   assert.deepEqual(await addInstitutionalCourseMember(retryDb, {
     companyId: 'school-1',
     courseId: 'course-1',
     userId: 'student-1',
-    role: 'OBSERVER',
-  }), { projectId: 'project-1', role: 'OBSERVER', added: false })
+    role: 'TEACHER',
+  }), { projectId: 'project-1', role: 'TEACHER', added: false })
 })
 
 test('Institutional Course writes publish canonical events and use a dedicated member route', () => {

@@ -21,7 +21,6 @@ interface WorkspaceState {
   select: (projectId: string) => Promise<void>
   reset: () => void
   leave: () => void
-  createBlank: (name: string, description?: string) => Promise<string>
 }
 
 let workspaceRequestEpoch = 0
@@ -52,7 +51,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       // The default Project is the authority for the initial IM surface. A
       // fresh browser has no stored selection, but project-scoped endpoints
       // must never be called without this context.
-      const selectedId = restoredProjectId ?? list.find((workspace) => workspace.isDefault && workspace.status !== 'DELETED')?.id ?? null
+      const selectedId = restoredProjectId ?? list.find((workspace) => workspace.status === 'ACTIVE')?.id ?? null
       if (selectedId && companyId) setWorkspaceSession({ companyId, projectId: selectedId })
       else if (stored) setWorkspaceSession(null)
       set({ companyId, list, selectedId, loaded: true, loading: false })
@@ -90,12 +89,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     set({ selectedId: null })
     useApp.getState().selectConversation(null)
   },
-  createBlank: async (name, description = '') => {
-    const created = await knowledgeApi.createProject({ name, description })
-    await get().load()
-    await get().select(created.id)
-    return created.id
-  },
+
 }))
 
 export function activeWorkspace(): WorkspaceSummary | null {

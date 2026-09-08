@@ -1,16 +1,16 @@
 import assert from 'node:assert/strict'
 import { after, before, beforeEach, test } from 'node:test'
 import { pool } from '../db/pool.js'
-import { ensureSchemaOnce, resetAllTables, teardownAll } from './_helpers.js'
+import { seedUserMembership, ensureSchemaOnce, resetAllTables, teardownAll } from './_helpers.js'
 
-interface PersonalProjectFixture {
+interface EducationProjectFixture {
   companyId: string
   projectId: string
   userId: string
   conversationId: string
 }
 
-interface LearningGraph extends PersonalProjectFixture {
+interface LearningGraph extends EducationProjectFixture {
   knowledgeUnitId: string
   activityId: string
   missionId: string
@@ -33,7 +33,7 @@ async function expectConstraint(
   })
 }
 
-async function seedPersonalProject(suffix: string): Promise<PersonalProjectFixture> {
+async function seedEducationProject(suffix: string): Promise<EducationProjectFixture> {
   const userId = `user-${suffix}`
   const companyId = `company-${suffix}`
   const projectId = `project-${suffix}`
@@ -43,29 +43,15 @@ async function seedPersonalProject(suffix: string): Promise<PersonalProjectFixtu
     [userId, `${userId}@test.local`, `Learner ${suffix}`],
   )
   await pool.query(
-    `INSERT INTO companies(id,name,slug,type,personal_owner_user_id,plan_id)
-     VALUES($1,$2,$1,'PERSONAL',$3,'plan-personal-free')`,
-    [companyId, `Personal ${suffix}`, userId],
+    `INSERT INTO companies(id,name,slug,type,plan_id)
+     VALUES($1,$2,$1,'EDUCATION','plan-education')`,
+    [companyId, `School ${suffix}`],
   )
-  await pool.query(
-    `INSERT INTO company_memberships(company_id,user_id,role) VALUES($1,$2,'OWNER')`,
-    [companyId,userId],
-  )
-  await pool.query(
-    `INSERT INTO participants(id,company_id,kind,name,initial,avatar_bg,status)
-     VALUES($1,$2,'human',$3,$4,'#667085','avail')`,
-    [userId,companyId,`Learner ${suffix}`,suffix.slice(0,1).toUpperCase()],
-  )
-  await pool.query(
-    `INSERT INTO projects(id,company_id,kind,name,created_by,is_default)
-     VALUES($1,$2,'PERSONAL_LEARNING',$3,$4,TRUE)`,
-    [projectId,companyId,`Learning ${suffix}`,userId],
-  )
-  await pool.query(
-    `INSERT INTO project_memberships(company_id,project_id,user_id,role)
-     VALUES($1,$2,$3,'OWNER')`,
-    [companyId,projectId,userId],
-  )
+  await seedUserMembership(userId,companyId)
+  await pool.query(`INSERT INTO projects(id,company_id,kind,name,created_by,is_default)
+    VALUES($1,$2,'TEACHING',$3,$4,TRUE)`,[projectId,companyId,`Course ${suffix}`,userId])
+  await pool.query(`INSERT INTO project_memberships(company_id,project_id,user_id,role)
+    VALUES($1,$2,$3,'TEACHER')`,[companyId,projectId,userId])
   await pool.query(
     `INSERT INTO conversations(id,kind,title,members,company_id,project_id)
      VALUES($1,'group',$2,'[]'::jsonb,$3,$4)`,
@@ -75,19 +61,19 @@ async function seedPersonalProject(suffix: string): Promise<PersonalProjectFixtu
 }
 
 async function seedAdditionalProject(
-  fixture: PersonalProjectFixture,
+  fixture: EducationProjectFixture,
   suffix: string,
 ): Promise<{ projectId: string; conversationId: string }> {
   const projectId = `project-${suffix}`
   const conversationId = `conversation-${suffix}`
   await pool.query(
     `INSERT INTO projects(id,company_id,kind,name,created_by,is_default)
-     VALUES($1,$2,'PERSONAL_LEARNING',$3,$4,FALSE)`,
+     VALUES($1,$2,'TEACHING',$3,$4,FALSE)`,
     [projectId,fixture.companyId,`Learning ${suffix}`,fixture.userId],
   )
   await pool.query(
     `INSERT INTO project_memberships(company_id,project_id,user_id,role)
-     VALUES($1,$2,$3,'OWNER')`,
+     VALUES($1,$2,$3,'TEACHER')`,
     [fixture.companyId,projectId,fixture.userId],
   )
   await pool.query(
@@ -99,7 +85,7 @@ async function seedAdditionalProject(
 }
 
 async function seedLearningGraph(suffix: string): Promise<LearningGraph> {
-  const fixture = await seedPersonalProject(suffix)
+  const fixture = await seedEducationProject(suffix)
   const knowledgeUnitId = `unit-${suffix}`
   const activityId = `activity-${suffix}`
   const missionId = `mission-${suffix}`
@@ -291,7 +277,7 @@ test('[integration] same-company wrong-project learning links fail closed', asyn
 
 test('[integration] cross-tenant learning links, duplicate open cases and action retries are rejected', async () => {
   const graph = await seedLearningGraph('tenant-a')
-  const other = await seedPersonalProject('tenant-b')
+  const other = await seedEducationProject('tenant-b')
 
   await expectConstraint(pool.query(
     `INSERT INTO learning_attempts

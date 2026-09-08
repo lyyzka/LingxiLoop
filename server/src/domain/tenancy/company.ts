@@ -1,8 +1,7 @@
-export type CompanyType = 'PERSONAL' | 'EDUCATION'
+export type CompanyType = 'EDUCATION'
 export const COMPANY_STATUSES = [
   'TRIAL',
   'ACTIVE',
-  'USER_DELETION_PENDING',
   'GRACE_PERIOD',
   'READ_ONLY',
   'OFFBOARDED',
@@ -15,7 +14,6 @@ export type CompanyStatus = typeof COMPANY_STATUSES[number]
 
 export const COMPANY_LIFECYCLE_COMMANDS = [
   'ACTIVATE',
-  'REQUEST_USER_DELETION',
   'ENTER_GRACE_PERIOD',
   'ENTER_READ_ONLY',
   'OFFBOARD',
@@ -32,7 +30,6 @@ type CompanyTransition =
   | { outcome: 'INVALID'; from: CompanyStatus; to: null }
 
 const COMPANY_STATUSES_BY_TYPE = {
-  PERSONAL: ['ACTIVE', 'USER_DELETION_PENDING', 'DELETED'],
   EDUCATION: ['TRIAL', 'ACTIVE', 'GRACE_PERIOD', 'READ_ONLY', 'OFFBOARDED', 'RETENTION', 'ARCHIVED', 'DELETED'],
 } as const satisfies Record<CompanyType, readonly CompanyStatus[]>
 
@@ -58,11 +55,7 @@ function companyTransitionTarget(
   if (!companyStatusBelongsToType(type, status)) return null
   switch (command) {
     case 'ACTIVATE':
-      if (type === 'PERSONAL') return status === 'ACTIVE' ? status : null
       return status === 'TRIAL' ? 'ACTIVE' : status === 'ACTIVE' ? status : null
-    case 'REQUEST_USER_DELETION':
-      if (type !== 'PERSONAL') return null
-      return status === 'ACTIVE' ? 'USER_DELETION_PENDING' : status === 'USER_DELETION_PENDING' ? status : null
     case 'ENTER_GRACE_PERIOD':
       if (type !== 'EDUCATION') return null
       return status === 'TRIAL' || status === 'ACTIVE'
@@ -82,7 +75,6 @@ function companyTransitionTarget(
       return status === 'RETENTION' ? 'ARCHIVED' : status === 'ARCHIVED' ? status : null
     case 'DELETE':
       if (status === 'DELETED') return status
-      if (type === 'PERSONAL') return status === 'USER_DELETION_PENDING' ? 'DELETED' : null
       return status === 'RETENTION' || status === 'ARCHIVED' ? 'DELETED' : null
   }
 }
@@ -93,7 +85,6 @@ export interface Company {
   slug: string
   type: CompanyType
   status: CompanyStatus
-  personalOwnerUserId: string | null
   description: string
   planId: string
   createdAt: string

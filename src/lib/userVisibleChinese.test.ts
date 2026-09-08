@@ -71,7 +71,7 @@ test('invitation success actions use natural Chinese around the product name', (
   assert.doesNotMatch(invitation, /桌面端打开|下载桌面/)
   assert.doesNotMatch(invitation, /在LingxiLoop|继续LingxiLoop|从您上次停下/)
   assert.match(invitationManager, /INVITATION_STATUS_LABELS/)
-  assert.match(invitationManager, /invitationRoleLabel\(invitation\.role\)/)
+  assert.match(invitationManager, /invitationRoleLabel\(invitation\.isAdmin\)/)
   assert.doesNotMatch(invitationManager, /navigator\.clipboard\.writeText\(inviteId\)/)
   assert.match(avatar, /AVATAR_STATUS_LABELS\[status\] \?\? '状态更新中'/)
 })

@@ -26,7 +26,10 @@ platformRouter.post('/uploads/presign', safe(async (req, res) => {
     throw new HttpError(tooLarge ? 413 : 400, parsed.error.issues[0]?.message ?? 'invalid upload')
   }
   try {
-    res.json(await platformApplication.presignUpload(companyId, parsed.data))
+    if (parsed.data.documentId) await permissionService.assertCan({ actorUserId: userId, companyId,
+      action: 'document:write', resource: { type: 'document', id: parsed.data.documentId } })
+    const result = await platformApplication.presignUpload(companyId, userId, parsed.data)
+    res.json(result)
   } catch (error) {
     if (error instanceof PlatformApplicationError && error.code === 'mime_not_allowed') {
       throw new HttpError(415, error.message)

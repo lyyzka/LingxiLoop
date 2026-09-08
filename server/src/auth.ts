@@ -1,8 +1,11 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { env } from './env.js'
+import { gatewaySessionActive } from './modules/identity/public.js'
 import { redis } from './redis.js'
 
 export interface GatewayAssertion {
+  authSessionIssuedAt?: number
+  platformAdmin?: boolean
   appUserId: string | null
   authUserId: string | null
   method: string
@@ -19,6 +22,7 @@ export interface GatewayAssertion {
 
 export interface AuthedRequest {
   authUserId?: string
+  gatewayPlatformAdmin?: boolean
   gatewayAuthenticated?: boolean
   gatewayAuthUserId?: string
   gatewayService?: GatewayAssertion['service']
@@ -67,7 +71,10 @@ export async function authMiddleware(
     if (fresh) {
       request.gatewayAuthenticated = true
       request.gatewayAuthUserId = assertion.authUserId ?? undefined
-      request.authUserId = assertion.appUserId ?? undefined
+      request.gatewayPlatformAdmin = assertion.platformAdmin === true
+      if (assertion.appUserId) {
+        if (await gatewaySessionActive(assertion.appUserId, assertion.authSessionIssuedAt)) request.authUserId = assertion.appUserId
+      }
       request.gatewayService = assertion.service
     }
   }

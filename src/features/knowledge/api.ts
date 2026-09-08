@@ -35,8 +35,6 @@ async function uploadSource(basePath: string, fingerprintScope: string, file: Fi
 export const knowledgeApi = {
   listProjects: () => http<WorkspaceSummary[]>('/projects'),
   openProject: (id: string) => http<{ ok: boolean }>(`/projects/${encodeURIComponent(id)}/open`, { method: 'POST' }),
-  createProject: (input: { name: string; description?: string; color?: string }) =>
-    http<WorkspaceSummary>('/projects', { method: 'POST', body: JSON.stringify(input) }),
   archiveProject: projectLifecycleApi.archive,
   deleteProject: projectLifecycleApi.delete,
   updateProject: (projectId: string, input: { name?: string; description?: string; color?: string | null }) =>

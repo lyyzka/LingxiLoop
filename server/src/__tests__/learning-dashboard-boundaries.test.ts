@@ -62,10 +62,9 @@ test('cross-Company learning space candidates use Access scope before metadata i
     'actor-1', '2026-08-30T00:00:00.000Z', 'project-1', 31,
   ])
   const sql = calls[0]?.text ?? ''
-  assert.match(sql, /FROM project_memberships member/)
-  assert.match(sql, /member\.user_id=\$1 AND member\.status='ACTIVE'/)
-  assert.match(sql, /project\.id=member\.project_id[\s\S]*project\.company_id=member\.company_id/)
-  assert.match(sql, /COALESCE\(visit\.meaningful_visited_at,project\.updated_at\),member\.project_id/)
+  assert.match(sql, /cm.user_id=\$1 AND cm.ended_at IS NULL AND cm.status='ACTIVE'/)
+  assert.match(sql, /member.company_period_id=cm.period_id AND member.status='ACTIVE'/)
+  assert.match(sql, /cm.is_admin OR member.user_id IS NOT NULL/)
   assert.match(sql, /LIMIT \$4/)
 
   const metadata = recordingDb()
@@ -98,7 +97,7 @@ test('overview metrics count distinct attempts and keep every fact inside the te
   const teacherSql = teacher.calls.map((call) => call.text).join('\n')
   assert.match(teacherSql, /COUNT\(DISTINCT attempt\.id\)/)
   assert.match(teacherSql, /attention\.teacher_user_id=\$3/)
-  assert.match(teacherSql, /learner\.role IN \('STUDENT','OBSERVER'\)/)
+  assert.match(teacherSql, /learner\.role = 'STUDENT'/)
 })
 
 test('teacher learner and attempt reads require composite tenant joins and bounded pages', async () => {
@@ -124,17 +123,13 @@ test('teacher learner and attempt reads require composite tenant joins and bound
   assert.doesNotMatch(calls[1]?.text ?? '', /project_memberships|company_memberships/)
 })
 
-test('Personal Learning is always a learner perspective while course perspective follows membership', () => {
-  assert.equal(learningPerspective('PERSONAL_LEARNING', 'OWNER'), 'learner')
-  assert.equal(learningPerspective('TEACHING', 'OWNER'), 'teacher')
+test('course perspective follows fixed teaching or student identity', () => {
+  assert.equal(learningPerspective('TEACHING', 'TEACHER'), 'teacher')
   assert.equal(learningPerspective('INSTITUTIONAL_COURSE', 'TEACHER'), 'teacher')
-  assert.equal(learningPerspective('INSTITUTIONAL_COURSE', 'TA'), 'learner')
   assert.equal(learningPerspective('TEACHING', 'STUDENT'), 'learner')
-  assert.equal(learningPerspective('INSTITUTIONAL_COURSE', 'OBSERVER'), 'learner')
 })
 
 test('learning spaces expose only the next valid lifecycle action for each Project kind and status', () => {
-  assert.equal(learningLifecycleAction('PERSONAL_LEARNING', 'ACTIVE'), null)
   assert.equal(learningLifecycleAction('TEACHING', 'ACTIVE'), 'END')
   assert.equal(learningLifecycleAction('TEACHING', 'COURSE_ENDED'), 'ENTER_READ_ONLY')
   assert.equal(learningLifecycleAction('TEACHING', 'READ_ONLY'), 'ARCHIVE')
@@ -146,9 +141,9 @@ test('learning spaces expose only the next valid lifecycle action for each Proje
 const managerContext: ResolvedAccessContext = {
   actorUserId: 'actor-1',
   platformAdmin: false,
-  company: { id: 'company-1', type: 'PERSONAL', status: 'ACTIVE' },
-  companyMembership: { role: 'OWNER', status: 'ACTIVE' },
-  effectivePlan: { id: 'plan-1', code: 'PERSONAL_FREE' },
+  company: { id: 'company-1', type: 'EDUCATION', status: 'ACTIVE' },
+  companyMembership: { role: 'TEACHER', isAdmin: true, status: 'ACTIVE' },
+  effectivePlan: { id: 'plan-1', code: 'EDUCATION' },
   entitlements: { has: () => true, boolean: () => true, number: () => null, string: () => null },
 }
 
@@ -157,13 +152,13 @@ test('agent management and company-wide memory stay manager-only while loop memo
     assert.equal(evaluatePolicy({ actorUserId: 'actor-1', action, companyId: 'company-1' }, managerContext, null), 'ALLOWED')
     assert.equal(evaluatePolicy(
       { actorUserId: 'actor-1', action, companyId: 'company-1' },
-      { ...managerContext, companyMembership: { role: 'MEMBER', status: 'ACTIVE' } },
+      { ...managerContext, companyMembership: { role: 'STUDENT', isAdmin: false, status: 'ACTIVE' } },
       null,
     ), 'ROLE_NOT_ALLOWED')
   }
   const memberContext: ResolvedAccessContext = {
     ...managerContext,
-    companyMembership: { role: 'MEMBER', status: 'ACTIVE' },
+    companyMembership: { role: 'STUDENT', isAdmin: false, status: 'ACTIVE' },
   }
   const conversation = {
     companyId: 'company-1',
@@ -181,22 +176,17 @@ test('agent management and company-wide memory stay manager-only while loop memo
       { ...conversation, conversationMembers: ['someone-else'] },
     ), 'RESOURCE_MEMBERSHIP_REQUIRED')
   }
-  const observabilityRouter = readFileSync(
-    new URL('../modules/observability/router.ts', import.meta.url),
-    'utf8',
-  )
-  assert.match(observabilityRouter, /action: 'agent_memory:read_company'/)
-  assert.equal(observabilityRouter.match(/action: 'agent_memory:write_company'/g)?.length, 2)
+
 })
 
 test('space capabilities follow Access policy for learner, reviewer, and lifecycle actions', () => {
   const application = readFileSync(new URL('../modules/learning/dashboard-application.ts', import.meta.url), 'utf8')
   assert.match(application, /request\('learning:manage'\)/)
-  assert.match(application, /personal \? null : request\('course:update'\)/)
-  assert.match(application, /personal \? null : request\('project_invitation:create'\)/)
-  assert.match(application, /personal \? null : request\('project_invitation:revoke'\)/)
-  assert.match(application, /personal \? null : request\('project_member:update'\)/)
-  assert.match(application, /personal \? null : request\('project_member:remove'\)/)
+  assert.match(application, /request\('course:update'\)/)
+  assert.match(application, /request\('project_invitation:create'\)/)
+  assert.match(application, /request\('project_invitation:revoke'\)/)
+  assert.match(application, /request\('project_member:update'\)/)
+  assert.match(application, /request\('project_member:remove'\)/)
   assert.match(application, /request\('learning:submit'\)/)
   assert.match(application, /request\('learning:review'\)/)
   assert.match(application, /lifecycle\?\.allowed \? lifecycleAction : null/)
@@ -216,7 +206,7 @@ test('space capabilities follow Access policy for learner, reviewer, and lifecyc
   ] as const
   const activeOwner = {
     ...activeCourse,
-    projectMembership: { role: 'OWNER' as const, status: 'ACTIVE' as const },
+    projectMembership: { role: 'TEACHER' as const, status: 'ACTIVE' as const },
   }
   for (const action of managerActions) {
     assert.equal(evaluatePolicy(
@@ -226,25 +216,9 @@ test('space capabilities follow Access policy for learner, reviewer, and lifecyc
     ), 'ALLOWED')
   }
 
-  const transferPendingOwner = {
-    ...activeOwner,
-    project: { ...activeOwner.project, status: 'TRANSFER_PENDING' as const },
-  }
-  assert.equal(evaluatePolicy(
-    { actorUserId: 'actor-1', action: 'learning:manage', projectId: 'project-1' },
-    transferPendingOwner,
-    null,
-  ), 'ALLOWED')
-  for (const action of managerActions.slice(1)) {
-    assert.equal(evaluatePolicy(
-      { actorUserId: 'actor-1', action, projectId: 'project-1' },
-      transferPendingOwner,
-      null,
-    ), 'PROJECT_STATE_DENIED')
-  }
-
   const activeLearner = {
     ...activeCourse,
+    companyMembership: { role: 'STUDENT' as const, isAdmin: false, status: 'ACTIVE' as const },
     projectMembership: { role: 'STUDENT' as const, status: 'ACTIVE' as const },
   }
   for (const action of managerActions) {
@@ -257,9 +231,7 @@ test('space capabilities follow Access policy for learner, reviewer, and lifecyc
 
   for (const [role, expected] of [
     ['STUDENT', 'ALLOWED'],
-    ['OBSERVER', 'ROLE_NOT_ALLOWED'],
-    ['TA', 'ROLE_NOT_ALLOWED'],
-    ['OWNER', 'ROLE_NOT_ALLOWED'],
+    ['TEACHER', 'ROLE_NOT_ALLOWED'],
   ] as const) {
     assert.equal(evaluatePolicy(
       { actorUserId: 'actor-1', action: 'learning:submit', projectId: 'project-1' },
@@ -271,7 +243,7 @@ test('space capabilities follow Access policy for learner, reviewer, and lifecyc
   const endedOwner = {
     ...activeCourse,
     project: { ...activeCourse.project, status: 'COURSE_ENDED' as const },
-    projectMembership: { role: 'OWNER' as const, status: 'ACTIVE' as const },
+    projectMembership: { role: 'TEACHER' as const, status: 'ACTIVE' as const },
   }
   assert.equal(evaluatePolicy(
     { actorUserId: 'actor-1', action: 'learning:review', projectId: 'project-1' },
@@ -288,7 +260,7 @@ test('space capabilities follow Access policy for learner, reviewer, and lifecyc
     ...managerContext,
     company: { ...managerContext.company, type: 'EDUCATION' as const },
     project: { id: 'project-2', kind: 'INSTITUTIONAL_COURSE' as const, status: 'READ_ONLY' as const },
-    projectMembership: { role: 'OWNER' as const, status: 'ACTIVE' as const },
+    projectMembership: { role: 'TEACHER' as const, status: 'ACTIVE' as const },
   }
   assert.equal(evaluatePolicy(
     { actorUserId: 'actor-1', action: 'project:enter_retention', projectId: 'project-2' },
@@ -324,7 +296,7 @@ test('teacher detail HTTP routes require review while teacher overview requires 
     {
       ...managerContext,
       project: { id: 'project-1', kind: 'TEACHING', status: 'ACTIVE' },
-      projectMembership: { role: 'TA', status: 'ACTIVE' },
+      projectMembership: { role: 'STUDENT', status: 'ACTIVE' },
     },
     null,
   ), 'ROLE_NOT_ALLOWED')

@@ -23,7 +23,7 @@ export const uploadsApi = {
       return cache
     }
   })(),
-  uploadFile: async (file: File): Promise<ApiAttachment> => {
+  uploadFile: async (file: File, documentId?: string): Promise<ApiAttachment> => {
     const caps = await uploadsApi.uploadCapabilities()
     if (caps.maxBytes && file.size > caps.maxBytes) {
       throw new Error(`file too large: ${Math.round(file.size / 1024 / 1024)}MB (max ${Math.round(caps.maxBytes / 1024 / 1024)}MB)`)
@@ -35,7 +35,7 @@ export const uploadsApi = {
 
     const signed = await http<PresignedUpload>('/uploads/presign', {
       method: 'POST',
-      body: JSON.stringify({ name: file.name, mime, size: file.size }),
+      body: JSON.stringify({ name: file.name, mime, size: file.size, documentId }),
     })
     const r = await putPresignedFile(signed.uploadUrl, file, mime)
     if (!r.ok) {

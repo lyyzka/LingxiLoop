@@ -48,6 +48,7 @@ export const env = {
   WUKONG_USER_TOKEN_SECRET: wukongUserTokenSecret(),
   DATABASE_URL: required('DATABASE_URL'),
   REDIS_URL: required('REDIS_URL'),
+  CONTROL_PLANE_BASE_URL: process.env.CONTROL_PLANE_BASE_URL ?? (process.env.NODE_ENV === 'production' ? 'https://admin.lingxilearn.cn' : 'http://localhost:8787'),
   GATEWAY_HMAC_SECRET: process.env.LINGXILOOP_GATEWAY_HMAC_SECRET
     ?? (process.env.NODE_ENV === 'production' ? required('LINGXILOOP_GATEWAY_HMAC_SECRET') : 'dev-only-gateway-secret'),
   OPENAI_API_KEY: required('OPENAI_API_KEY'),

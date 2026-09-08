@@ -75,10 +75,12 @@ export async function listParticipants(db: Queryable, scope: ParticipantScope) {
               WHERE pulse.agent_id=participant.id AND pulse.company_id=participant.company_id)
           OR EXISTS(SELECT 1 FROM learning_project_teacher_agents pulse
               JOIN courses course ON course.project_id=pulse.project_id AND course.company_id=pulse.company_id
-              JOIN project_memberships teacher ON teacher.project_id=course.project_id AND teacher.company_id=course.company_id
-                AND teacher.user_id=$3 AND teacher.status='ACTIVE'
-                AND teacher.role IN ('OWNER','TEACHER')
-             WHERE pulse.agent_id=participant.id AND pulse.company_id=participant.company_id AND pulse.project_id=$2))
+              JOIN company_memberships manager ON manager.company_id=course.company_id
+                AND manager.user_id=$3 AND manager.status='ACTIVE' AND manager.ended_at IS NULL
+              LEFT JOIN project_memberships teacher ON teacher.project_id=course.project_id AND teacher.company_id=course.company_id
+                AND teacher.user_id=$3 AND teacher.status='ACTIVE' AND teacher.company_period_id=manager.period_id
+                AND teacher.role='TEACHER'
+             WHERE (manager.is_admin OR teacher.user_id IS NOT NULL) AND pulse.agent_id=participant.id AND pulse.company_id=participant.company_id AND pulse.project_id=$2))
         AND (participant.kind='agent' OR EXISTS(SELECT 1 FROM projects project
               LEFT JOIN project_memberships member
                 ON member.project_id=project.id AND member.company_id=project.company_id
@@ -193,10 +195,12 @@ export async function allAutonomy(db: Queryable, userId: string, companyId: stri
               WHERE pulse.agent_id=participant.id AND pulse.company_id=participant.company_id)
           OR EXISTS(SELECT 1 FROM learning_project_teacher_agents pulse
               JOIN courses course ON course.project_id=pulse.project_id AND course.company_id=pulse.company_id
-              JOIN project_memberships teacher ON teacher.project_id=course.project_id AND teacher.company_id=course.company_id
-                AND teacher.user_id=$1 AND teacher.status='ACTIVE'
-                AND teacher.role IN ('OWNER','TEACHER')
-             WHERE pulse.agent_id=participant.id AND pulse.company_id=participant.company_id))`,
+              JOIN company_memberships manager ON manager.company_id=course.company_id
+                AND manager.user_id=$1 AND manager.status='ACTIVE' AND manager.ended_at IS NULL
+              LEFT JOIN project_memberships teacher ON teacher.project_id=course.project_id AND teacher.company_id=course.company_id
+                AND teacher.user_id=$1 AND teacher.status='ACTIVE' AND teacher.company_period_id=manager.period_id
+                AND teacher.role='TEACHER'
+             WHERE (manager.is_admin OR teacher.user_id IS NOT NULL) AND pulse.agent_id=participant.id AND pulse.company_id=participant.company_id))`,
     [userId, companyId],
   )
   return rows

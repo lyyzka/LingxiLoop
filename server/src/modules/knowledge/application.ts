@@ -1,6 +1,5 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, } from 'node:crypto'
 import type { Queryable } from '../../db/queryable.js'
-import { projectKindBelongsToCompanyType } from '../../domain/public.js'
 import { createPermissionService, knowledgeSourceVisibilityScope } from '../access/public.js'
 import { recordProjectVisit } from '../briefings/public.js'
 import type {
@@ -14,13 +13,11 @@ import {
   enqueueSourceJob,
   findCourseReviewSource,
   findSource,
-  insertPersonalLearningProject,
   insertSource,
   listCourseReviewSources,
   listConversationSources,
   listProjects,
   listSources,
-  lockProjectCompanyType,
   moveConversation,
   replaceSourceExclusions,
   updateProject,
@@ -90,45 +87,6 @@ export class KnowledgeApplication {
     return visible.filter(({ decision }) => decision.allowed).map(({ project }) => project)
   }
 
-  async createPersonalLearningProject(args: {
-    companyId: string; userId: string; name: string; description: string; color?: string | null
-  }) {
-    const id = `p-${randomUUID().slice(0, 10)}`
-    const project = await this.infrastructure.transaction(async (db) => {
-      await createPermissionService(db, { lockDependencies: true }).assertCan({
-        actorUserId: args.userId,
-        action: 'project:create_personal_learning',
-        companyId: args.companyId,
-      })
-      const companyType = await lockProjectCompanyType(db, args.companyId)
-      if (!companyType) throw new KnowledgeApplicationError('not_found', 'company not found')
-      if (!projectKindBelongsToCompanyType('PERSONAL_LEARNING', companyType)) {
-        throw new KnowledgeApplicationError('forbidden', 'Personal Learning Projects require a Personal Company')
-      }
-      return insertPersonalLearningProject(db, { ...args, id, color: args.color ?? null })
-    })
-    let knowledgeState: 'disabled' | 'ready' | 'failed' = 'disabled'
-    if (this.infrastructure.notebookEnabled()) {
-      try {
-        await this.infrastructure.ensureNotebook(id, args.companyId)
-        knowledgeState = 'ready'
-      } catch {
-        knowledgeState = 'failed'
-      }
-    }
-    return {
-      ...project,
-      lastVisitedAt: null,
-      sourceCount: 0,
-      conversationCount: 0,
-      documentCount: 0,
-      calendarEventCount: 0,
-      canvasCount: 0,
-      canManage: true,
-      knowledgeState,
-    }
-  }
-
   async editProject(scope: KnowledgeScope, patch: ProjectPatch) {
     await this.infrastructure.transaction(async (db) => {
       await createPermissionService(db, { lockDependencies: true }).assertCan({
@@ -169,12 +127,9 @@ export class KnowledgeApplication {
   }
 
   async courseReviewSources(scope: KnowledgeScope) {
-    const context = await createPermissionService(this.db).assertCan({
+    await createPermissionService(this.db).assertCan({
       actorUserId: scope.userId, action: 'learning:review', companyId: scope.companyId, projectId: scope.projectId,
     })
-    if (context.project?.kind === 'PERSONAL_LEARNING') {
-      throw new KnowledgeApplicationError('forbidden', 'course resource review requires a course')
-    }
     return listCourseReviewSources(this.db, scope.companyId, scope.projectId)
   }
 
@@ -203,12 +158,9 @@ export class KnowledgeApplication {
   }
 
   async courseReviewSource(scope: KnowledgeScope, sourceId: string) {
-    const context = await createPermissionService(this.db).assertCan({
+    await createPermissionService(this.db).assertCan({
       actorUserId: scope.userId, action: 'learning:review', companyId: scope.companyId, projectId: scope.projectId,
     })
-    if (context.project?.kind === 'PERSONAL_LEARNING') {
-      throw new KnowledgeApplicationError('forbidden', 'course resource review requires a course')
-    }
     const source = await findCourseReviewSource(this.db, scope.companyId, scope.projectId, sourceId)
     if (!source) throw new KnowledgeApplicationError('not_found', 'source not found')
     const { storageKey, ...payload } = source

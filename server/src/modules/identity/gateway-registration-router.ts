@@ -5,26 +5,9 @@ import { withTransaction } from '../../db/transaction.js'
 import { safe } from '../../http/async-handler.js'
 import { HttpError } from '../../http/errors.js'
 import { hashInvitationToken } from '../../http/invitation-token.js'
-import { resolvePlanEntitlements } from '../access/public.js'
 import { findIdentityUser, listIdentityCompanies } from './repository.js'
 import { createWsTicket } from './session-facade.js'
-import {
-  insertAcceptedMembership,
-  isCompanyMember,
-  lockCompany,
-  lockInvitation,
-} from '../companies/repository.js'
-import { onboardCompanyStarterWorkspace, provisionPersonalWorkspace } from '../companies/public.js'
-import {
-  companyMembershipRole,
-  countActiveProjectStudents,
-  courseMembershipRole,
-  insertAcceptedStudentMembership,
-  joinInvitationCompany,
-  lockProjectInvitation,
-  priorProjectAcceptance,
-  recordProjectAcceptance,
-} from '../learning/repository.js'
+import { acceptEducationInvitation } from '../companies/admission.js'
 
 export const gatewayRegistrationRouter = Router()
 
@@ -37,12 +20,11 @@ gatewayRegistrationRouter.get('/auth/me', safe(async (req, res) => {
   if (!req.authUserId) throw new HttpError(401, 'business user mapping required')
   const [user, companies] = await Promise.all([findIdentityUser(pool, req.authUserId), listIdentityCompanies(pool, req.authUserId)])
   if (!user) throw new HttpError(401, 'business user not found')
-  const personal = companies.find((company) => company.type === 'PERSONAL')
-  if (!personal) throw new HttpError(409, 'Personal Context invariant violated')
+  if (companies.length !== 1) throw new HttpError(403, 'active company membership required')
   res.json({
     user: { id: user.id, email: user.email, name: user.display_name, emailVerified: Boolean(user.email_verified_at), providers: ['credential'] },
     companies: companies.map(({ type: _type, ...company }) => company),
-    activeCompanyId: personal.id,
+    activeCompanyId: companies[0]!.id,
     serverCapabilities: { invitationEmail: true },
   })
 }))
@@ -59,20 +41,25 @@ gatewayRegistrationRouter.post('/internal/registration/invitation', safe(async (
   if (req.gatewayService?.capability !== 'registration-invitation') throw new HttpError(403, 'registration service required')
   const inviteToken = typeof req.body?.inviteToken === 'string' ? req.body.inviteToken : ''
   const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : null
-  const kind = req.body?.inviteKind === 'project' ? 'project' : 'company'
+  const kind = req.body?.inviteKind
+  if (kind !== 'project' && kind !== 'company') throw new HttpError(400, 'invalid inviteKind')
   if (!inviteToken) throw new HttpError(400, 'inviteToken required')
   const tokenHash = hashInvitationToken(inviteToken)
   const table = kind === 'project' ? 'project_invitations' : 'company_invitations'
   const { rows } = await pool.query<{
-    email: string | null; expires_at: string; revoked_at: string | null; use_count: number; max_uses: number
-  }>(`SELECT email,expires_at,revoked_at,use_count,max_uses FROM ${table} WHERE token_hash=$1`, [tokenHash])
+    companyName: string; courseName: string | null; isAdmin: boolean; email: string | null; expires_at: string; revoked_at: string | null; use_count: number; max_uses: number
+  }>(`SELECT i.email,i.expires_at,i.revoked_at,i.use_count,i.max_uses,c.name AS "companyName",
+      ${kind === 'company' ? 'i.is_admin' : 'FALSE'} AS "isAdmin",
+      ${kind === 'project' ? "(SELECT name FROM projects WHERE id=i.project_id AND status='ACTIVE')" : 'NULL::text'} AS "courseName"
+      FROM ${table} i JOIN companies c ON c.id=i.company_id AND c.status IN ('ACTIVE','TRIAL') WHERE i.token_hash=$1`, [tokenHash])
   const invitation = rows[0]
   if (!invitation) throw new HttpError(404, 'invitation not found')
+  if (kind === 'project' && !invitation.courseName) throw new HttpError(410, 'course no longer active')
   if (invitation.revoked_at || new Date(invitation.expires_at).getTime() <= Date.now() || invitation.use_count >= invitation.max_uses) {
     throw new HttpError(410, 'invitation no longer active')
   }
   if (email && invitation.email && invitation.email.toLowerCase() !== email) throw new HttpError(403, 'invitation email mismatch')
-  res.json({ valid: true, kind, email: invitation.email })
+  res.json({ valid: true, kind, email: invitation.email, companyName: invitation.companyName, courseName: invitation.courseName, role: kind === 'company' ? 'teacher' : 'student', isAdmin: invitation.isAdmin })
 }))
 
 gatewayRegistrationRouter.post('/internal/registration/provision', safe(async (req, res) => {
@@ -83,45 +70,19 @@ gatewayRegistrationRouter.post('/internal/registration/provision', safe(async (r
   const inviteToken = typeof req.body?.inviteToken === 'string' ? req.body.inviteToken : ''
   const kind = req.body?.inviteKind === 'project' || req.body?.inviteKind === 'company' ? req.body.inviteKind : null
   if (!email || !name) throw new HttpError(400, 'email and name are required')
-  if (Boolean(inviteToken) !== Boolean(kind)) throw new HttpError(400, 'inviteToken and inviteKind must be provided together')
-  const tokenHash = inviteToken ? hashInvitationToken(inviteToken) : null
-  const provisioned = await withTransaction(pool, async (db) => {
-    const existing = await db.query<{ id: string }>(`SELECT id FROM users WHERE lower(email)=$1 AND deleted_at IS NULL FOR UPDATE`, [email])
-    const userId = existing.rows[0]?.id ?? `u-${randomUUID().slice(0, 12)}`
+  if (!inviteToken || !kind) throw new HttpError(403, 'invitation required')
+  const tokenHash = hashInvitationToken(inviteToken)
+  const appUserId = await withTransaction(pool, async (db) => {
+    await db.query(`SELECT pg_advisory_xact_lock(1282006535)`)
+    // Serialize first-time admissions by normalized email, including absent user rows.
+    await db.query(`SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, [email])
+    const existing = await db.query<{ id: string }>(`SELECT id FROM users WHERE lower(email)=$1 FOR UPDATE`, [email])
+    const userId = existing.rows[0]?.id ?? `u-${randomUUID()}`
     if (!existing.rows[0]) {
       await db.query(`INSERT INTO users(id,email,display_name,email_verified_at) VALUES($1,$2,$3,NOW())`, [userId, email, name])
     }
-    const personalWorkspace = await provisionPersonalWorkspace(db, userId)
-    if (kind === 'company') {
-      const invitation = await lockInvitation(db, tokenHash!)
-      if (!invitation) throw new HttpError(404, 'invitation not found')
-      const companyStatus = await lockCompany(db, invitation.company_id)
-      if (!companyStatus || !['ACTIVE', 'TRIAL'].includes(companyStatus)) throw new HttpError(410, 'company is not accepting members')
-      if (!await isCompanyMember(db, invitation.company_id, userId)) {
-        if (invitation.revoked_at || new Date(invitation.expires_at).getTime() <= Date.now() || invitation.use_count >= invitation.max_uses) throw new HttpError(410, 'invitation no longer active')
-        if (invitation.email && invitation.email.toLowerCase() !== email) throw new HttpError(403, 'invitation email mismatch')
-        await insertAcceptedMembership(db, { invitation, userId, displayName: name, avatarUrl: null })
-      }
-    } else if (kind === 'project') {
-      const invitation = await lockProjectInvitation(db, tokenHash!, userId)
-      if (!invitation) throw new HttpError(404, 'invitation not found')
-      if (invitation.revoked_at || new Date(invitation.expires_at).getTime() <= Date.now() || invitation.project_status !== 'ACTIVE' || !['ACTIVE', 'TRIAL'].includes(invitation.company_status)) throw new HttpError(410, 'invitation no longer active')
-      if (invitation.email && invitation.email.toLowerCase() !== email) throw new HttpError(403, 'invitation email mismatch')
-      if (!await companyMembershipRole(db, invitation.company_id, userId)) {
-        await joinInvitationCompany(db, { companyId: invitation.company_id, userId, displayName: name, avatarUrl: '' })
-      }
-      const existingRole = await courseMembershipRole(db, invitation.course_id, userId)
-      if (!await priorProjectAcceptance(db, tokenHash!, userId) && !existingRole) {
-        if (invitation.use_count >= invitation.max_uses) throw new HttpError(410, 'invitation already used')
-        const entitlements = await resolvePlanEntitlements(db, invitation.project_plan_id)
-        const limit = entitlements.number('teacher.student_limit')
-        if (limit !== null && await countActiveProjectStudents(db, invitation.company_id, invitation.project_id) >= limit) throw new HttpError(403, 'student limit reached')
-        await insertAcceptedStudentMembership(db, { invitation, userId })
-        await recordProjectAcceptance(db, { tokenHash: tokenHash!, userId })
-      }
-    }
-    return { appUserId: userId, personalCompanyId: personalWorkspace.companyId }
+    await acceptEducationInvitation(db, userId, tokenHash, kind)
+    return userId
   })
-  await onboardCompanyStarterWorkspace(provisioned.personalCompanyId)
-  res.json({ appUserId: provisioned.appUserId })
+  res.json({ appUserId })
 }))

@@ -5,14 +5,13 @@
  * Surface area kept deliberately small:
  *   - `put(key, body, mime)` — write bytes, return the public URL
  *   - `presignPut(key, mime)` — short-lived URL the browser PUTs to
- *   - `publicUrl(key)` — HMAC-gated read URL for private prefixes
+ *   - `publicUrl(key)` — authenticated API URL for private prefixes
  *   - `mode` — always `r2`, surfaced so the API can advertise it
  *
  * Keys look like `<prefix>/<uuid>.<ext>`. Prefixes are conventional:
  *   - `attachments/` — user uploads
  *   - `avatars/`     — human profile images mirrored from identity providers
  */
-import { createHmac } from 'node:crypto'
 import {
   S3Client, PutObjectCommand, GetObjectCommand,
   DeleteObjectCommand, HeadObjectCommand, ListObjectsV2Command,
@@ -20,12 +19,10 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { env } from './env.js'
 
-/** Keys under these prefixes always get HMAC-signed URLs. Other prefixes
- *  (e.g. `avatars/`) are served unsigned — they
- *  carry no private user content and benefit from full CDN caching. */
-const SIGNED_PREFIXES = ['attachments/', 'email-attachments/', 'knowledge-sources/', 'presentation-artifacts/']
-function needsSignature(key: string): boolean {
-  return SIGNED_PREFIXES.some((p) => key.startsWith(p))
+/** Private content is read through the authenticated API; avatars remain public. */
+const PRIVATE_PREFIXES = ['attachments/', 'email-attachments/', 'knowledge-sources/', 'presentation-artifacts/']
+function needsAuthorization(key: string): boolean {
+  return PRIVATE_PREFIXES.some((p) => key.startsWith(p))
 }
 
 const STORAGE_KEY_PREFIXES = [
@@ -61,6 +58,7 @@ export function storageKeyFromPublicUrl(raw: string): string | null {
   const value = raw.trim()
   if (!value) return null
 
+  if (value.startsWith('/api/files?')) return normalizeStorageKey(new URL(value, 'https://local.invalid').searchParams.get('key') ?? '')
   if (!env.R2_PUBLIC_BASE) return null
   try {
     const url = new URL(value)
@@ -242,20 +240,14 @@ class R2Storage implements Storage, BoundedStorageReader {
   private client: S3Client
   private bucket: string
   private publicBase: string
-  private signingSecret: string
-  private urlTtl: number
 
   constructor(opts: {
     endpoint: string; bucket: string;
     accessKeyId: string; secretAccessKey: string;
     publicBase: string;
-    signingSecret: string;
-    urlTtl: number;
   }) {
     this.bucket = opts.bucket
     this.publicBase = opts.publicBase
-    this.signingSecret = opts.signingSecret
-    this.urlTtl = opts.urlTtl
     this.client = new S3Client({
       // R2 lives in a single region; the SDK still requires *some* value.
       // "auto" is the documented choice for R2.
@@ -334,17 +326,7 @@ class R2Storage implements Storage, BoundedStorageReader {
 
   async publicUrl(key: string): Promise<string> {
     const normalized = requireStorageKey(key)
-    // Prefer the explicit public base (custom domain). Cache-friendly,
-    // no expiry on the URL structure itself. When a signing secret is
-    // required signing secret and the key falls under a signed prefix, append the
-    // HMAC query params — the Cloudflare Worker at the edge validates
-    // these before proxying R2 reads.
-    if (needsSignature(normalized)) {
-        const exp = Math.floor(Date.now() / 1000) + this.urlTtl
-        const sig = createHmac('sha256', this.signingSecret)
-          .update(`${normalized}:${exp}`).digest('hex')
-        return `${this.publicBase}/${normalized}?exp=${exp}&sig=${sig}`
-    }
+    if (needsAuthorization(normalized)) return `/api/files?key=${encodeURIComponent(normalized)}`
     return `${this.publicBase}/${normalized}`
   }
 
@@ -391,7 +373,6 @@ function buildStorage(): Storage & BoundedStorageReader {
     R2_ACCESS_KEY_ID: env.R2_ACCESS_KEY_ID,
     R2_SECRET_ACCESS_KEY: env.R2_SECRET_ACCESS_KEY,
     R2_PUBLIC_BASE: env.R2_PUBLIC_BASE,
-    R2_URL_SIGNING_SECRET: env.R2_URL_SIGNING_SECRET,
   }
   const missing = Object.entries(required).filter(([, value]) => !value).map(([name]) => name)
   if (missing.length) throw new Error(`native R2 storage configuration missing: ${missing.join(', ')}`)
@@ -401,8 +382,6 @@ function buildStorage(): Storage & BoundedStorageReader {
       accessKeyId: env.R2_ACCESS_KEY_ID,
       secretAccessKey: env.R2_SECRET_ACCESS_KEY,
       publicBase: env.R2_PUBLIC_BASE,
-      signingSecret: env.R2_URL_SIGNING_SECRET,
-      urlTtl: env.R2_URL_TTL_SECONDS,
   })
 }
 

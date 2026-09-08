@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { CalendarView } from '@/features/calendar/components/CalendarView'
 import { CourseSourceDrive } from '@/features/knowledge/components/CourseSourceDrive'
-import { PersonalSourceDrive } from '@/features/knowledge/components/PersonalSourceDrive'
 import { userFacingError } from '@/lib/userFacingError'
 import type { LearningCourse, LearningSpace } from '../contracts'
 import { CourseSettingsSection } from './CourseSettingsSection'
@@ -12,18 +11,14 @@ import type { LearningDashboardSection } from './navigation'
 import { TeacherOverviewDashboard } from './TeacherOverviewDashboard'
 import { useLearningDashboardData } from './useLearningDashboardData'
 
-export function LearningDashboardPanel({ space, spaces, section, onOpenLearningSpace }: {
+export function LearningDashboardPanel({ space, section }: {
   space: LearningSpace
   spaces: LearningSpace[]
   section: LearningDashboardSection
   onOpenLearningSpace(projectId: string): void
 }) {
   if (section === 'calendar') return <CalendarView />
-  if (section === 'resources') {
-    return space.projectKind === 'PERSONAL_LEARNING'
-      ? <PersonalSourceDrive space={space} spaces={spaces} onOpenLearningSpace={onOpenLearningSpace} />
-      : <CourseSourceDrive space={space} />
-  }
+  if (section === 'resources') return <CourseSourceDrive space={space} />
   if (space.perspective === 'teacher') {
     if (section === 'settings') {
       return <CourseSettingsSection space={space} />

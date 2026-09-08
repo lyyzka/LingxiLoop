@@ -9,8 +9,8 @@ import type { GatewayAssertion } from '../auth.js'
 import { pool } from '../db/pool.js'
 import { withTransaction } from '../db/transaction.js'
 import { hashInvitationToken } from '../http/invitation-token.js'
-import { provisionPersonalWorkspace } from '../modules/companies/public.js'
-import { ensureTeacherPlans } from '../modules/entitlements/public.js'
+import { seedEducationWorkspace } from './_helpers.js'
+import { ensureEducationPlan } from '../modules/entitlements/public.js'
 import { ensureSchemaOnce, resetAllTables, teardownAll } from './_helpers.js'
 
 const INVITER_ID = 'u-registration-inviter'
@@ -56,16 +56,16 @@ beforeEach(async () => {
   await resetAllTables()
   companyId = await withTransaction(pool, async (db) => {
     await db.query(`INSERT INTO users(id,email,display_name,email_verified_at) VALUES($1,'owner@example.com','Owner',NOW())`, [INVITER_ID])
-    return (await provisionPersonalWorkspace(db, INVITER_ID)).companyId
+    return (await seedEducationWorkspace(db, INVITER_ID)).companyId
   })
-  await pool.query(`INSERT INTO company_invitations(token_hash,company_id,invited_by,email,role,max_uses,expires_at) VALUES($1,$2,$3,'new@example.com','MEMBER',1,NOW()+INTERVAL '1 day')`, [hashInvitationToken(TOKEN), companyId, INVITER_ID])
+  await pool.query(`INSERT INTO company_invitations(token_hash,company_id,invited_by,email,role,max_uses,expires_at) VALUES($1,$2,$3,'new@example.com','TEACHER',1,NOW()+INTERVAL '1 day')`, [hashInvitationToken(TOKEN), companyId, INVITER_ID])
 })
 
 after(async () => teardownAll(server))
 
 test('[integration] registration rejects ordinary assertions, mismatched subjects, expired signatures and replay', async () => {
   const url = `${baseUrl}/api/internal/registration/provision`
-  const init = { method: 'POST', body: JSON.stringify({ authUserId: 'verified-user', email: 'verified@example.com', name: 'Verified' }) }
+  const init = { method: 'POST', body: JSON.stringify({ authUserId: 'verified-user', email: 'new@example.com', name: 'Verified', inviteToken: TOKEN, inviteKind: 'company' }) }
   for (const overrides of [
     { service: undefined, appUserId: INVITER_ID }, { authUserId: 'different-user' },
     { timestamp: Date.now() - 31_000 }, { method: 'GET' },
@@ -93,47 +93,24 @@ test('[integration] invitation validation and provision are transactional and id
   const one = await first.json() as { appUserId: string }
   const two = await second.json() as { appUserId: string }
   assert.deepEqual(two, one)
-  const state = await pool.query<{ personal: number; invited: number; use_count: number }>(`SELECT
-    (SELECT COUNT(*)::int FROM companies WHERE type='PERSONAL' AND personal_owner_user_id=$1) AS personal,
+  const state = await pool.query<{ invited: number; use_count: number }>(`SELECT
     (SELECT COUNT(*)::int FROM company_memberships WHERE company_id=$2 AND user_id=$1 AND status='ACTIVE') AS invited,
     (SELECT use_count FROM company_invitations WHERE token_hash=$3) AS use_count`, [one.appUserId, companyId, hashInvitationToken(TOKEN)])
-  assert.deepEqual(state.rows[0], { personal: 1, invited: 1, use_count: 1 })
+  assert.deepEqual(state.rows[0], { invited: 1, use_count: 1 })
 })
 
-test('[integration] ordinary provisioning is invitation-free and idempotent', async () => {
-  const body = JSON.stringify({ authUserId: 'auth-personal', email: 'personal@example.com', name: 'Personal User' })
-  const first = await registrationFetch(`${baseUrl}/api/internal/registration/provision`, { method: 'POST', headers: { 'content-type': 'application/json' }, body })
-  const second = await registrationFetch(`${baseUrl}/api/internal/registration/provision`, { method: 'POST', headers: { 'content-type': 'application/json' }, body })
-  assert.equal(first.status, 200)
-  assert.equal(second.status, 200)
-  const one = await first.json() as { appUserId: string }
-  assert.deepEqual(await second.json(), one)
-  const state = await pool.query<{
-    personal: number; courses: number; agents: number; dms: number; rooms: number; project_bound: number
-  }>(`SELECT
-    (SELECT COUNT(*)::int FROM companies WHERE type='PERSONAL' AND personal_owner_user_id=$1) AS personal,
-    (SELECT COUNT(*)::int FROM project_memberships WHERE user_id=$1 AND role='STUDENT') AS courses,
-    (SELECT COUNT(*)::int FROM participants participant
-      JOIN companies company ON company.id=participant.company_id
-      WHERE company.personal_owner_user_id=$1 AND participant.kind='agent' AND participant.preset_key IS NOT NULL) AS agents,
-    (SELECT COUNT(*)::int FROM conversations conversation
-      JOIN companies company ON company.id=conversation.company_id
-      WHERE company.personal_owner_user_id=$1 AND conversation.preset_key LIKE 'dm:%') AS dms,
-    (SELECT COUNT(*)::int FROM conversations conversation
-      JOIN companies company ON company.id=conversation.company_id
-      WHERE company.personal_owner_user_id=$1 AND conversation.preset_key LIKE 'room:%') AS rooms,
-    (SELECT COUNT(*)::int FROM conversations conversation
-      JOIN projects project ON project.id=conversation.project_id AND project.company_id=conversation.company_id
-      JOIN companies company ON company.id=conversation.company_id
-      WHERE company.personal_owner_user_id=$1 AND project.is_default=TRUE
-        AND conversation.preset_key IS NOT NULL) AS project_bound`, [one.appUserId])
-  assert.deepEqual(state.rows[0], { personal: 1, courses: 0, agents: 6, dms: 6, rooms: 2, project_bound: 8 })
+test('[integration] registration without an invitation cannot create business state', async () => {
+  const response = await registrationFetch(`${baseUrl}/api/internal/registration/provision`, {
+    method: 'POST', body: JSON.stringify({ authUserId: 'uninvited', email: 'uninvited@example.com', name: 'Uninvited' }),
+  })
+  assert.equal(response.status,403)
+  assert.equal((await pool.query(`SELECT 1 FROM users WHERE email='uninvited@example.com'`)).rowCount,0)
 })
 
 test('[integration] project invitation is redeemed during provisioning', async () => {
   const projectToken = 'registration-project-invite'
-  await ensureTeacherPlans(pool)
-  await pool.query(`INSERT INTO projects(id,company_id,kind,plan_id,name,status,created_by) VALUES('project-registration',$1,'TEACHING','plan-teacher-free','Registration Course','ACTIVE',$2)`, [companyId, INVITER_ID])
+  await ensureEducationPlan(pool)
+  await pool.query(`INSERT INTO projects(id,company_id,kind,plan_id,name,status,created_by) VALUES('project-registration',$1,'TEACHING','plan-education','Registration Course','ACTIVE',$2)`, [companyId, INVITER_ID])
   await pool.query(`INSERT INTO courses(id,company_id,project_id,created_by) VALUES('course-registration',$1,'project-registration',$2)`, [companyId, INVITER_ID])
   await pool.query(`INSERT INTO project_invitations(token_hash,project_id,company_id,invited_by,email,max_uses,expires_at) VALUES($1,'project-registration',$2,$3,'student@example.com',1,NOW()+INTERVAL '1 day')`, [hashInvitationToken(projectToken), companyId, INVITER_ID])
 

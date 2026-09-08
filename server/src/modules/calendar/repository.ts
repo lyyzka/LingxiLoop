@@ -1,4 +1,5 @@
 import type { Queryable } from '../../db/queryable.js'
+import { createPermissionService } from '../access/public.js'
 import type {
   CalendarEventKind,
   CalendarStatus,
@@ -90,7 +91,7 @@ function visibilityClause(userParameter: number, companyParameter: number): stri
         SELECT 1 FROM company_memberships membership
          WHERE membership.company_id = $${companyParameter}
            AND membership.user_id = $${userParameter}
-           AND membership.status='ACTIVE' AND membership.role='OWNER'
+           AND membership.status='ACTIVE' AND membership.is_admin
       )
       AND (
         created_by IN (
@@ -310,6 +311,7 @@ export async function claimCalendarDispatch(
   db: Queryable,
   args: { id: string; eventId: string; companyId: string; scheduledFor: Date },
 ): Promise<boolean> {
+  if (!await calendarEventAuthorized(db, args.companyId, args.eventId)) return false
   const result = await db.query(
     `INSERT INTO calendar_dispatches (id, event_id, company_id, scheduled_for, status)
      VALUES ($1,$2,$3,$4,'pending')
@@ -386,7 +388,10 @@ export async function listCalendarReminderRecipients(
      )
      SELECT recipient.user_id, users.email
        FROM recipient_ids recipient
-       LEFT JOIN users ON users.id = recipient.user_id`,
+       JOIN users ON users.id = recipient.user_id
+       JOIN company_memberships membership ON membership.user_id=recipient.user_id AND membership.company_id=$1
+        AND membership.status='ACTIVE' AND membership.ended_at IS NULL
+      WHERE users.departed_at IS NULL AND users.suspended_at IS NULL AND users.deleted_at IS NULL`,
     [args.companyId, args.creatorId, args.assigneeId],
   )
   return rows
@@ -402,6 +407,7 @@ export async function claimCalendarReminder(
     channel: ReminderChannel
   },
 ): Promise<string[] | null> {
+  if (!await calendarEventAuthorized(db, args.companyId, args.eventId)) return null
   const { rows } = await db.query<{ delivered_legs: string[] }>(
     `INSERT INTO calendar_reminders
        (id, event_id, company_id, scheduled_for, channel, recipients, status)
@@ -454,6 +460,17 @@ export async function listActiveCalendarEvents(db: Queryable): Promise<CalendarE
     `SELECT ${CALENDAR_SELECT} FROM calendar_events WHERE status = 'active'`,
   )
   return rows
+}
+
+async function calendarEventAuthorized(db: Queryable, companyId: string, eventId: string): Promise<boolean> {
+  const { rows } = await db.query<{ created_by: string }>(`SELECT event.created_by FROM calendar_events event
+    JOIN users principal ON principal.id=event.created_by
+    WHERE event.id=$1 AND event.company_id=$2 AND event.status='active'
+      AND principal.departed_at IS NULL AND principal.suspended_at IS NULL AND principal.deleted_at IS NULL
+      AND (principal.access_revoked_at IS NULL OR principal.access_revoked_at<event.created_at)`, [eventId,companyId])
+  return Boolean(rows[0] && (await createPermissionService(db).can({ actorUserId: rows[0].created_by,
+    companyId, action: 'calendar:read', resource: { type: 'calendar_event', id: eventId },
+  })).allowed)
 }
 
 export async function markCalendarEventDone(

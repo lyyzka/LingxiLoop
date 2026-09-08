@@ -210,8 +210,7 @@ export function LearnerOverviewDashboard({
     return <ResourceSkeleton variant="cards" count={8} label="正在汇总学习证据看板" />
   }
 
-  const personal = course.projectKind === 'PERSONAL_LEARNING'
-  const missionLabel = personal ? '学习计划' : '学习任务'
+  const missionLabel = '学习任务'
 
   return (
     <div className="grid gap-3 @min-[48rem]/learning-grid:gap-6 @min-[64rem]/learning-grid:grid-cols-12">
@@ -251,7 +250,6 @@ export function LearnerOverviewDashboard({
       >
         <MissionSection
           missions={model.missions.map((item) => item.mission)}
-          personal={personal}
           showStepEvidence
         />
       </DetailCard>
@@ -334,7 +332,7 @@ export function LearnerOverviewDashboard({
             </div>
           ) : (
             <EmptyPreview>
-              {personal ? '个人学习区当前没有课程活动。' : '课程还没有已发布的活动。'}
+              课程还没有已发布的活动。
             </EmptyPreview>
           )
         }

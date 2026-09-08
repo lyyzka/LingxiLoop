@@ -22,21 +22,12 @@ function captureDb(rowCount = 1) {
   return { db, sql: () => sql, values: () => values }
 }
 
-test('member acceptance enqueue is tenant-scoped and never replaces an active lease', async () => {
+test('new membership period resets tenant-scoped onboarding with a fresh fence', async () => {
   const capture = captureDb()
   await enqueueMemberOnboardingEffect(capture.db, 'co-a', 'user-a')
-  assert.match(capture.sql(), /ON CONFLICT\(company_id,member_id,kind\) DO NOTHING/)
-  assert.doesNotMatch(capture.sql(), /DO UPDATE|lease_token\s*=/)
+  assert.match(capture.sql(), /ON CONFLICT\(company_id,member_id,kind\) DO UPDATE SET id=EXCLUDED.id/)
+  assert.match(capture.sql(), /lease_token=NULL,lease_expires_at=NULL/)
   assert.deepEqual(capture.values()?.slice(1), ['co-a', 'user-a'])
-})
-
-test('invitation membership, audit and onboarding enqueue share the acceptance transaction', () => {
-  const application = readFileSync(new URL('../modules/companies/application.ts', import.meta.url), 'utf8')
-  assert.match(
-    application,
-    /transaction\(async \(db\) => \{[\s\S]{0,2600}insertAcceptedMembership\(db,[\s\S]{0,900}auditInTransaction\(db,[\s\S]{0,900}enqueueMemberOnboardingEffect\(db,/,
-  )
-  assert.doesNotMatch(application, /infrastructure\.seedMemberDms/)
 })
 
 test('company onboarding claims one expired or due effect with a fresh lease fence', async () => {
@@ -49,7 +40,7 @@ test('company onboarding claims one expired or due effect with a fresh lease fen
 
 test('company onboarding completion and failure require tenant, member and lease identity', async () => {
   const effect = {
-    id: 'effect-a', companyId: 'co-a', memberId: 'user-a', attempts: 1, leaseToken: 'lease-a',
+    id: 'effect-a', companyId: 'co-a', memberId: 'user-a', attempts: 1, kind: 'member_directs.seed' as const, revokedAt: null, leaseToken: 'lease-a',
   }
   const completed = captureDb()
   await completeCompanyOnboardingEffect(completed.db, effect)

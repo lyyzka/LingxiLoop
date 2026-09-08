@@ -9,11 +9,11 @@ import type { ResolvedAccessContext } from '../modules/access/public.js'
 const ownerContext: ResolvedAccessContext = {
   actorUserId: 'owner',
   platformAdmin: false,
-  company: { id: 'company', type: 'PERSONAL', status: 'ACTIVE' },
-  companyMembership: { role: 'OWNER', status: 'ACTIVE' },
-  project: { id: 'project', kind: 'PERSONAL_LEARNING', status: 'ACTIVE' },
-  projectMembership: { role: 'OWNER', status: 'ACTIVE' },
-  effectivePlan: { id: 'plan', code: 'PERSONAL_FREE' },
+  company: { id: 'company', type: 'EDUCATION', status: 'ACTIVE' },
+  companyMembership: { role: 'TEACHER', isAdmin: true, status: 'ACTIVE' },
+  project: { id: 'project', kind: 'TEACHING', status: 'ACTIVE' },
+  projectMembership: { role: 'TEACHER', status: 'ACTIVE' },
+  effectivePlan: { id: 'plan', code: 'EDUCATION' },
   entitlements: { has: () => true, boolean: () => true, number: () => null, string: () => null },
 }
 
@@ -66,7 +66,7 @@ test('platform administrators bypass tenant membership but not entitlements or r
     ...ownerContext,
     actorUserId: 'platform-admin',
     platformAdmin: true,
-    companyMembership: { role: 'MEMBER', status: 'ACTIVE' },
+    companyMembership: { role: 'STUDENT', isAdmin: false, status: 'ACTIVE' },
     projectMembership: { role: 'STUDENT', status: 'ACTIVE' },
   }
   const privateConversation = {
@@ -115,7 +115,7 @@ test('ResourceAccessMode centralizes Project lifecycle restrictions', () => {
     ...ownerContext,
     company: {
       ...ownerContext.company,
-      type: kind === 'INSTITUTIONAL_COURSE' ? 'EDUCATION' : 'PERSONAL',
+      type: 'EDUCATION',
     },
     project: { ...ownerContext.project!, kind, status },
   })
@@ -124,10 +124,9 @@ test('ResourceAccessMode centralizes Project lifecycle restrictions', () => {
     resourceAccessMode(withStatus('ACTIVE')),
     resourceAccessMode(withStatus('COURSE_ENDED')),
     resourceAccessMode(withStatus('READ_ONLY')),
-    resourceAccessMode(withStatus('TRANSFER_PENDING')),
     resourceAccessMode(withStatus('RETENTION', 'INSTITUTIONAL_COURSE')),
     resourceAccessMode(withStatus('DELETED', 'INSTITUTIONAL_COURSE')),
-  ], ['MANAGER_ONLY', 'READ_WRITE', 'CLOSE_OUT', 'READ_ONLY', 'TRANSFER_PENDING', 'RETENTION', 'DENY'])
+  ], ['MANAGER_ONLY', 'READ_WRITE', 'CLOSE_OUT', 'READ_ONLY', 'RETENTION', 'DENY'])
 })
 
 test('invalid Company and Project lifecycle contexts fail closed with their owning state denial', () => {
@@ -146,30 +145,29 @@ test('invalid Company and Project lifecycle contexts fail closed with their owni
     ResolvedAccessContext,
     'COMPANY_STATE_DENIED' | 'PROJECT_STATE_DENIED',
   ]> = [
-    ['PERSONAL/TRIAL', context('PERSONAL', 'TRIAL', 'PERSONAL_LEARNING', 'ACTIVE'), 'COMPANY_STATE_DENIED'],
+    ['PERSONAL/TRIAL', context('PERSONAL' as never, 'TRIAL', 'PERSONAL_LEARNING' as never, 'ACTIVE'), 'COMPANY_STATE_DENIED'],
     [
       'EDUCATION/USER_DELETION_PENDING',
-      context('EDUCATION', 'USER_DELETION_PENDING', 'INSTITUTIONAL_COURSE', 'ACTIVE'),
+      context('EDUCATION', 'USER_DELETION_PENDING' as never, 'INSTITUTIONAL_COURSE', 'ACTIVE'),
       'COMPANY_STATE_DENIED',
     ],
-    ['PERSONAL_LEARNING/DRAFT', context('PERSONAL', 'ACTIVE', 'PERSONAL_LEARNING', 'DRAFT'), 'PROJECT_STATE_DENIED'],
-    ['TEACHING/RETENTION', context('PERSONAL', 'ACTIVE', 'TEACHING', 'RETENTION'), 'PROJECT_STATE_DENIED'],
+    ['PERSONAL_LEARNING/DRAFT', context('EDUCATION', 'ACTIVE', 'PERSONAL_LEARNING' as never, 'DRAFT'), 'PROJECT_STATE_DENIED'],
+    ['TEACHING/RETENTION', context('EDUCATION', 'ACTIVE', 'TEACHING', 'RETENTION'), 'PROJECT_STATE_DENIED'],
     [
       'INSTITUTIONAL_COURSE/TRANSFER_PENDING',
-      context('EDUCATION', 'ACTIVE', 'INSTITUTIONAL_COURSE', 'TRANSFER_PENDING'),
+      context('EDUCATION', 'ACTIVE', 'INSTITUTIONAL_COURSE', 'TRANSFER_PENDING' as never),
       'PROJECT_STATE_DENIED',
     ],
     [
       'PERSONAL/INSTITUTIONAL_COURSE',
-      context('PERSONAL', 'ACTIVE', 'INSTITUTIONAL_COURSE', 'ACTIVE'),
-      'PROJECT_STATE_DENIED',
+      context('PERSONAL' as never, 'ACTIVE', 'INSTITUTIONAL_COURSE', 'ACTIVE'),
+      'COMPANY_STATE_DENIED',
     ],
     [
       'EDUCATION/PERSONAL_LEARNING',
-      context('EDUCATION', 'ACTIVE', 'PERSONAL_LEARNING', 'ACTIVE'),
+      context('EDUCATION', 'ACTIVE', 'PERSONAL_LEARNING' as never, 'ACTIVE'),
       'PROJECT_STATE_DENIED',
     ],
-    ['EDUCATION/TEACHING', context('EDUCATION', 'ACTIVE', 'TEACHING', 'ACTIVE'), 'PROJECT_STATE_DENIED'],
   ]
 
   for (const [label, accessContext, denial] of cases) {
@@ -185,16 +183,15 @@ test('invalid Company and Project lifecycle contexts fail closed with their owni
 test('close-out, transfer, read-only, and retention policies fail closed by action', () => {
   const context = (
     status: NonNullable<ResolvedAccessContext['project']>['status'],
-    role: 'OWNER' | 'STUDENT' = 'OWNER',
+    role: 'TEACHER' | 'STUDENT' = 'TEACHER',
   ): ResolvedAccessContext => {
-    const transfer = status === 'TRANSFER_PENDING'
     return {
       ...ownerContext,
-      company: { ...ownerContext.company, type: transfer ? 'PERSONAL' : 'EDUCATION' },
-      companyMembership: { role: role === 'STUDENT' ? 'MEMBER' : 'OWNER', status: 'ACTIVE' },
+      company: { ...ownerContext.company, type: 'EDUCATION' },
+      companyMembership: { role, isAdmin: false, status: 'ACTIVE' },
       project: {
         ...ownerContext.project!,
-        kind: transfer ? 'TEACHING' : 'INSTITUTIONAL_COURSE',
+        kind: 'INSTITUTIONAL_COURSE',
         status,
       },
       projectMembership: { role, status: 'ACTIVE' },
@@ -207,18 +204,6 @@ test('close-out, transfer, read-only, and retention policies fail closed by acti
   assert.equal(evaluatePolicy(
     { actorUserId: 'owner', action: 'learning:review', projectId: 'project' },
     context('COURSE_ENDED'), null,
-  ), 'ALLOWED')
-  assert.equal(evaluatePolicy(
-    { actorUserId: 'owner', action: 'project_member:add', projectId: 'project' },
-    context('TRANSFER_PENDING'), null,
-  ), 'PROJECT_STATE_DENIED')
-  assert.equal(evaluatePolicy(
-    { actorUserId: 'owner', action: 'project:request_transfer', projectId: 'project' },
-    context('TRANSFER_PENDING'), null,
-  ), 'ALLOWED')
-  assert.equal(evaluatePolicy(
-    { actorUserId: 'student', action: 'learning:submit', projectId: 'project' },
-    context('TRANSFER_PENDING', 'STUDENT'), null,
   ), 'ALLOWED')
   assert.equal(evaluatePolicy(
     { actorUserId: 'student', action: 'project:read', projectId: 'project' },
@@ -245,9 +230,7 @@ test('retention and archived institutional reads require a Company manager or Pr
     ['ACTIVE', 'ARCHIVED', 'PROJECT_STATE_DENIED'],
   ]
   const allowedRoles: Array<[CompanyRole, ProjectRole]> = [
-    ['OWNER', 'TEACHER'],
-    ['ADMIN', 'TEACHER'],
-    ['MEMBER', 'OWNER'],
+    ['TEACHER', 'TEACHER'],
   ]
   const decide = (
     companyStatus: CompanyStatus,
@@ -258,7 +241,7 @@ test('retention and archived institutional reads require a Company manager or Pr
     const context: ResolvedAccessContext = {
       ...ownerContext,
       company: { ...ownerContext.company, type: 'EDUCATION', status: companyStatus },
-      companyMembership: { role: companyRole, status: 'ACTIVE' },
+      companyMembership: { role: companyRole, isAdmin: false, status: 'ACTIVE' },
       project: { ...ownerContext.project!, kind: 'INSTITUTIONAL_COURSE', status: projectStatus },
       projectMembership: { role: projectRole, status: 'ACTIVE' },
     }
@@ -271,7 +254,7 @@ test('retention and archived institutional reads require a Company manager or Pr
 
   for (const [companyStatus, projectStatus, denial] of restrictedStates) {
     const label = `${companyStatus}/${projectStatus}`
-    assert.equal(decide(companyStatus, projectStatus, 'MEMBER', 'TEACHER'), denial, label)
+    assert.equal(decide(companyStatus, projectStatus, 'STUDENT', 'STUDENT'), denial, label)
     for (const [companyRole, projectRole] of allowedRoles) {
       assert.equal(decide(companyStatus, projectStatus, companyRole, projectRole), 'ALLOWED', label)
     }
@@ -282,7 +265,7 @@ test('ordinary teachers remain managers in MANAGER_ONLY Project contexts', () =>
   const context: ResolvedAccessContext = {
     ...ownerContext,
     company: { ...ownerContext.company, type: 'EDUCATION' },
-    companyMembership: { role: 'MEMBER', status: 'ACTIVE' },
+    companyMembership: { role: 'STUDENT', isAdmin: false, status: 'ACTIVE' },
     project: { ...ownerContext.project!, kind: 'INSTITUTIONAL_COURSE', status: 'DRAFT' },
     projectMembership: { role: 'TEACHER', status: 'ACTIVE' },
   }
@@ -294,22 +277,8 @@ test('ordinary teachers remain managers in MANAGER_ONLY Project contexts', () =>
   ), 'ALLOWED')
 })
 
-test('Personal Project owners can submit learning without becoming teaching-course learners', () => {
-  assert.equal(evaluatePolicy(
-    { actorUserId: 'owner', action: 'learning:submit', projectId: 'project' },
-    ownerContext,
-    null,
-  ), 'ALLOWED')
-
-  const teachingOwner: ResolvedAccessContext = {
-    ...ownerContext,
-    project: { ...ownerContext.project!, kind: 'TEACHING' },
-  }
-  assert.equal(evaluatePolicy(
-    { actorUserId: 'owner', action: 'learning:submit', projectId: 'project' },
-    teachingOwner,
-    null,
-  ), 'ROLE_NOT_ALLOWED')
+test('teachers cannot submit as students', () => {
+  assert.equal(evaluatePolicy({ actorUserId: 'owner', action: 'learning:submit', projectId: 'project' }, ownerContext, null), 'ROLE_NOT_ALLOWED')
 })
 
 test('Company and Project lifecycle restrictions are both enforced', () => {
@@ -323,4 +292,12 @@ test('Company and Project lifecycle restrictions are both enforced', () => {
     { actorUserId: 'owner', action: 'project:read', projectId: 'project' },
     context, null,
   ), 'PROJECT_STATE_DENIED')
+})
+
+test('company administrators manage course groups but do not inherit private email or direct-message membership', () => {
+  const resource = { companyId:'company',projectId:'project',createdBy:null,conversationMembers:['someone-else'],leaderId:null,status:null }
+  for (const conversationKind of ['email','direct']) {
+    assert.equal(evaluatePolicy({actorUserId:'owner',action:'conversation:read',companyId:'company'},ownerContext,{...resource,conversationKind}),'RESOURCE_MEMBERSHIP_REQUIRED')
+  }
+  assert.equal(evaluatePolicy({actorUserId:'owner',action:'conversation:read',companyId:'company'},ownerContext,{...resource,conversationKind:'group'}),'ALLOWED')
 })

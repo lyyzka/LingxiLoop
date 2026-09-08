@@ -13,17 +13,19 @@ import { assignedHandoff } from '../modules/agents/index.js'
 
 type Work = Omit<WorkItem, 'leaseToken'>
 
-export async function loadRuntimeBinding(work: Pick<Work, 'tenantId' | 'principalId' | 'agentId' | 'sessionId'>) {
+export async function loadRuntimeBinding(work: Pick<Work, 'tenantId' | 'principalId' | 'agentId' | 'sessionId'> & { createdAt?: string }) {
   if (!work.principalId) throw new NoEffectError('original human is required', 'forbidden')
   const { rows } = await pool.query<{ name: string; role: string; system_prompt: string; capabilities: string[]; teacher_managed: boolean; channel_type: number }>(
     `SELECT agent.name,agent.role,agent.system_prompt,agent.capabilities,(binding.profile->>'channelType')::integer AS channel_type,
       EXISTS(SELECT 1 FROM learning_project_teacher_agents teacher WHERE teacher.company_id=agent.company_id AND teacher.agent_id=agent.id) AS teacher_managed
     FROM participants agent JOIN participants human ON human.company_id=agent.company_id
+    JOIN users principal ON principal.id=human.id AND principal.deleted_at IS NULL AND principal.suspended_at IS NULL
+      AND principal.departed_at IS NULL AND (principal.access_revoked_at IS NULL OR principal.access_revoked_at<COALESCE($5::timestamptz,NOW()))
     JOIN im_channel_bindings binding ON binding.company_id=agent.company_id AND binding.channel_id=$4
     WHERE agent.company_id=$1 AND agent.id=$2 AND agent.kind='agent' AND agent.departed_at IS NULL
       AND human.id=$3 AND human.kind='human' AND human.departed_at IS NULL
       AND binding.profile->'members' ? agent.id AND binding.profile->'members' ? human.id`,
-    [work.tenantId,work.agentId,work.principalId,work.sessionId])
+    [work.tenantId,work.agentId,work.principalId,work.sessionId,work.createdAt ?? null])
   const row = rows[0]
   if (!row || ![1,2].includes(row.channel_type)) throw new NoEffectError('agent or original human membership was revoked', 'forbidden')
   await permissionService.assertCan({ actorUserId: work.principalId, companyId: work.tenantId,
