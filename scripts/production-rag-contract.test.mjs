@@ -266,7 +266,8 @@ test('CI selects checks and image publishing by component', () => {
   assert.equal(testRunner.server, true)
 
   const deployment = computeScope({ deployment: true })
-  assert.deepEqual(deployment.images, [])
+  assert.deepEqual(deployment.images.map(({ manifest }) => manifest), ['server'])
+  assert.equal(deployment.web, true)
   assert.equal(deployment.deploy_contract, true)
 
   assert.equal(computeScope({}, 'gateway').packages, 'gateway')

@@ -41,8 +41,9 @@ export function computeScope(changed = {}, manual = '') {
     controlMigrations = false
     release = manual === 'release'
   } else {
-    web = enabled('web') || enabled('sharedFrontend') || enabled('testRunner')
-    webImage = enabled('web') || enabled('sharedFrontend')
+    deployment = enabled('deployment')
+    web = enabled('web') || enabled('sharedFrontend') || enabled('testRunner') || deployment
+    webImage = enabled('web') || enabled('sharedFrontend') || deployment
     admin = enabled('admin') || enabled('sharedFrontend') || enabled('testRunner')
     control = enabled('control') || enabled('sharedFrontend')
     server = enabled('server') || enabled('testRunner')
@@ -52,7 +53,6 @@ export function computeScope(changed = {}, manual = '') {
     openNotebook = enabled('openNotebook')
     wukongim = enabled('wukongim')
     gateway = enabled('gateway')
-    deployment = enabled('deployment')
     controlMigrations = enabled('controlMigrations')
     release = enabled('release')
   }
