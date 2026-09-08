@@ -43,7 +43,7 @@ const common = () => ({ database: pool,
     modelBudget: {
       maxModelCalls: positiveInteger('AGENT_OS_MAX_MODEL_CALLS', 128),
       maxTokens: positiveInteger('AGENT_OS_MAX_MODEL_TOKENS', 1_000_000),
-      maxCostMicros: positiveInteger('AGENT_OS_MAX_MODEL_COST_MICROS', 10_000_000),
+      ...(env.NODE_ENV === 'production' || process.env.AGENT_OS_MAX_MODEL_COST_MICROS?.trim() ? { maxCostMicros: positiveInteger('AGENT_OS_MAX_MODEL_COST_MICROS', 10_000_000) } : {}),
       wallClockMs: positiveInteger('AGENT_OS_MAX_WORK_MS', 30 * 60_000),
       inputCostMicrosPerMillion: modelRate('AGENT_OS_INPUT_COST_MICROS_PER_MILLION'),
       outputCostMicrosPerMillion: modelRate('AGENT_OS_OUTPUT_COST_MICROS_PER_MILLION'),
