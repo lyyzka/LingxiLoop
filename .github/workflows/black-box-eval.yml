@@ -4,6 +4,12 @@ on:
     types: [labeled]
   workflow_dispatch:
     inputs:
+      evaluation_suite:
+        description: Select one suite; semantic tool suites use fixtures and one Judge call per case
+        required: true
+        default: education-autonomy
+        type: choice
+        options: [ci-smoke, tool-initiative, tool-boundaries, tool-recovery, education-autonomy]
       baseline_file:
         description: Optional reviewed baseline JSON; without it the release gate remains blocked
         required: false
@@ -11,6 +17,10 @@ on:
         type: string
   workflow_call:
     inputs:
+      evaluation_suite:
+        required: false
+        default: ci-smoke
+        type: string
       baseline_file:
         required: false
         default: ''
@@ -19,7 +29,7 @@ on:
       EVAL_CANDIDATE_API_KEY:
         required: true
       EVAL_JUDGE_API_KEY:
-        required: true
+        required: false
 
 concurrency:
   group: black-box-live-${{ github.ref }}
@@ -31,7 +41,7 @@ jobs:
   release-gate:
     if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.event.label.name == 'run-live-eval')
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
@@ -41,14 +51,21 @@ jobs:
           cache-dependency-path: eval/package-lock.json
       - run: npm ci --prefix eval
       - run: npm --prefix eval run check && npm --prefix eval test
-      - name: Evaluate production Candidate with independent Judge
+      - name: Evaluate selected Candidate suite
         working-directory: eval
         shell: bash
         run: |
-          args=(run --suite suites/ci-smoke.v1.json --dataset datasets/ci-smoke.v1.json --revision "$GITHUB_SHA")
+          case "$EVAL_SUITE" in
+            ci-smoke) version=1 ;;
+            tool-initiative|tool-boundaries|tool-recovery) version=2 ;;
+            education-autonomy) version=3 ;;
+            *) echo 'Unknown evaluation suite'; exit 2 ;;
+          esac
+          args=(run --suite "suites/$EVAL_SUITE.v$version.json" --dataset "datasets/$EVAL_SUITE.v$version.json" --revision "$GITHUB_SHA")
           if [[ -n "$BASELINE_FILE" ]]; then args+=(--baseline-file "../$BASELINE_FILE"); fi
           npm run eval -- "${args[@]}"
         env:
+          EVAL_SUITE: ${{ inputs.evaluation_suite || 'ci-smoke' }}
           BASELINE_FILE: ${{ inputs.baseline_file || vars.EVAL_BASELINE_FILE }}
           EVAL_CANDIDATE_BASE_URL: ${{ vars.EVAL_CANDIDATE_BASE_URL }}
           EVAL_CANDIDATE_MODEL: ${{ vars.EVAL_CANDIDATE_MODEL }}
@@ -57,13 +74,15 @@ jobs:
           EVAL_CANDIDATE_OUTPUT_CNY_PER_MILLION: ${{ vars.EVAL_CANDIDATE_OUTPUT_CNY_PER_MILLION }}
           EVAL_CANDIDATE_MAX_TOKENS: ${{ vars.EVAL_CANDIDATE_MAX_TOKENS }}
           EVAL_CANDIDATE_TIMEOUT_MS: ${{ vars.EVAL_CANDIDATE_TIMEOUT_MS }}
-          EVAL_JUDGE_BASE_URL: ${{ vars.EVAL_JUDGE_BASE_URL }}
-          EVAL_JUDGE_MODEL: ${{ vars.EVAL_JUDGE_MODEL }}
+          EVAL_CANDIDATE_ENABLE_THINKING: ${{ vars.EVAL_CANDIDATE_ENABLE_THINKING }}
+          EVAL_JUDGE_BASE_URL: https://api.siliconflow.cn/v1
+          EVAL_JUDGE_MODEL: Pro/moonshotai/Kimi-K2.6
           EVAL_JUDGE_API_KEY: ${{ secrets.EVAL_JUDGE_API_KEY }}
-          EVAL_JUDGE_INPUT_CNY_PER_MILLION: ${{ vars.EVAL_JUDGE_INPUT_CNY_PER_MILLION }}
-          EVAL_JUDGE_OUTPUT_CNY_PER_MILLION: ${{ vars.EVAL_JUDGE_OUTPUT_CNY_PER_MILLION }}
-          EVAL_JUDGE_MAX_TOKENS: ${{ vars.EVAL_JUDGE_MAX_TOKENS }}
-          EVAL_JUDGE_TIMEOUT_MS: ${{ vars.EVAL_JUDGE_TIMEOUT_MS }}
+          EVAL_JUDGE_INPUT_CNY_PER_MILLION: '6.5'
+          EVAL_JUDGE_OUTPUT_CNY_PER_MILLION: '27'
+          EVAL_JUDGE_MAX_TOKENS: '512'
+          EVAL_JUDGE_TIMEOUT_MS: '180000'
+          EVAL_JUDGE_ENABLE_THINKING: 'false'
       - uses: actions/upload-artifact@v4
         id: artifacts
         if: always() && hashFiles('eval/.state/reports/*') != ''

@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { EvaluationError, hash, id, manifestSchema, sampleSchema } from './contracts.js'
 import { buildReport } from './report.js'
+import { summarizeGrades } from './graders.js'
 import type { Store } from './store.js'
 
 const portableSchema = z.object({ schemaVersion: z.literal(2), name: id, reason: z.string().min(1).max(500),
@@ -24,8 +25,8 @@ export function importBaseline(store: Store, input: unknown): string {
       if (!config || seen.has(g.id) || g.passed !== (g.score >= config.threshold)) throw new EvaluationError('invalid_baseline_grades')
       seen.add(g.id)
     }
-    if (s.score !== s.grades.reduce((sum, g) => sum + g.score, 0) / s.grades.length
-      || (s.status === 'pass') !== s.grades.every(g => g.passed)) throw new EvaluationError('invalid_baseline_score')
+    const summary = summarizeGrades(data.manifest.suite.graders, s.grades)
+    if (s.score !== summary.score || (s.status === 'pass') !== summary.passed) throw new EvaluationError('invalid_baseline_score')
   }
   if (expected.size) throw new EvaluationError('incomplete_baseline')
   // Hash proves integrity, not authorship: portable baselines require repository review.

@@ -7,7 +7,7 @@ export interface Span {
   spanId: string
   parentSpanId?: string
   links?: { traceId: string; spanId: string }[]
-  name: 'eval.run' | 'eval.case' | 'eval.sample' | 'eval.model' | 'eval.judge' | 'eval.grader'
+  name: 'eval.run' | 'eval.case' | 'eval.sample' | 'eval.model' | 'eval.judge' | 'eval.grader' | 'eval.tool'
   startTimeUnixNano: string
   endTimeUnixNano: string
   status: { code: 'OK' | 'ERROR'; message?: string }

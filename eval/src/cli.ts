@@ -9,6 +9,7 @@ import { markdown, type Report } from './report.js'
 import { Store, type Manifest } from './store.js'
 import { exportBaseline, importBaseline } from './baseline.js'
 import { htmlReport } from './html-report.js'
+import { validateScenario } from './tool-sandbox.js'
 
 function readJson(path: string): unknown {
   const bytes = readFileSync(path)
@@ -52,11 +53,12 @@ export async function main(args = process.argv.slice(2)) {
       return
     }
     const candidateConfig = configFromEnv('CANDIDATE')
-    const target = candidateTarget(candidateConfig)
     const old = command === 'work' || command === 'rerun' ? store.job(required('job')) : undefined
     const suite = old?.manifest.suite ?? suiteSchema.parse(readJson(required('suite')))
     const dataset = old?.manifest.dataset ?? datasetSchema.parse(readJson(required('dataset')))
-    const judgeConfig = suite.graders.some(g => g.kind === 'factuality') ? configFromEnv('JUDGE') : undefined
+    for (const c of dataset.cases) if (c.scenario) validateScenario(c.scenario)
+    const target = candidateTarget(candidateConfig, suite.toolBudget ? 'tools' : 'text')
+    const judgeConfig = suite.graders.some(g => g.kind === 'factuality' || g.kind === 'task_success') ? configFromEnv('JUDGE') : undefined
     if (judgeConfig && judgeConfig.model === candidateConfig.model && judgeConfig.baseURL === candidateConfig.baseURL) throw new EvaluationError('judge_must_be_independent_model')
     const judge = judgeConfig ? semanticJudge(judgeConfig) : undefined
     if (values.baseline && values['baseline-file']) throw new EvaluationError('conflicting_baseline_options')

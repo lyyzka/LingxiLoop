@@ -1,16 +1,18 @@
-import { addUsage, hash, zeroUsage, type Sample } from './contracts.js'
+import { addUsage, hash, isDiagnostic, zeroUsage, type Sample } from './contracts.js'
 import type { Job, Manifest } from './store.js'
 
 export function comparisonKey(manifest: Manifest): string {
   // Candidate identity intentionally varies; evaluation conditions must not.
-  return hash({ engine: manifest.engine, suite: manifest.suite, dataset: manifest.dataset, judge: manifest.judge, seed: manifest.seed })
+  return hash({ engine: manifest.engine, suite: manifest.suite, dataset: manifest.dataset, judge: manifest.judge, seed: manifest.seed,
+    ...(manifest.target.environment ? { environment: manifest.target.environment } : {}) })
 }
 export function buildReport(job: Job, samples: Sample[], baseline?: Job) {
   const gate = job.manifest.suite.gate
   const mean = (values: number[]) => values.length ? values.reduce((a, b) => a + b, 0) / values.length : 0
   const cases = job.manifest.dataset.cases.map(c => {
     const results = samples.filter(s => s.caseId === c.id)
-    return { id: c.id, score: mean(results.map(s => s.score)), passed: results.length === job.manifest.suite.samples && results.every(s => s.status === 'pass') }
+    return { id: c.id, tags: c.tags, requiredActions: c.behavior?.required,
+      score: mean(results.map(s => s.score)), passed: results.length === job.manifest.suite.samples && results.every(s => s.status === 'pass') }
   })
   const score = mean(cases.map(c => c.score))
   const passRate = cases.filter(c => c.passed).length / cases.length
@@ -27,6 +29,13 @@ export function buildReport(job: Job, samples: Sample[], baseline?: Job) {
   if (p95LatencyMs > gate.maxP95LatencyMs) reasons.push('latency_budget_exceeded')
   if (candidate.costCny > gate.maxCandidateCostCny) reasons.push('candidate_cost_budget_exceeded')
   if (judge.costCny > gate.maxJudgeCostCny) reasons.push('judge_cost_budget_exceeded')
+  if (gate.requiredGraders?.some(id => samples.some(s => !s.grades.find(g => g.id === id)?.passed))) reasons.push('required_grader_failed')
+  const budget = job.manifest.suite.toolBudget
+  if (budget) {
+    if (samples.some(s => !s.tools)) reasons.push('tool_evidence_missing')
+    if (samples.some(s => s.tools && s.tools.stop !== 'completed')) reasons.push('tool_execution_incomplete')
+    if (samples.some(s => (s.candidate?.costCny ?? 0) > budget.maxSampleCostCny)) reasons.push('sample_cost_budget_exceeded')
+  }
   const eligible = reasons.length === 0
   let comparison: { baselineId: string; scoreDelta?: number; caseDeltas?: { id: string; delta: number }[] } | null = null
   if (!baseline && gate.requireBaseline) reasons.push('baseline_required')
@@ -48,7 +57,18 @@ export function buildReport(job: Job, samples: Sample[], baseline?: Job) {
     dataset: { id: job.manifest.dataset.id, version: job.manifest.dataset.version, digest: hash(job.manifest.dataset) },
     target: job.manifest.target, judgeFingerprint: job.manifest.judge,
     score, passRate, p95LatencyMs, usage: { candidate, judge }, cases, samples,
-    graders: job.manifest.suite.graders.map(g => ({ id: g.id, score: mean(samples.map(s => s.grades.find(r => r.id === g.id)?.score ?? 0)) })),
+    tools: budget ? { budget: { ...budget, maxRunCostCny: gate.maxCandidateCostCny },
+      plannedSamples: job.manifest.dataset.cases.length * job.manifest.suite.samples,
+      modelCalls: samples.reduce((sum, s) => sum + (s.tools?.modelCalls ?? 0), 0),
+      toolCalls: samples.reduce((sum, s) => sum + (s.tools?.calls.length ?? 0), 0),
+      conversationOnly: samples.filter(s => s.tools?.stop === 'completed' && !s.tools.calls.length
+        && cases.find(c => c.id === s.caseId)?.requiredActions?.length).length,
+    } : undefined,
+    tags: [...new Set(cases.flatMap(c => c.tags))].map(tag => {
+      const group = cases.filter(c => c.tags.includes(tag))
+      return { id: tag, cases: group.length, score: mean(group.map(c => c.score)), passRate: group.filter(c => c.passed).length / group.length }
+    }),
+    graders: job.manifest.suite.graders.map(g => ({ id: g.id, diagnostic: isDiagnostic(g), score: mean(samples.map(s => s.grades.find(r => r.id === g.id)?.score ?? 0)) })),
     failures: samples.reduce<Record<string, number>>((all, s) => { if (s.failure) all[s.failure] = (all[s.failure] ?? 0) + 1; return all }, {}),
     eligible, comparison, gate: { passed: reasons.length === 0, reasons } }
 }
@@ -57,6 +77,9 @@ export function markdown(report: Report): string {
   return [`# Black-box Eval ${report.jobId}`, '', `Gate: **${report.gate.passed ? 'PASS' : 'FAIL'}**`,
     `Score: ${report.score.toFixed(4)} · Case pass rate: ${report.passRate.toFixed(4)} · p95: ${report.p95LatencyMs} ms`,
     `Candidate: CNY ${report.usage.candidate.costCny.toFixed(6)} · Judge: CNY ${report.usage.judge.costCny.toFixed(6)}`, '',
+    ...(report.tools ? [`Model calls: ${report.tools.modelCalls} · Tool calls: ${report.tools.toolCalls} · Action-required samples answered without tools: ${report.tools.conversationOnly}`,
+      `Completed samples: ${report.samples.length}/${report.tools.plannedSamples} · Configured run budget: CNY ${report.tools.budget.maxRunCostCny}`, '',
+      ...report.graders.map(g => `- ${g.id}: ${g.score.toFixed(4)}${g.diagnostic ? ' (diagnostic only)' : ''}`), '', ...Object.entries(report.failures).map(([reason, count]) => `- ${reason}: ${count}`), ''] : []),
     ...report.gate.reasons.map(r => `- ${r}`), '', '| Case | Score | Pass |', '|---|---:|---|',
     ...report.cases.map(c => `| ${c.id} | ${c.score.toFixed(4)} | ${c.passed} |`), '',
     'Provider responses are stochastic; reruns pin inputs/configuration, not identical model outputs.', ''].join('\n')

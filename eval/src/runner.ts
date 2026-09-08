@@ -1,5 +1,5 @@
 import { EvaluationError, ModelError, failureCode, hash, addUsage, zeroUsage, targetResponseSchema, manifestSchema, type EvalTarget, type Judge, type Sample } from './contracts.js'
-import { deterministicGrade } from './graders.js'
+import { deterministicGrade, summarizeGrades } from './graders.js'
 import { buildReport } from './report.js'
 import type { Store, Manifest } from './store.js'
 import { span, traceId, modelScope, type TelemetryBackend } from './telemetry.js'
@@ -52,6 +52,15 @@ export async function runJob(store: Store, jobId: string, target: EvalTarget, ju
         let caseFailed = false
         for (const item of pending.filter(p => p.caseId === caseId)) {
           if (signal.aborted) break
+          let toolBudget = job.manifest.suite.toolBudget
+          if (toolBudget) {
+            const saved = store.samples(jobId)
+            if (saved.some(s => s.status === 'error' || !s.candidate)) throw new EvaluationError('usage_or_execution_error_stop')
+            const remainingCny = job.manifest.suite.gate.maxCandidateCostCny - saved.reduce((sum, s) => sum + (s.candidate?.costCny ?? 0), 0)
+            if (remainingCny <= 0
+              || saved.some(s => s.tools?.stop === 'cost_limit')) throw new EvaluationError('spend_limit_reached')
+            toolBudget = { ...toolBudget, maxSampleCostCny: Math.min(toolBudget.maxSampleCostCny, remainingCny) }
+          }
           store.startSample(jobId, owner, item.caseId, item.index)
           const sampleSpan = span('eval.sample', trace, caseSpan.id)
           const started = Date.now()
@@ -63,36 +72,48 @@ export async function runJob(store: Store, jobId: string, target: EvalTarget, ju
               await modelScope.run({ traceId: trace, parentSpanId: sampleSpan.id, runId: jobId, caseId, sample: item.index, telemetry }, async () => {
                 const requestId = hash({ jobId, caseId, sample: item.index })
                 const response = targetResponseSchema.parse(await target.execute({ input: c.input, signal: sampleSignal, requestId,
+                  ...(c.scenario ? { scenario: c.scenario, toolBudget } : {}),
                   seed: parseInt(hash({ seed: job.manifest.seed, caseId, index: item.index }).slice(0, 7), 16) }))
                 sampleSignal.throwIfAborted()
                 sample.candidate = response.usage
+                sample.tools = response.tools
                 sample.outputHash = hash(response.output)
                 for (const g of job.manifest.suite.graders) {
-                  phase = g.kind === 'factuality' ? 'judge' : 'candidate'
+                  phase = g.kind === 'factuality' || g.kind === 'task_success' ? 'judge' : 'candidate'
                   const grading = span('eval.grader', trace, sampleSpan.id)
                   let gradingFailure: string | undefined
                   try {
-                    if (g.kind === 'factuality') {
+                    if (g.kind === 'task_success' && response.tools?.stop !== 'completed') {
+                      sample.grades.push({ id: g.id, score: 0, passed: false, reason: 'tool_execution_incomplete' })
+                    } else if (g.kind === 'factuality' || g.kind === 'task_success') {
                       if (!judge) throw new EvaluationError('judge_required')
-                      const result = await judge.grade(c.input, response.output, c.expected, sampleSignal, `${requestId}-${g.id}`)
+                      if (g.kind === 'task_success' && !response.evidence) throw new EvaluationError('judge_evidence_missing')
+                      const remaining = job.manifest.suite.gate.maxJudgeCostCny - sample.judge.costCny
+                        - store.samples(jobId).reduce((sum, s) => sum + s.judge.costCny, 0)
+                      const result = await judge.grade(c.scenario?.context ? `${c.scenario.context}\n\n${c.input}` : c.input,
+                        response.output, c.expected, sampleSignal, `${requestId}-${g.id}`,
+                        { taskSuccess: g.kind === 'task_success', evidence: response.evidence, ...(toolBudget ? { maxCostCny: remaining } : {}) })
                       sample.judge = addUsage(sample.judge, result.usage)
                       sampleSignal.throwIfAborted()
                       if (!Number.isFinite(result.score) || result.score < 0 || result.score > 1) throw new EvaluationError('invalid_judge_score')
-                      sample.grades.push({ id: g.id, score: result.score, passed: result.score >= g.threshold })
-                    } else sample.grades.push(deterministicGrade(g, response.output, c.expected))
+                      sample.grades.push({ id: g.id, score: result.score, passed: result.score >= g.threshold,
+                        ...(result.score < g.threshold && result.reason ? { reason: result.reason } : {}) })
+                    } else sample.grades.push(deterministicGrade(g, response.output, c.expected, c.behavior, response.tools))
                   } catch (error) { gradingFailure = failureCode(error); throw error }
                   finally { telemetry.emit(grading.end({ 'eval.grader.id': g.id, 'eval.case.id': caseId, 'eval.sample.index': item.index,
                     'eval.grader.score': sample.grades.find(r => r.id === g.id)?.score ?? 0 }, gradingFailure)) }
                 }
               })
             }, job.manifest.suite.timeoutMs, signal)
-            sample.score = sample.grades.reduce((sum, g) => sum + g.score, 0) / job.manifest.suite.graders.length
-            sample.status = sample.grades.every(g => g.passed) ? 'pass' : 'fail'
-            if (sample.status === 'fail') sample.failure = 'grader_threshold'
+            const summary = summarizeGrades(job.manifest.suite.graders, sample.grades)
+            sample.score = summary.score
+            sample.status = summary.passed ? 'pass' : 'fail'
+            if (sample.status === 'fail') sample.failure = job.manifest.suite.toolBudget
+              ? summary.failure ?? 'grader_threshold' : 'grader_threshold'
           } catch (error) {
             sample.failure = failureCode(error)
             if (error instanceof ModelError) {
-              if (phase === 'candidate') sample.candidate = error.usage
+              if (phase === 'candidate') { sample.candidate = error.usage; sample.tools = error.tools }
               else sample.judge = addUsage(sample.judge, error.usage)
             }
           }
