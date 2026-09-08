@@ -172,7 +172,8 @@ jobs:
         run: |
           printf '%s\n' '@lyyzka:registry=https://npm.pkg.github.com' "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
           npm ci
-        env: { NODE_AUTH_TOKEN: ${{ github.token }} }
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
       - if: needs.changes.outputs.web == 'true'
         run: npm run lint && npm test && npm run build
       - if: needs.changes.outputs.admin == 'true'
@@ -217,7 +218,8 @@ jobs:
       - run: |
           printf '%s\n' '@lyyzka:registry=https://npm.pkg.github.com' "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
           npm ci
-        env: { NODE_AUTH_TOKEN: ${{ github.token }} }
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
       - run: npm run db:migrate
       - run: npm run test:integration
 
@@ -259,7 +261,7 @@ jobs:
             WUKONG_COMMIT=${{ matrix.wukong_commit }}
             VITE_TURNSTILE_SITE_KEY=0x4AAAAAAEsX5eyOl1nAe5i9
           secrets: |
-            npm_token=${{ secrets.GITHUB_TOKEN }}
+            npm_token=${{ github.token }}
           cache-from: type=gha,scope=${{ matrix.package }}
           cache-to: type=gha,mode=max,scope=${{ matrix.package }}
 
