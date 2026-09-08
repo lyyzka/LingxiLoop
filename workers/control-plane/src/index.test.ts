@@ -11,6 +11,19 @@ declare module 'cloudflare:test' {
 beforeAll(async () => applyD1Migrations(env.DB, env.TEST_MIGRATIONS))
 
 describe('control-plane trust boundaries', () => {
+  async function mcp(method: string, params?: Record<string, unknown>, id = 1) {
+    return SELF.fetch('https://admin.example.com/api/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer test-mcp-service-token',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-protocol-version': '2025-11-25',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id, method, ...(params ? { params } : {}) }),
+    })
+  }
+
   it('proxies public health without initializing auth', async () => {
     await env.DB.prepare(`DELETE FROM auth_settings WHERE id=1`).run()
     fetchMock.activate()
@@ -172,6 +185,55 @@ describe('control-plane trust boundaries', () => {
         latest: { 11: { status: 1, ping: 26 } },
         uptime: { '11_24': 1 },
       })
+      fetchMock.assertNoPendingInterceptors()
+    } finally { fetchMock.deactivate() }
+  })
+
+  it('authenticates MCP, exposes operations, and replays commands idempotently', async () => {
+    const now = Date.now()
+    await env.DB.batch([
+      env.DB.prepare(`INSERT OR REPLACE INTO user(id,name,email,emailVerified,createdAt,updatedAt,role,banned) VALUES('mcp-admin','MCP Admin','mcp@example.com',1,?,?, 'admin',0)`).bind(now, now),
+      env.DB.prepare(`INSERT OR REPLACE INTO app_user_links(auth_user_id,app_user_id,provisioned_at,suspended_at) VALUES('mcp-admin','app-mcp-admin',?,NULL)`).bind(now),
+    ])
+    expect((await SELF.fetch('https://admin.example.com/api/mcp', { method: 'POST' })).status).toBe(401)
+    expect((await SELF.fetch('https://admin.example.com/api/mcp', {
+      method: 'POST', headers: { authorization: 'Bearer test-mcp-service-token', origin: 'https://attacker.example' },
+    })).status).toBe(403)
+
+    const initialized = await mcp('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'test', version: '1' } })
+    expect((await initialized.json() as { result: { serverInfo: { name: string } } }).result.serverInfo.name).toBe('lingxiloop-production-operations')
+    const listed = await mcp('tools/list')
+    const toolNames = ((await listed.json() as { result: { tools: Array<{ name: string }> } }).result.tools).map((tool) => tool.name)
+    expect(toolNames).toEqual(expect.arrayContaining(['lingxiloop_admin_resource_list', 'lingxiloop_agent_run_cancel', 'lingxiloop_arcane_logs']))
+    const targets = await mcp('tools/call', { name: 'lingxiloop_arcane_targets', arguments: {} }, 2)
+    const targetsBody = await targets.json() as { result: { content: Array<{ text: string }> } }
+    expect(Object.keys(JSON.parse(targetsBody.result.content[0]!.text))).toEqual([
+      'lingxiloop-core-state', 'lingxiloop-app-a', 'server-b-ingress', 'lingxiloop-app-b', 'lingxiloop-knowledge-agent', 'uptime',
+    ])
+
+    fetchMock.activate()
+    fetchMock.disableNetConnect()
+    fetchMock.get('https://origin.example.com').intercept({ path: '/api/admin/resources/users/user-1', method: 'GET' })
+      .reply(200, { name: 'visible', token: 'upstream-token', nested: { prompt: 'private prompt', environment: ['PASSWORD=private'] } })
+    fetchMock.get('https://origin.example.com').intercept({ path: '/api/admin/agent-runs/run-1/cancel', method: 'POST' }).reply(200, { cancelled: true })
+    fetchMock.get('https://ops.example.com').intercept({ path: '/api/environments/b/projects/app-b/runtime', method: 'GET' })
+      .reply(200, { data: { runtimeServices: [{ containerId: 'container-1', containerName: 'lingxiloop-app-b-server-1' }] } })
+    fetchMock.get('https://ops.example.com').intercept({ path: '/api/events/environment/b?search=lingxiloop-app-b&sort=createdAt&order=desc&limit=100', method: 'GET' })
+      .reply(200, { data: [{ resourceId: 'container-1', title: 'allowed' }, { resourceId: 'other-project', title: 'blocked' }] })
+    try {
+      const record = await mcp('tools/call', { name: 'lingxiloop_admin_resource_get', arguments: { resource: 'users', id: 'user-1' } }, 3)
+      const recordBody = await record.json() as { result: { content: Array<{ text: string }> } }
+      expect(JSON.parse(recordBody.result.content[0]!.text)).toEqual({ name: 'visible', token: '[REDACTED]', nested: { prompt: '[REDACTED]', environment: '[REDACTED]' } })
+      const events = await mcp('tools/call', { name: 'lingxiloop_arcane_events', arguments: { target: 'lingxiloop-app-b', limit: 10 } }, 6)
+      const eventsBody = await events.json() as { result: { content: Array<{ text: string }> } }
+      expect(JSON.parse(eventsBody.result.content[0]!.text)).toEqual({ data: [{ resourceId: 'container-1', title: 'allowed' }] })
+      const args = { requestId: '11111111-1111-4111-8111-111111111111', reason: 'test recovery', runId: 'run-1' }
+      const first = await mcp('tools/call', { name: 'lingxiloop_agent_run_cancel', arguments: args }, 4)
+      const firstBody = await first.json() as { result: { content: Array<{ text: string }> } }
+      expect(JSON.parse(firstBody.result.content[0]!.text)).toEqual({ cancelled: true })
+      const replay = await mcp('tools/call', { name: 'lingxiloop_agent_run_cancel', arguments: args }, 5)
+      const replayBody = await replay.json() as { result: { content: Array<{ text: string }> } }
+      expect(JSON.parse(replayBody.result.content[0]!.text)).toEqual({ replayed: true, status: 'succeeded' })
       fetchMock.assertNoPendingInterceptors()
     } finally { fetchMock.deactivate() }
   })

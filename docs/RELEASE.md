@@ -21,3 +21,8 @@ administrator, delete `BOOTSTRAP_ADMIN_TOKEN`.
 
 Production is forward-only. Fix failed releases in place; there is no retained
 application-state rollback for the Arcane first release.
+
+The production operations MCP additionally requires the five Worker secrets
+documented in `deploy/arcane/README.md`. Apply them with `wrangler secret put`,
+then upload a new Worker version; never place their values in Git, CI output, or
+operator transcripts.
