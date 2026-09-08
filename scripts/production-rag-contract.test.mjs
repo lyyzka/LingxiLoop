@@ -206,7 +206,7 @@ test('main publishes changed images and rolls out a complete immutable release',
   assert.match(workflow, /update-deployment-images\.mjs "\$GITHUB_SHA" \$\{\{ needs\.changes\.outputs\.packages \}\}/)
   assert.match(workflow, /rollout:[\s\S]*trigger-arcane-git-sync\.mjs/)
   assert.match(workflow, /ARCANE_GIT_SYNC_WEBHOOK_URLS: \$\{\{ secrets\.ARCANE_GIT_SYNC_WEBHOOK_URLS \}\}/)
-  assert.match(workflow, /VITE_TURNSTILE_SITE_KEY=0x4AAAAAAEk9EZhHYeS3szPO/)
+  assert.match(workflow, /VITE_TURNSTILE_SITE_KEY=0x4AAAAAAEsX5eyOl1nAe5i9/)
   assert.match(serverImage, /ARG VITE_TURNSTILE_SITE_KEY=""[\s\S]*ENV VITE_TURNSTILE_SITE_KEY=\$\{VITE_TURNSTILE_SITE_KEY\}/)
   assert.doesNotMatch(workflow, /RELEASE_HMAC_SECRET|api\/internal\/releases/)
   assert.doesNotMatch(workflow, /pages deploy|PRODUCTION_SSH|run: .*deploy-production\.sh/)
