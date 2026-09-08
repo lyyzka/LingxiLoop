@@ -57,6 +57,7 @@ test('browser entry points keep their fixed product copy in Chinese', () => {
   assert.match(index, /<title>LingxiLoop — 人与智能助教协作<\/title>/)
   assert.doesNotMatch(index, /Human-Agent collaboration/)
   assert.match(authScreen, /验证邮箱/)
+  assert.match(authScreen, /邮箱已验证，请使用刚设置的密码登录。/)
   assert.doesNotMatch(authScreen, /Continue to LingxiLoop/)
 })
 

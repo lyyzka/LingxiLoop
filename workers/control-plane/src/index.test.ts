@@ -46,6 +46,34 @@ describe('control-plane trust boundaries', () => {
     expect(response.status).toBe(401)
   })
 
+  it('signs in after an OTP verifies a password account', async () => {
+    const email = 'otp-signup@example.com'
+    const now = Math.floor(Date.now() / 1000)
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO user(id,name,email,emailVerified,createdAt,updatedAt) VALUES(?,?,?,0,?,?)`)
+        .bind('otp-signup-user', 'OTP Signup', email, now, now),
+      env.DB.prepare(`INSERT INTO account(id,accountId,providerId,issuer,userId,password,createdAt,updatedAt) VALUES(?,?,'credential','local:credential',?,?,?,?)`)
+        .bind('otp-signup-account', 'otp-signup-user', 'otp-signup-user', await hashPassword('password123'), now, now),
+      env.DB.prepare(`INSERT INTO verification(id,identifier,value,expiresAt,createdAt,updatedAt) VALUES(?,?,?,?,?,?)`)
+        .bind('otp-signup-verification', `email-verification-otp-${email}`, '123456:0', now + 300, now, now),
+    ])
+    fetchMock.activate()
+    fetchMock.disableNetConnect()
+    fetchMock.get('https://challenges.cloudflare.com').intercept({ path: '/turnstile/v0/siteverify', method: 'POST' }).reply(200, { success: true })
+    fetchMock.get('https://origin.example.com').intercept({ path: '/api/internal/registration/provision', method: 'POST' }).reply(200, { appUserId: 'otp-app-user' })
+    try {
+      const verified = await SELF.fetch('https://admin.example.com/api/auth/email-otp/verify-email', {
+        method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://admin.example.com' }, body: JSON.stringify({ email, otp: '123456' }),
+      })
+      expect(verified.status).toBe(200)
+      const signIn = await SELF.fetch('https://admin.example.com/api/auth/sign-in/email', {
+        method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://admin.example.com', 'x-captcha-response': 'XXXX.DUMMY.TOKEN.XXXX' }, body: JSON.stringify({ email, password: 'password123' }),
+      })
+      expect(signIn.status).toBe(200)
+      fetchMock.assertNoPendingInterceptors()
+    } finally { fetchMock.deactivate() }
+  })
+
   it('issues a one-time Sigillo SSO code only for the approved provider', async () => {
     const now = Math.floor(Date.now() / 1000)
     await env.DB.batch([

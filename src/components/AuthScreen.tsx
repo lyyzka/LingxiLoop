@@ -88,6 +88,7 @@ export function AuthScreen() {
   const [mode, setMode] = useState<Mode>(requestedMode === 'reset' || requestedMode === 'signup' ? requestedMode : 'login')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [email, setEmail] = useState('')
   const [captchaToken, setCaptchaToken] = useState('')
   const [captchaRound, setCaptchaRound] = useState(0)
@@ -95,7 +96,7 @@ export function AuthScreen() {
 
   const changeMode = (next: Mode) => {
     if (next === 'forgot') setEmail('')
-    setMode(next); setError(null); setCaptchaToken(''); setCaptchaRound((round) => round + 1)
+    setMode(next); setError(null); setNotice(null); setCaptchaToken(''); setCaptchaRound((round) => round + 1)
   }
   const captchaError = useCallback(() => setError('人机验证失败，请重试。'), [])
   const run = async (work: () => Promise<unknown>, success?: () => void, resetCaptcha = false) => {
@@ -150,6 +151,7 @@ export function AuthScreen() {
                         <Input id="login-password" name="password" type="password" autoComplete="current-password" required />
                       </Field>
                       <CaptchaField key={`login-${captchaRound}`} onToken={setCaptchaToken} onError={captchaError} />
+                      {notice ? <FieldDescription role="status" className="text-primary">{notice}</FieldDescription> : null}
                       {error ? <FieldDescription role="alert" className="text-destructive">{error}</FieldDescription> : null}
                       <Button className="w-full" type="submit" disabled={busy || !captchaToken}>{busy ? <Spinner /> : null}{busy ? '登录中…' : '登录'}</Button>
                     </FieldGroup>
@@ -192,7 +194,7 @@ export function AuthScreen() {
                 void run(async () => {
                   const result = await authApi.verifyEmail(email, otp)
                   if (result.error) throw new Error(result.error.message)
-                }, () => changeMode('login'))
+                }, () => { changeMode('login'); setNotice('邮箱已验证，请使用刚设置的密码登录。') })
               }}>
                 <FieldGroup className="gap-5">
                   <Alert><AlertTitle>验证码已发送</AlertTitle><AlertDescription>验证码将在短时间内失效，请检查收件箱。</AlertDescription></Alert>
