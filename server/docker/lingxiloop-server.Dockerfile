@@ -29,7 +29,11 @@ FROM ${NODE_BASE_IMAGE} AS deps
 ARG NPM_REGISTRY
 WORKDIR /app
 COPY server/package.json server/package-lock.json ./
-RUN npm ci --registry="${NPM_REGISTRY}" --omit=dev --no-audit --no-fund --prefer-offline
+RUN --mount=type=secret,id=npm_token \
+  NPM_TOKEN="$(cat /run/secrets/npm_token)" && \
+  printf '%s\n' '@lyyzka:registry=https://npm.pkg.github.com' "//npm.pkg.github.com/:_authToken=${NPM_TOKEN}" > /tmp/.npmrc && \
+  npm ci --userconfig=/tmp/.npmrc --registry="${NPM_REGISTRY}" --omit=dev --no-audit --no-fund --prefer-offline && \
+  rm -f /tmp/.npmrc
 
 # ─── stage 2: build the web SPA bundle ──────────────────────────────
 # Separate stage with FULL devDeps installed so vite + tsc + tailwind +
@@ -54,7 +58,11 @@ COPY package.json package-lock.json ./
 # need any postinstall (esbuild's platform native lands via
 # optionalDependencies, not a script), so skipping all postinstall
 # scripts is safe in this stage AND faster than apt-get'ing bzip2.
-RUN npm ci --registry="${NPM_REGISTRY}" --no-audit --no-fund --prefer-offline --ignore-scripts
+RUN --mount=type=secret,id=npm_token \
+  NPM_TOKEN="$(cat /run/secrets/npm_token)" && \
+  printf '%s\n' '@lyyzka:registry=https://npm.pkg.github.com' "//npm.pkg.github.com/:_authToken=${NPM_TOKEN}" > /tmp/.npmrc && \
+  npm ci --userconfig=/tmp/.npmrc --registry="${NPM_REGISTRY}" --no-audit --no-fund --prefer-offline --ignore-scripts && \
+  rm -f /tmp/.npmrc
 COPY src ./src
 COPY public ./public
 COPY index.html ./
