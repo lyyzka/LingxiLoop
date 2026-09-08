@@ -2,7 +2,7 @@ import { NoEffectError, type MemoryOptions } from 'lingxios'
 import { createPermissionService } from '../access/public.js'
 import type { Queryable } from '../../db/queryable.js'
 
-/** Core sees only the scopes currently authorized by this product. */
+/** LingxiOS v3 sees only the scopes currently authorized by this product. */
 export const resolveMemoryScopes: MemoryOptions['resolveScopes'] = async (work, database) => {
   if (!work.principalId) throw new NoEffectError('Original human is required', 'forbidden')
   const db = database as Queryable
