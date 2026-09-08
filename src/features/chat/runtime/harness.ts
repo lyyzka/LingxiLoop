@@ -45,7 +45,7 @@ export function harnessParts(view: RunView): ThreadAssistantMessagePart[] {
   if (view.draft && (view.lifecycle === 'leased' || view.lifecycle === 'queued')) return [{ type: 'text', text: view.draft }]
   if (!view.message) return view.draft ? [{ type: 'text', text: view.draft }] : []
   // Citation provenance is displayed alongside the answer, without inventing a confidence score.
-  return [{ type: 'text', text: responseSegments(view.message.envelope).map(segment => segment.text).join('') }]
+  return [{ type: 'text', text: responseSegments(view.message.envelope).flatMap(segment => segment.type === 'presentation' ? [] : [segment.text]).join('') }]
 }
 
 export function harnessStatus(view: RunView): MessageStatus {
