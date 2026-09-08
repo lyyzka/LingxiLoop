@@ -3,6 +3,7 @@ import { drizzleAdapter } from 'better-auth/adapters/drizzle'
 import { admin, captcha, emailOTP } from 'better-auth/plugins'
 import { drizzle } from 'drizzle-orm/d1'
 import { type Context, Hono } from 'hono'
+import { handleMcpRequest } from './mcp'
 import { authSchema } from './schema'
 import { sendSmtpEmail } from './smtp'
 
@@ -14,6 +15,11 @@ type Secrets = {
   TURNSTILE_SECRET_KEY: string
   SIGILLO_SSO_SECRET: string
   SIGILLO_PROVIDER_URL: string
+  MCP_SERVICE_TOKEN: string
+  MCP_AUTH_USER_ID: string
+  ARCANE_API_KEY: string
+  ARCANE_TARGETS_JSON: string
+  ARCANE_GITOPS_WEBHOOKS: string
 }
 type Bindings = Env & Secrets
 type Variables = { auth: ReturnType<typeof createAuth>; session: AuthSession }
@@ -115,6 +121,35 @@ async function loadAuthSettings(c: AppContext): Promise<AuthSettings> {
     headers: { 'cache-control': 'max-age=60' },
   })))
   return settings
+}
+
+function authSettingsPayload(env: Bindings, settings: AuthSettings) {
+  return {
+    ...settings,
+    locked: {
+      defaultRole: 'user',
+      requireEmailVerification: true,
+      captchaProvider: 'cloudflare-turnstile',
+      captchaEndpoints: ['/sign-up/email', '/sign-in/email', '/request-password-reset'],
+    },
+    secrets: {
+      smtp: Boolean(env.ALIYUN_OTP_EMAIL_PASSWORD),
+      turnstile: Boolean(env.TURNSTILE_SECRET_KEY),
+    },
+  }
+}
+
+async function updateAuthSettings(c: AppContext, values: AuthSettings, actorUserId: string, reason: string, writeAudit = true): Promise<AuthSettings> {
+  const now = Date.now()
+  const statements = [
+    c.env.DB.prepare(`UPDATE auth_settings SET session_expires_in=?,otp_expires_in=?,rate_limit_window=?,rate_limit_max=?,updated_at=?,updated_by=? WHERE id=1`)
+      .bind(values.sessionExpiresIn, values.otpExpiresIn, values.rateLimitWindow, values.rateLimitMax, now, actorUserId),
+  ]
+  if (writeAudit) statements.push(c.env.DB.prepare(`INSERT INTO control_audit(id,actor_user_id,action,resource,reason,detail,created_at) VALUES(?,?,?,?,?,?,?)`)
+    .bind(crypto.randomUUID(), actorUserId, 'update', 'better-auth:settings', reason, JSON.stringify(values), now))
+  await c.env.DB.batch(statements)
+  await (await authSettingsCache()).delete(authSettingsCacheKey)
+  return values
 }
 
 async function provision(env: Bindings, authUser: { id: string; email: string; name: string; emailVerified: boolean }): Promise<void> {
@@ -343,15 +378,62 @@ app.post('/api/internal/bootstrap-admin', async (c) => {
   return c.json({ ok: true, removeSecret: 'BOOTSTRAP_ADMIN_TOKEN' })
 })
 
-app.get('/api/control/status-page', async (c) => {
-  const session = requireAdmin(c)
-  if (session instanceof Response) return session
+app.all('/api/mcp', async (c) => {
+  const origin = c.req.header('origin')
+  if (origin) {
+    let allowed = false
+    try {
+      const url = new URL(origin)
+      const configured = c.env.AUTH_ALLOWED_HOSTS.split(',').map((host) => host.trim()).filter(Boolean)
+      allowed = (url.protocol === 'https:' && configured.includes(url.hostname))
+        || (url.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(url.hostname))
+    } catch { allowed = false }
+    if (!allowed) return c.json({ error: 'unapproved origin' }, 403)
+  }
+  const authorization = c.req.header('authorization') ?? ''
+  const token = authorization.startsWith('Bearer ') ? authorization.slice(7).trim() : ''
+  if (!await secretMatches(c.env.MCP_SERVICE_TOKEN, token)) {
+    return c.json({ error: 'unauthorized' }, 401, { 'WWW-Authenticate': 'Bearer' })
+  }
+  const identity = await c.env.DB.prepare(`SELECT u.id AS auth_user_id,l.app_user_id
+      FROM user u JOIN app_user_links l ON l.auth_user_id=u.id
+      WHERE u.id=? AND u.role='admin' AND u.banned=0 AND l.suspended_at IS NULL LIMIT 1`)
+    .bind(c.env.MCP_AUTH_USER_ID).first<{ auth_user_id: string; app_user_id: string }>()
+  if (!identity) return c.json({ error: 'configured MCP administrator is unavailable' }, 403)
+  const platform = (path: string, init: RequestInit = {}) => originRequest(c.env, path, init,
+    { authUserId: identity.auth_user_id, appUserId: identity.app_user_id })
+  let webhookSecrets: string[] = []
+  try { webhookSecrets = Object.values(JSON.parse(c.env.ARCANE_GITOPS_WEBHOOKS) as Record<string, unknown>).filter((value): value is string => typeof value === 'string') } catch { /* invalid configuration is reported by its owning tool */ }
+  return handleMcpRequest(c.req.raw, c.env, { authUserId: identity.auth_user_id, appUserId: identity.app_user_id }, {
+    platform,
+    health: async () => {
+      const paths = ['/api/health', '/api/health/dependencies', '/api/meta']
+      const responses = await Promise.all(paths.map(async (path) => {
+        const response = await originRequest(c.env, path, {})
+        return { path, status: response.status, body: await response.json().catch(() => null) }
+      }))
+      return { controlPlane: { ok: true, version: c.env.APP_VERSION }, origin: responses, uptime: await statusPage(c.env) }
+    },
+    authSettings: async () => authSettingsPayload(c.env, await loadAuthSettings(c)),
+    updateAuthSettings: (values, why) => updateAuthSettings(c, values, identity.auth_user_id, why, false),
+    userLifecycle: async (appUserId, action, why) => {
+      const response = await controlUserLifecycle(c.env, identity, appUserId, action, why)
+      const text = await response.text()
+      if (!response.ok) throw new Error(`${response.status} ${text.slice(0, 1000)}`)
+      return text ? JSON.parse(text) : { ok: true }
+    },
+  }, [c.env.MCP_SERVICE_TOKEN, c.env.ARCANE_API_KEY, c.env.ARCANE_GITOPS_WEBHOOKS, ...webhookSecrets,
+    c.env.BETTER_AUTH_SECRET, c.env.GATEWAY_HMAC_SECRET, c.env.BOOTSTRAP_ADMIN_TOKEN,
+    c.env.ALIYUN_OTP_EMAIL_PASSWORD, c.env.TURNSTILE_SECRET_KEY, c.env.SIGILLO_SSO_SECRET])
+})
+
+async function statusPage(env: Bindings): Promise<unknown> {
   try {
     const [pageResponse, heartbeatResponse] = await Promise.all([
-      fetch(new URL('/api/status-page/lingxiloop', c.env.UPTIME_BASE_URL)),
-      fetch(new URL('/api/status-page/heartbeat/lingxiloop', c.env.UPTIME_BASE_URL)),
+      fetch(new URL('/api/status-page/lingxiloop', env.UPTIME_BASE_URL)),
+      fetch(new URL('/api/status-page/heartbeat/lingxiloop', env.UPTIME_BASE_URL)),
     ])
-    if (!pageResponse.ok || !heartbeatResponse.ok) return c.json({ error: 'status provider unavailable' }, 502)
+    if (!pageResponse.ok || !heartbeatResponse.ok) throw new Error('status provider unavailable')
     const page = await pageResponse.json<{
       config: unknown
       incident: unknown
@@ -364,29 +446,26 @@ app.get('/api/control/status-page', async (c) => {
     }>()
     const history = Object.fromEntries(Object.entries(heartbeat.heartbeatList).map(([id, rows]) => [id, rows.slice(-50)]))
     const latest = Object.fromEntries(Object.entries(history).map(([id, rows]) => [id, rows.at(-1) ?? null]))
-    c.header('cache-control', 'private, max-age=30, stale-while-revalidate=60')
-    return c.json({ config: page.config, incident: page.incident, groups: page.publicGroupList, maintenanceList: page.maintenanceList, history, latest, uptime: heartbeat.uptimeList })
-  } catch {
-    return c.json({ error: 'status provider unavailable' }, 502)
+    return { config: page.config, incident: page.incident, groups: page.publicGroupList, maintenanceList: page.maintenanceList, history, latest, uptime: heartbeat.uptimeList }
+  } catch (error) {
+    throw new Error('status provider unavailable', { cause: error })
   }
+}
+
+app.get('/api/control/status-page', async (c) => {
+  const session = requireAdmin(c)
+  if (session instanceof Response) return session
+  try {
+    const payload = await statusPage(c.env)
+    c.header('cache-control', 'private, max-age=30, stale-while-revalidate=60')
+    return c.json(payload)
+  } catch { return c.json({ error: 'status provider unavailable' }, 502) }
 })
 
 app.get('/api/control/auth-settings', async (c) => {
   const session = requireAdmin(c)
   if (session instanceof Response) return session
-  return c.json({
-    ...(await loadAuthSettings(c)),
-    locked: {
-      defaultRole: 'user',
-      requireEmailVerification: true,
-      captchaProvider: 'cloudflare-turnstile',
-      captchaEndpoints: ['/sign-up/email', '/sign-in/email', '/request-password-reset'],
-    },
-    secrets: {
-      smtp: Boolean(c.env.ALIYUN_OTP_EMAIL_PASSWORD),
-      turnstile: Boolean(c.env.TURNSTILE_SECRET_KEY),
-    },
-  })
+  return c.json(authSettingsPayload(c.env, await loadAuthSettings(c)))
 })
 
 app.put('/api/control/auth-settings', async (c) => {
@@ -406,51 +485,48 @@ app.put('/api/control/auth-settings', async (c) => {
     && Number.isInteger(values.rateLimitWindow) && values.rateLimitWindow >= 10 && values.rateLimitWindow <= 3600
     && Number.isInteger(values.rateLimitMax) && values.rateLimitMax >= 5 && values.rateLimitMax <= 1000
   if (!valid) return c.json({ error: 'Better Auth 配置超出允许范围' }, 400)
-  const now = Date.now()
-  await c.env.DB.batch([
-    c.env.DB.prepare(`UPDATE auth_settings SET session_expires_in=?,otp_expires_in=?,rate_limit_window=?,rate_limit_max=?,updated_at=?,updated_by=? WHERE id=1`)
-      .bind(values.sessionExpiresIn, values.otpExpiresIn, values.rateLimitWindow, values.rateLimitMax, now, session.user.id),
-    c.env.DB.prepare(`INSERT INTO control_audit(id,actor_user_id,action,resource,reason,detail,created_at) VALUES(?,?,?,?,?,?,?)`)
-      .bind(crypto.randomUUID(), session.user.id, 'update', 'better-auth:settings', reason, JSON.stringify(values), now),
-  ])
-  await (await authSettingsCache()).delete(authSettingsCacheKey)
-  return c.json(values)
+  return c.json(await updateAuthSettings(c, values, session.user.id, reason))
 })
 
+
+async function controlUserLifecycle(env: Bindings, admin: { auth_user_id: string; app_user_id: string }, appUserId: string,
+  action: 'suspend' | 'restore' | 'delete', reason: string): Promise<Response> {
+  if (appUserId === admin.app_user_id) return Response.json({ error: 'administrators cannot change their own access' }, { status: 409 })
+  const link = await env.DB.prepare(`SELECT auth_user_id FROM app_user_links WHERE app_user_id=?`).bind(appUserId).first<{ auth_user_id: string }>()
+  if (!link) return Response.json({ error: 'auth user mapping not found' }, { status: 404 })
+  const raw = JSON.stringify({ reason })
+  if (action === 'suspend') {
+    await env.DB.batch([
+      env.DB.prepare(`UPDATE user SET banned=1,banReason=?,updatedAt=? WHERE id=?`).bind(reason, Date.now(), link.auth_user_id),
+      env.DB.prepare(`DELETE FROM session WHERE userId=?`).bind(link.auth_user_id),
+      env.DB.prepare(`UPDATE app_user_links SET suspended_at=? WHERE auth_user_id=?`).bind(Date.now(), link.auth_user_id),
+    ])
+  }
+  const response = await originRequest(env, `/api/admin/users/${encodeURIComponent(appUserId)}/${action}`, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: raw,
+  }, { appUserId: admin.app_user_id, authUserId: admin.auth_user_id })
+  if (response.ok && action === 'restore') {
+    await env.DB.batch([
+      env.DB.prepare(`UPDATE user SET banned=0,banReason=NULL,banExpires=NULL,updatedAt=? WHERE id=?`).bind(Date.now(), link.auth_user_id),
+      env.DB.prepare(`UPDATE app_user_links SET suspended_at=NULL WHERE auth_user_id=?`).bind(link.auth_user_id),
+    ])
+  }
+  if (response.ok && action === 'delete') {
+    await env.DB.prepare(`DELETE FROM user WHERE id=?`).bind(link.auth_user_id).run()
+  }
+  return response
+}
 
 app.post('/api/control/platform/users/:id/:action', async (c) => {
   const adminSession = requireAdmin(c)
   if (adminSession instanceof Response) return adminSession
   const action = c.req.param('action')
   if (action !== 'suspend' && action !== 'restore' && action !== 'delete') return c.json({ error: 'unsupported user lifecycle action' }, 404)
-  const appUserId = c.req.param('id')
+  const reason = (await c.req.json<{ reason?: string }>().catch((): { reason?: string } => ({}))).reason?.trim()
+  if (!reason) return c.json({ error: 'reason required' }, 400)
   const adminLink = await c.env.DB.prepare(`SELECT app_user_id FROM app_user_links WHERE auth_user_id=?`).bind(adminSession.user.id).first<{ app_user_id: string }>()
   if (!adminLink) return c.json({ error: 'administrator business account is not provisioned' }, 409)
-  const link = await c.env.DB.prepare(`SELECT auth_user_id FROM app_user_links WHERE app_user_id=?`).bind(appUserId).first<{ auth_user_id: string }>()
-  if (!link) return c.json({ error: 'auth user mapping not found' }, 404)
-  const raw = await c.req.text()
-  const reason = (JSON.parse(raw || '{}') as { reason?: string }).reason?.trim()
-  if (!reason) return c.json({ error: 'reason required' }, 400)
-  if (action === 'suspend') {
-    await c.env.DB.batch([
-      c.env.DB.prepare(`UPDATE user SET banned=1,banReason=?,updatedAt=? WHERE id=?`).bind(reason, Date.now(), link.auth_user_id),
-      c.env.DB.prepare(`DELETE FROM session WHERE userId=?`).bind(link.auth_user_id),
-      c.env.DB.prepare(`UPDATE app_user_links SET suspended_at=? WHERE auth_user_id=?`).bind(Date.now(), link.auth_user_id),
-    ])
-  }
-  const response = await originRequest(c.env, `/api/admin/users/${encodeURIComponent(appUserId)}/${action}`, {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: raw,
-  }, { appUserId: adminLink.app_user_id, authUserId: adminSession.user.id })
-  if (response.ok && action === 'restore') {
-    await c.env.DB.batch([
-      c.env.DB.prepare(`UPDATE user SET banned=0,banReason=NULL,banExpires=NULL,updatedAt=? WHERE id=?`).bind(Date.now(), link.auth_user_id),
-      c.env.DB.prepare(`UPDATE app_user_links SET suspended_at=NULL WHERE auth_user_id=?`).bind(link.auth_user_id),
-    ])
-  }
-  if (response.ok && action === 'delete') {
-    await c.env.DB.prepare(`DELETE FROM user WHERE id=?`).bind(link.auth_user_id).run()
-  }
-  return response
+  return controlUserLifecycle(c.env, { auth_user_id: adminSession.user.id, app_user_id: adminLink.app_user_id }, c.req.param('id'), action, reason)
 })
 
 app.all('/api/health*', (c) => originRequest(c.env, c.req.path + new URL(c.req.url).search, { method: c.req.method, headers: c.req.raw.headers }))
