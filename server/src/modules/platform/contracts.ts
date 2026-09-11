@@ -6,6 +6,7 @@ export const presignUploadRequestSchema = z.object({
   name: z.string().trim().min(1).max(200)
     .refine((name) => !/[\\/\u0000-\u001f\u007f]/.test(name), 'invalid file name'),
   mime: z.string().trim().min(1).transform((value) => value.toLowerCase()),
+  documentId: z.string().min(1).optional(),
   size: z.number().finite().positive().max(MAX_UPLOAD_BYTES),
 }).strict()
 

@@ -7,6 +7,10 @@ const here = dirname(fileURLToPath(import.meta.url))
 export default defineWorkersConfig(async () => ({
   test: {
     include: ['workers/control-plane/src/**/*.test.ts'],
+    deps: { optimizer: { ssr: { include: [
+      '@modelcontextprotocol/sdk/server/mcp.js',
+      '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js',
+    ] } } },
     poolOptions: {
       workers: {
         wrangler: { configPath: resolve(here, 'wrangler.test.jsonc') },
@@ -20,6 +24,9 @@ export default defineWorkersConfig(async () => ({
             TURNSTILE_SECRET_KEY: '1x0000000000000000000000000000000AA',
             SIGILLO_SSO_SECRET: 'test-sigillo-sso-secret',
             SIGILLO_PROVIDER_URL: 'https://sigillo-provider.example',
+            MCP_SERVICE_TOKEN: 'test-mcp-service-token',
+            ARCANE_API_KEY: 'test-arcane-api-key',
+            ARCANE_GITOPS_WEBHOOKS: '{}',
           },
         },
       },

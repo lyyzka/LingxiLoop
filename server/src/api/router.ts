@@ -1,3 +1,4 @@
+import { filesRouter } from '../modules/platform/files-router.js'
 import { Router } from 'express'
 import { authMiddleware } from '../auth.js'
 import { errorHandler } from '../http/errors.js'
@@ -7,7 +8,6 @@ import { adminRouter, platformAdminCommandAuditMiddleware } from '../modules/pla
 import { calendarRouter } from '../modules/calendar/router.js'
 import { canvasRouter } from '../modules/canvas/router.js'
 import { companiesRouter } from '../modules/companies/router.js'
-import { educationRouter } from '../modules/education/router.js'
 import { enterpriseRouter } from '../modules/enterprise/router.js'
 import { conversationsRouter } from '../modules/conversations/router.js'
 import { contextThreadsRouter } from '../modules/context-threads/router.js'
@@ -23,7 +23,6 @@ import { platformRouter } from '../modules/platform/router.js'
 import { pollsRouter } from '../modules/polls/router.js'
 import { presentationsRouter } from '../modules/presentations/router.js'
 import { projectsRouter } from '../modules/projects/router.js'
-import { projectTransfersRouter } from '../modules/transfers/router.js'
 import { trustRouter } from '../modules/trust/router.js'
 
 export const api = Router()
@@ -33,12 +32,11 @@ api.use(gatewayRegistrationRouter)
 api.use('/admin', adminRouter)
 api.use(platformAdminCommandAuditMiddleware)
 api.use(platformRouter)
+api.use(filesRouter)
 api.use('/im', imRouter)
 api.use(companiesRouter)
-api.use(educationRouter)
 api.use(enterpriseRouter)
 api.use(projectsRouter)
-api.use(projectTransfersRouter)
 api.use(trustRouter)
 api.use(canvasRouter)
 api.use(learningRouter)

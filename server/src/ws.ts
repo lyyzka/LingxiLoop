@@ -1,3 +1,4 @@
+import { COMPANY_ACCESS_REVOKED } from './modules/companies/revocation.js'
 import { randomUUID } from 'node:crypto'
 import type { Server } from 'node:http'
 import { type WebSocket, WebSocketServer } from 'ws'
@@ -39,6 +40,7 @@ import {
 interface AuthedSocket {
   ws: WebSocket
   userId: string
+  periodId: string
   /** Stable per-socket id used as the Yjs update origin. Lets the room
    *  manager echo-suppress on this client's own outbound updates. */
   originId: string
@@ -66,6 +68,8 @@ export function disconnectUserFromCompany(userId: string, companyId: string): vo
   for (const client of clients) {
     if (client.userId !== userId || !client.companies.has(companyId)) continue
     client.companies.delete(companyId)
+    for (const [id, subscriber] of client.docSubs) docUnsubscribe(id, subscriber)
+    client.docSubs.clear()
     client.ws.close(4403, 'company membership removed')
   }
 }
@@ -134,7 +138,23 @@ function sendJson(ws: WebSocket, payload: unknown): void {
   try { ws.send(JSON.stringify(payload)) } catch { /* ignore */ }
 }
 
+async function socketAuthorized(c: AuthedSocket): Promise<boolean> {
+  const { rows } = await pool.query(`SELECT 1 FROM company_memberships m JOIN users u ON u.id=m.user_id
+    WHERE m.user_id=$1 AND m.period_id=$2 AND m.ended_at IS NULL AND m.status='ACTIVE'
+      AND u.departed_at IS NULL AND u.suspended_at IS NULL AND u.deleted_at IS NULL`, [c.userId,c.periodId])
+  if (rows[0]) return true
+  for (const [id, subscriber] of c.docSubs) docUnsubscribe(id, subscriber)
+  c.docSubs.clear()
+  c.ws.close(4403, 'access revoked')
+  return false
+}
+
+async function sendDoc(c: AuthedSocket, documentId: string, payload: unknown): Promise<void> {
+  if (await socketAuthorized(c) && await docCompanyFor(documentId,c.userId)) sendJson(c.ws,payload)
+}
+
 async function handleDocFrame(c: AuthedSocket, msg: Record<string, unknown>): Promise<void> {
+  if (!await socketAuthorized(c)) return
   const type = msg.type as string | undefined
   const documentId = typeof msg.documentId === 'string' ? msg.documentId : null
   if (!documentId) return
@@ -148,26 +168,27 @@ async function handleDocFrame(c: AuthedSocket, msg: Record<string, unknown>): Pr
     }
     const subRec: DocSubscriber = {
       originId: c.originId,
+      onInvalidated: () => c.ws.close(1011, 'document state changed; reconnect'),
       onUpdate: (update, originId) => {
-        sendJson(c.ws, {
+        void sendDoc(c, documentId, {
           type: 'doc.update',
           documentId,
           updateB64: Buffer.from(update).toString('base64'),
           originId,
-        })
+        }).catch(() => c.ws.close(1011, 'authorization unavailable'))
       },
       onAwareness: (update, originId) => {
-        sendJson(c.ws, {
+        void sendDoc(c, documentId, {
           type: 'doc.awareness',
           documentId,
           updateB64: Buffer.from(update).toString('base64'),
           originId,
-        })
+        }).catch(() => c.ws.close(1011, 'authorization unavailable'))
       },
     }
     const { initialState } = await docSubscribe(documentId, companyId, subRec)
     c.docSubs.set(documentId, subRec)
-    sendJson(c.ws, {
+    await sendDoc(c, documentId, {
       type: 'doc.sync',
       documentId,
       stateB64: Buffer.from(initialState).toString('base64'),
@@ -257,17 +278,19 @@ export function attachWebSocket(httpServer: Server) {
       try { ws.close(4401, 'missing ws ticket') } catch { /* ignore */ }
       return
     }
-    const session = await consumeWsTicket(ticket)
-    if (!session) {
+    const ticketSession = await consumeWsTicket(ticket)
+    if (!ticketSession) {
       console.log(`[ws] rejecting bad/expired/used ticket (${ip})`)
       try { ws.close(4401, 'invalid ws ticket') } catch { /* ignore */ }
       return
     }
 
+    const session = ticketSession.userId
     const companies = await loadMemberships(session)
     const c: AuthedSocket = {
       ws,
       userId: session,
+      periodId: ticketSession.periodId,
       originId: randomUUID(),
       companies,
       docSubs: new Map(),
@@ -332,6 +355,7 @@ export function attachWebSocket(httpServer: Server) {
   // this list — the room manager handles them, since recipients need to
   // be filtered by doc-subscription, not just company.
   sub.subscribe(
+    COMPANY_ACCESS_REVOKED,
     CH_STATUS,
     CH_GROUP_PULLED, CH_CONVO_UPDATED, CH_CONVENE,
     CH_DOCS, CH_DOC_ACCESS_REVOKED, CH_CANVAS, CH_CALENDAR_REMINDER, CH_CALENDAR_EVENTS, CH_DOC_MENTION, CH_AGENT_ACTIVITY,
@@ -344,6 +368,11 @@ export function attachWebSocket(httpServer: Server) {
     void (async () => {
     // Doc channels are room-scoped, not company-scoped — skip them here.
     if (channel === 'lingxiloop:doc.update' || channel === 'lingxiloop:doc.awareness') return
+    if (channel === COMPANY_ACCESS_REVOKED) {
+      const event = JSON.parse(payload) as { userId: string; companyId: string }
+      disconnectUserFromCompany(event.userId, event.companyId)
+      return
+    }
     if (channel === CH_DOC_ACCESS_REVOKED) {
       try {
         const event = JSON.parse(payload) as { userId?: string; companyId?: string; workspaceId?: string }
@@ -389,7 +418,7 @@ export function attachWebSocket(httpServer: Server) {
     }
 
     for (const c of clients) {
-      if (!c.companies.has(companyId)) continue
+      if (!c.companies.has(companyId) || !await socketAuthorized(c)) continue
       const companyAccess = await permissionService.can({
         actorUserId: c.userId,
         action: 'company:read',

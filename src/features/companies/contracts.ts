@@ -3,7 +3,7 @@ export interface CompanySummary {
   name: string
   slug: string
   createdAt: string
-  role: string
+  role: 'teacher' | 'student'; isAdmin: boolean
   status: import('@/auth/contracts').CompanyStatus
 }
 
@@ -12,7 +12,8 @@ export type ApiInvitationStatus = 'active' | 'revoked' | 'expired' | 'consumed'
 export interface ApiInvitation {
   id: string
   email: string | null
-  role: 'member' | 'admin'
+  role: 'teacher'
+  isAdmin: boolean
   note: string | null
   maxUses: number
   useCount: number
@@ -31,7 +32,8 @@ export interface ApiInvitationWithToken {
   token: string
   url: string
   email: string | null
-  role: 'member' | 'admin'
+  role: 'teacher'
+  isAdmin: boolean
   note: string | null
   maxUses: number
   useCount: number
@@ -48,7 +50,7 @@ export type ApiInvitationPreviewStatus =
 export interface ApiInvitationPreview {
   status: ApiInvitationPreviewStatus
   invitation?: {
-    role: string
+    role: 'teacher' | 'student'; isAdmin: boolean
     email: string | null
     note: string | null
     expiresAt: string
@@ -62,7 +64,7 @@ export interface ApiInvitationPreview {
 export interface ApiInvitationAccept {
   ok: true
   alreadyMember: boolean
-  company: { id: string; name: string; slug: string; role: string; status: import('@/auth/contracts').CompanyStatus }
+  company: { id: string; name: string; slug: string; role: 'teacher' | 'student'; isAdmin: boolean; status: import('@/auth/contracts').CompanyStatus }
 }
 
 export interface ApiCompanyProfile {
@@ -70,7 +72,8 @@ export interface ApiCompanyProfile {
   name: string
   slug: string
   description: string
-  role: 'owner' | 'admin' | 'member'
+  role: 'teacher' | 'student'
+  isAdmin: boolean
   status: import('@/auth/contracts').CompanyStatus
   createdAt: string
 }
@@ -79,7 +82,8 @@ export interface ApiCompanyMember {
   id: string
   name: string
   email: string
-  role: 'owner' | 'admin' | 'member'
+  role: 'teacher' | 'student'
+  isAdmin: boolean
   joinedAt: string
   courses: Array<{ courseId: string; projectKind: import('@/types').ProjectKind; name: string; role: 'teacher' | 'learner' }>
 }

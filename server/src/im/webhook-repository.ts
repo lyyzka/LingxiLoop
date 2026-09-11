@@ -73,7 +73,7 @@ export async function teacherRoomForWebhook(
               SELECT 1 FROM project_memberships member
                WHERE member.project_id=course.project_id AND member.company_id=room.company_id
                  AND member.user_id=$2 AND member.status='ACTIVE'
-                 AND member.role IN ('OWNER','TEACHER')
+                 AND member.role = 'TEACHER'
             ) AS is_teacher
        FROM learning_course_teacher_rooms room
        JOIN courses course ON course.id=room.course_id AND course.company_id=room.company_id

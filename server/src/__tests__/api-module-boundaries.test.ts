@@ -239,5 +239,5 @@ test('signup configuration surfaces cannot return', async () => {
   const platform = await readFile(new URL('../modules/platform/router.ts', import.meta.url), 'utf8')
   const identity = await readFile(new URL('../modules/identity/gateway-registration-router.ts', import.meta.url), 'utf8')
   assert.doesNotMatch(platform, /signup-config|waitlist/)
-  assert.doesNotMatch(identity, /isAdmin/)
+  assert.doesNotMatch(identity, /req\.body\??\.isAdmin/)
 })

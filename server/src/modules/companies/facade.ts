@@ -1,3 +1,4 @@
+import { revokeCompanyAccess } from './revocation.js'
 import { pool } from '../../db/pool.js'
 import { withTransaction } from '../../db/transaction.js'
 import { env } from '../../env.js'
@@ -15,6 +16,8 @@ export const companyApplication = new CompanyApplication(pool, {
   disconnectUser: async (userId, companyId) => {
     const { disconnectUserFromCompany } = await import('../../ws.js')
     disconnectUserFromCompany(userId, companyId)
+    const { rows } = await pool.query<{ access_revoked_at: Date }>(`SELECT access_revoked_at FROM users WHERE id=$1`, [userId])
+    if (rows[0]?.access_revoked_at) await revokeCompanyAccess(companyId, userId, rows[0].access_revoked_at)
   },
   generateInvitationToken,
   hashInvitationToken,

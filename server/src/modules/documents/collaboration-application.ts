@@ -31,6 +31,8 @@ import {
 } from './markdown.js'
 import {
   compactDocumentUpdates,
+  canPersistHumanUpdate,
+  humanWriteAuthorization,
   loadDocumentSnapshot,
   loadDocumentUpdatesAfter,
   lockTenantDocument,
@@ -47,6 +49,7 @@ export interface DocSubscriber {
   onUpdate: (update: Uint8Array, originId: string) => void
   /** Called for every awareness update (cursors etc.) — never persisted. */
   onAwareness: (update: Uint8Array, originId: string) => void
+  onInvalidated?: () => void
 }
 
 interface Room {
@@ -60,7 +63,8 @@ interface Room {
   loaded: Promise<void>
   /** Only database persistence determines whether an edit is confirmed. */
   pendingEffects: Promise<void>
-  unsaved: Array<{ update: Uint8Array; authorId: string; originId: string }>
+  unsaved: Array<{ update: Uint8Array; authorId: string; originId: string; human: boolean; authorization: string | null }>
+  invalidated: boolean
   publishing: boolean
   cursor: bigint
   /** Marked true after the doc is hydrated from DB; flips OFF doc.on('update')
@@ -74,6 +78,7 @@ const RECOVER_INTERVAL_MS = 5_000
 const MAX_UNSAVED_BYTES = 8 * 1024 * 1024
 
 function assertRoomWritable(room: Room, additionalBytes: number): void {
+  if (room.invalidated) throw new Error('document room invalidated; reconnect')
   if (room.unsaved.reduce((bytes, entry) => bytes + entry.update.byteLength, additionalBytes) > MAX_UNSAVED_BYTES) {
     throw new Error('document persistence backlog full; retry after storage recovers')
   }
@@ -148,12 +153,26 @@ class DocumentRoomRuntime {
       while (room.unsaved.length) {
         const entry = room.unsaved[0]!
         await this.dependencies.transaction(async (db) => {
+          if (entry.human) {
+            if (!await canPersistHumanUpdate(db, room.documentId, room.companyId, entry.authorId, entry.authorization)) {
+              room.invalidated = true
+              room.unsaved.length = 0
+              this.rooms.delete(room.documentId)
+              for (const subscriber of room.subs) subscriber.onInvalidated?.()
+              room.subs.clear()
+              room.doc.destroy()
+              throw new Error('document writer access revoked; reconnect')
+            }
+          }
           await lockTenantDocument(db, room.documentId, room.companyId)
           await persistDocumentUpdate(db, {
             documentId: room.documentId, companyId: room.companyId, authorId: entry.authorId, bytes: entry.update,
           })
         })
         room.unsaved.shift()
+        for (const subscriber of room.subs) {
+          if (subscriber.originId !== entry.originId) subscriber.onUpdate(entry.update, entry.originId)
+        }
         room.updatesSinceSnapshot++
         // Bound fanout to one in-flight publish per room even if Redis waits indefinitely.
         // Skipped/missed notifications are recovered from the durable cursor below.
@@ -211,6 +230,7 @@ class DocumentRoomRuntime {
       loaded: Promise.resolve(),
       pendingEffects: Promise.resolve(),
       unsaved: [],
+      invalidated: false,
       publishing: false,
       cursor: 0n,
     }
@@ -234,11 +254,15 @@ class DocumentRoomRuntime {
           ? String((updateOrigin as { authorId: string }).authorId)
           : originId
 
-        for (const subscriber of room.subs) {
-          if (subscriber.originId !== originId) subscriber.onUpdate(update, originId)
-        }
-        if (!isRemote) {
-          room.unsaved.push({ update, authorId, originId })
+        if (isRemote) {
+          for (const subscriber of room.subs) {
+            if (subscriber.originId !== originId) subscriber.onUpdate(update, originId)
+          }
+        } else {
+          const human = typeof updateOrigin === 'object' && updateOrigin !== null && 'human' in updateOrigin
+          const authorization = typeof updateOrigin === 'object' && updateOrigin !== null && 'authorization' in updateOrigin
+            && typeof updateOrigin.authorization === 'string' ? updateOrigin.authorization : null
+          room.unsaved.push({ update, authorId, originId, human, authorization })
           void this.flush(room)
         }
       })
@@ -295,9 +319,11 @@ class DocumentRoomRuntime {
     update: Uint8Array,
   ): Promise<void> {
     const room = await this.getOrCreateRoom(documentId, companyId)
+    const authorization = await this.dependencies.transaction(db => humanWriteAuthorization(db, authorId))
+    if (authorization === null) throw new Error('document writer access revoked; reconnect')
     assertRoomWritable(room, update.byteLength)
     const previous = room.pendingEffects
-    Y.applyUpdate(room.doc, update, { originId, authorId } as never)
+    Y.applyUpdate(room.doc, update, { originId, authorId, human: true, authorization } as never)
     await (previous === room.pendingEffects ? this.flush(room) : room.pendingEffects)
   }
 

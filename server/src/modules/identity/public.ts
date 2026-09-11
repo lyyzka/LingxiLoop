@@ -1,6 +1,7 @@
 export { gravatarUrlForEmail } from './avatar-policy.js'
 export {
   audit,
+  gatewaySessionActive,
   auditInTransaction,
   consumeWsTicket,
   createWsTicket,

@@ -111,12 +111,11 @@ export function PersonalDashboard({
   const activeSpace = scopes.visible.find(
     (space) => space.companyId === selectedCompanyId && space.projectId === selectedWorkspaceId,
   )
-  const personal = activeSpace?.projectKind === 'PERSONAL_LEARNING'
-  const menu = activeSpace ? getLearningDashboardMenu({ personal, perspective: activeSpace.perspective }) : []
+  const menu = activeSpace ? getLearningDashboardMenu({ perspective: activeSpace.perspective }) : []
 
   useEffect(() => {
     if (!activeSpace) return
-    const context = { personal: activeSpace.projectKind === 'PERSONAL_LEARNING', perspective: activeSpace.perspective }
+    const context = { perspective: activeSpace.perspective }
     setSection((current) => isLearningDashboardSectionAvailable(current, context)
       ? current
       : getLearningDashboardDefaultSection(context))
@@ -164,15 +163,10 @@ export function PersonalDashboard({
       disabled={pagePending}
       onValueChange={(projectId) => void openWorkspace(projectId)}
     >
-      <SelectTrigger aria-label="切换个人学习区或课程" className={isMobile ? 'h-11 min-w-0 w-full rounded-2xl bg-muted/60 px-3 shadow-none' : 'h-8 min-w-0 w-full bg-input/50 shadow-none'}>
+      <SelectTrigger aria-label="切换课程" className={isMobile ? 'h-11 min-w-0 w-full rounded-2xl bg-muted/60 px-3 shadow-none' : 'h-8 min-w-0 w-full bg-input/50 shadow-none'}>
         <SelectValue placeholder="选择学习区" />
       </SelectTrigger>
       <SelectContent>
-        {scopes.personal && (
-          <SelectItem value={scopes.personal.projectId}>
-            <span className="flex min-w-0 items-center gap-2"><CourseAvatar courseId={scopes.personal.projectId} title={scopes.personal.title} size="sm" /><span className="truncate">{scopes.personal.title || '个人学习区'}</span></span>
-          </SelectItem>
-        )}
         {scopes.courses.map((space) => (
           <SelectItem key={space.projectId} value={space.projectId}>
             <span className="flex min-w-0 items-center gap-2"><CourseAvatar courseId={space.courseId ?? space.projectId} title={space.title} size="sm" /><span className="truncate">{space.title}</span></span>
@@ -236,7 +230,7 @@ export function PersonalDashboard({
             </SidebarHeader>
             <SidebarContent className="gap-1 px-2 pb-2 pt-0.5">
               <SidebarGroup className="p-0">
-                <SidebarGroupLabel>{personal ? '个人学习区' : activeSpace?.title ?? '学习看板'}</SidebarGroupLabel>
+                <SidebarGroupLabel>{activeSpace?.title ?? '学习看板'}</SidebarGroupLabel>
                 <SidebarGroupContent>
                   <SidebarMenu>
                     {menu.map((item) => (

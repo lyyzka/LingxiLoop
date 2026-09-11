@@ -3,21 +3,21 @@ import { after, before, beforeEach, test } from 'node:test'
 import { pool } from '../db/pool.js'
 import { withTransaction } from '../db/transaction.js'
 import { permissionService } from '../modules/access/public.js'
-import { provisionPersonalWorkspace } from '../modules/companies/public.js'
+import { seedEducationWorkspace, seedMembershipPeriod } from './_helpers.js'
 import { ensureSchemaOnce, resetAllTables, teardownAll } from './_helpers.js'
 
-interface PersonalContext {
+interface EducationContext {
   userId: string
   companyId: string
   projectId: string
 }
 
-async function personal(userId: string): Promise<PersonalContext> {
+async function education(userId: string): Promise<EducationContext> {
   await pool.query(
     `INSERT INTO users (id,email,display_name,email_verified_at) VALUES ($1,$2,$3,NOW())`,
     [userId, `${userId}@test.local`, userId],
   )
-  const workspace = await withTransaction(pool, (db) => provisionPersonalWorkspace(db, userId))
+  const workspace = await withTransaction(pool, (db) => seedEducationWorkspace(db, userId))
   return { userId, companyId: workspace.companyId, projectId: workspace.projectId }
 }
 
@@ -26,15 +26,15 @@ beforeEach(async () => { await resetAllTables() })
 after(async () => { await teardownAll() })
 
 test('[integration] resolver derives tenant scope and hides every A/B IDOR combination', async () => {
-  const a = await personal('permission-a')
-  const b = await personal('permission-b')
+  const a = await education('permission-a')
+  const b = await education('permission-b')
 
   const ownA = await permissionService.can({ actorUserId: a.userId, action: 'project:read', projectId: a.projectId })
   const ownB = await permissionService.can({ actorUserId: b.userId, action: 'project:read', projectId: b.projectId })
   assert.equal(ownA.allowed, true)
   assert.equal(ownB.allowed, true)
   assert.equal(ownA.context?.company.id, a.companyId)
-  assert.equal(ownA.context?.effectivePlan.code, 'PERSONAL_FREE')
+  assert.equal(ownA.context?.effectivePlan.code, 'EDUCATION')
 
   const crossA = await permissionService.can({ actorUserId: a.userId, action: 'project:read', projectId: b.projectId })
   const crossB = await permissionService.can({ actorUserId: b.userId, action: 'project:read', projectId: a.projectId })
@@ -62,27 +62,16 @@ test('[integration] resolver derives tenant scope and hides every A/B IDOR combi
   assert.deepEqual([nestedMismatch.allowed, nestedMismatch.reason], [false, 'RESOURCE_SCOPE_MISMATCH'])
 })
 
-test('[integration] personal_owner_user_id never substitutes for an ACTIVE OWNER membership', async () => {
-  const owner = await personal('permission-owner')
-  await pool.query(
-    `DELETE FROM project_memberships WHERE project_id=$1 AND user_id=$2`,
-    [owner.projectId, owner.userId],
-  )
-  const decision = await permissionService.can({
-    actorUserId: owner.userId,
-    action: 'project:read',
-    projectId: owner.projectId,
-  })
-  assert.deepEqual([decision.allowed, decision.reason, decision.context], [false, 'PROJECT_MEMBERSHIP_REQUIRED', null])
-  const company = await pool.query<{ personal_owner_user_id: string }>(
-    `SELECT personal_owner_user_id FROM companies WHERE id=$1`,
-    [owner.companyId],
-  )
-  assert.equal(company.rows[0]?.personal_owner_user_id, owner.userId)
+test('[integration] company administrator access does not require a course grant', async () => {
+  const owner = await education('permission-admin')
+  await pool.query(`DELETE FROM project_memberships WHERE project_id=$1 AND user_id=$2`, [owner.projectId,owner.userId])
+  assert.equal((await permissionService.can({ actorUserId: owner.userId,action: 'project:read',projectId: owner.projectId })).allowed,true)
+  await pool.query(`UPDATE company_memberships SET is_admin=FALSE WHERE company_id=$1 AND user_id=$2`, [owner.companyId,owner.userId])
+  assert.equal((await permissionService.can({ actorUserId: owner.userId,action: 'project:read',projectId: owner.projectId })).reason,'PROJECT_MEMBERSHIP_REQUIRED')
 })
 
 test('[integration] inactive memberships and deleted Companies fail closed', async () => {
-  const context = await personal('permission-inactive')
+  const context = await education('permission-inactive')
   await pool.query(
     `UPDATE company_memberships SET status='SUSPENDED' WHERE company_id=$1 AND user_id=$2`,
     [context.companyId, context.userId],
@@ -94,7 +83,7 @@ test('[integration] inactive memberships and deleted Companies fail closed', asy
   })
   assert.equal(companyMembershipInactive.reason, 'COMPANY_MEMBERSHIP_INACTIVE')
   await pool.query(
-    `UPDATE company_memberships SET status='ACTIVE' WHERE company_id=$1 AND user_id=$2`,
+    `UPDATE company_memberships SET status='ACTIVE',is_admin=FALSE WHERE company_id=$1 AND user_id=$2`,
     [context.companyId, context.userId],
   )
   await pool.query(
@@ -122,14 +111,16 @@ test('[integration] inactive memberships and deleted Companies fail closed', asy
 })
 
 test('[integration] Project Role and effective Entitlement must both allow the action', async () => {
-  const owner = await personal('permission-plan-owner')
+  const owner = await education('permission-plan-owner')
   await pool.query(
     `INSERT INTO users (id,email,display_name) VALUES ('permission-student','permission-student@test.local','Student')`,
   )
   await pool.query(
-    `INSERT INTO company_memberships (company_id,user_id,role) VALUES ($1,'permission-student','MEMBER')`,
+    `INSERT INTO company_memberships (company_id,user_id,role) VALUES ($1,'permission-student','STUDENT')`,
     [owner.companyId],
   )
+  await seedMembershipPeriod(pool,owner.companyId,'permission-student')
+  await pool.query(`INSERT INTO organization_seats(id,company_id,contract_id,user_id,status) VALUES('permission-student-seat',$1,$1,'permission-student','ACTIVE')`, [owner.companyId])
   await pool.query(
     `INSERT INTO project_memberships (company_id,project_id,user_id,role)
      VALUES ($1,$2,'permission-student','STUDENT')`,
@@ -188,11 +179,11 @@ test('[integration] Project Role and effective Entitlement must both allow the a
     action: 'project:update',
     projectId: owner.projectId,
   })
-  assert.equal(inherited.context?.effectivePlan.code, 'PERSONAL_FREE')
+  assert.equal(inherited.context?.effectivePlan.code, 'EDUCATION')
 })
 
 test('[integration] archived Projects remain readable and deny writes', async () => {
-  const context = await personal('permission-archived')
+  const context = await education('permission-archived')
   await pool.query(`UPDATE projects SET status='ARCHIVED' WHERE id=$1`, [context.projectId])
   const read = await permissionService.can({
     actorUserId: context.userId,

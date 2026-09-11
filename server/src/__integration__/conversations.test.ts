@@ -45,7 +45,7 @@ async function seedHumanDirectWithSelfStoredTitle(): Promise<{ companyId: string
   const projectId = 'general-c-direct-title'
   await pool.query(
     `INSERT INTO companies (id, name, slug, type, plan_id)
-     VALUES ($1, 'Direct Title Co', 'direct-title-co', 'EDUCATION', 'plan-personal-free')`,
+     VALUES ($1, 'Direct Title Co', 'direct-title-co', 'EDUCATION', 'plan-education')`,
     [companyId],
   )
   await seedUserMembership(ME_USER_ID, companyId, {
@@ -53,7 +53,7 @@ async function seedHumanDirectWithSelfStoredTitle(): Promise<{ companyId: string
     displayName: 'Yetone',
   })
   await seedUserMembership(OTHER_USER_ID, companyId, {
-    email: 'ada@test.local',
+    role: 'STUDENT', email: 'ada@test.local',
     displayName: 'Ada',
   })
   await pool.query(
@@ -63,7 +63,7 @@ async function seedHumanDirectWithSelfStoredTitle(): Promise<{ companyId: string
   )
   await pool.query(
     `INSERT INTO project_memberships(company_id,project_id,user_id,role) VALUES
-       ($1,$2,$3,'OWNER'),($1,$2,$4,'STUDENT')`,
+       ($1,$2,$3,'TEACHER'),($1,$2,$4,'STUDENT')`,
     [companyId, projectId, ME_USER_ID, OTHER_USER_ID],
   )
   await pool.query(

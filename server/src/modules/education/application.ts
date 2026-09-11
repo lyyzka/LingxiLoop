@@ -1,3 +1,7 @@
+import { generateInvitationToken, hashInvitationToken } from '../../http/invitation-token.js'
+import { HttpError } from '../../http/errors.js'
+import { insertInvitation, revokeActiveEmailInvitations } from '../companies/repository.js'
+import { installStarterAgents } from '../companies/onboarding-repository.js'
 import { createHash } from 'node:crypto'
 import type { Queryable } from '../../db/queryable.js'
 import { appendDomainEventInTransaction } from '../events/public.js'
@@ -7,6 +11,7 @@ import type { CreateEducationCompanyInput } from './contracts.js'
 import { expireNextDueEducationContract, insertEducationCore } from './repository.js'
 
 export interface EducationInfrastructure {
+  invitationBaseUrl: string
   transaction<T>(work: (db: Queryable) => Promise<T>): Promise<T>
   auditInTransaction(db: Queryable, input: { kind: string; userId?: string; companyId: string; detail: Record<string, unknown> }): Promise<void>
 }
@@ -21,29 +26,38 @@ export class EducationApplication {
   createCompany(creatorUserId: string, input: CreateEducationCompanyInput) {
     const companyId = identity('education', `${creatorUserId}:${input.idempotencyKey}`)
     const contractId = identity('contract', companyId)
-    const seatId = identity('seat', `${companyId}:${creatorUserId}`)
     return this.infrastructure.transaction(async (db) => {
-      const created = await insertEducationCore(db, { ...input, creatorUserId, companyId, contractId, seatId })
-      const actor = { type: 'USER' as const, id: creatorUserId }
+      const created = await insertEducationCore(db, { ...input, creatorUserId, companyId, contractId })
+      if (!created) return { companyId, contractId, status: 'TRIAL' as const, invitation: null }
+      await installStarterAgents(db, companyId)
+      const invitation = await this.issueAdministratorInvitation(db, creatorUserId, companyId, input.initialAdminEmail)
       await appendDomainEventInTransaction(db, {
-        companyId, aggregateType: 'COMPANY', aggregateId: companyId, idempotencyKey: `${input.idempotencyKey}:company`, actor,
+        companyId, aggregateType: 'COMPANY', aggregateId: companyId, idempotencyKey: `${input.idempotencyKey}:company`,
+        actor: { type: 'SYSTEM' },
         event: { eventType: 'EDUCATION_COMPANY.CREATED', schemaVersion: 1, payload: { status: 'TRIAL', planId: input.planId } },
       })
-      await appendDomainEventInTransaction(db, {
-        companyId, aggregateType: 'MEMBERSHIP', aggregateId: `${companyId}:${creatorUserId}`, idempotencyKey: `${input.idempotencyKey}:membership`, actor,
-        event: { eventType: 'SCHOOL_MEMBERSHIP.CREATED', schemaVersion: 1, payload: { userId: creatorUserId, status: 'ACTIVE' } },
-      })
-      await appendDomainEventInTransaction(db, {
-        companyId, aggregateType: 'EDUCATION_CONTRACT', aggregateId: contractId, idempotencyKey: `${input.idempotencyKey}:contract`, actor,
-        event: { eventType: 'EDUCATION_CONTRACT.CREATED', schemaVersion: 1, payload: { status: 'TRIAL', planId: input.planId, startsAt: input.contract.startsAt, endsAt: input.contract.endsAt, seatLimit: input.contract.seatLimit } },
-      })
-      await appendDomainEventInTransaction(db, {
-        companyId, aggregateType: 'ORGANIZATION_SEAT', aggregateId: seatId, idempotencyKey: `${input.idempotencyKey}:seat`, actor,
-        event: { eventType: 'ORGANIZATION_SEAT.ASSIGNED', schemaVersion: 1, payload: { userId: creatorUserId, status: 'ACTIVE', contractId } },
-      })
-      if (created) await this.infrastructure.auditInTransaction(db, { kind: 'education_company_create', userId: creatorUserId, companyId, detail: { contractId, seatId, planId: input.planId } })
-      return { companyId, contractId, seatId, status: 'TRIAL' as const }
+      await this.infrastructure.auditInTransaction(db, { kind: 'education_company_create', userId: creatorUserId, companyId,
+        detail: { contractId, planId: input.planId } })
+      return { companyId, contractId, status: 'TRIAL' as const, invitation }
     })
+  }
+
+  inviteAdministrator(actorUserId: string, companyId: string, email: string) {
+    return this.infrastructure.transaction(async (db) => {
+      const company = await db.query(`SELECT 1 FROM companies WHERE id=$1 AND status IN ('ACTIVE','TRIAL') FOR UPDATE`, [companyId])
+      if (!company.rows[0]) throw new HttpError(409, 'company is not accepting administrators')
+      return this.issueAdministratorInvitation(db, actorUserId, companyId, email.toLowerCase())
+    })
+  }
+
+  private async issueAdministratorInvitation(db: Queryable, actorUserId: string, companyId: string, email: string) {
+    const token = generateInvitationToken()
+    const expiresAt = new Date(Date.now()+7*86_400_000)
+    await revokeActiveEmailInvitations(db, companyId, email)
+    await insertInvitation(db, { tokenHash: hashInvitationToken(token), companyId, invitedBy: actorUserId, email,
+      isAdmin: true, note: null, maxUses: 1, expiresAt })
+    await this.infrastructure.auditInTransaction(db, { kind: 'platform_administrator_invite', userId: actorUserId, companyId, detail: { email } })
+    return { url: `${this.infrastructure.invitationBaseUrl.replace(/\/+$/, '')}/invite/${encodeURIComponent(token)}`, expiresAt: expiresAt.toISOString() }
   }
 
   expireNextDueContract(now: Date): Promise<boolean> {

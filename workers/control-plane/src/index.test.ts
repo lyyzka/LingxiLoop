@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest'
 
 declare module 'cloudflare:test' {
   interface ProvidedEnv extends Env {
+    BETTER_AUTH_SECRET: string
     TEST_MIGRATIONS: import('@cloudflare/vitest-pool-workers/config').D1Migration[]
   }
 }
@@ -11,6 +12,19 @@ declare module 'cloudflare:test' {
 beforeAll(async () => applyD1Migrations(env.DB, env.TEST_MIGRATIONS))
 
 describe('control-plane trust boundaries', () => {
+  async function mcp(method: string, params?: Record<string, unknown>, id = 1) {
+    return SELF.fetch('https://admin.example.com/api/mcp', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer test-mcp-service-token',
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'mcp-protocol-version': '2025-11-25',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id, method, ...(params ? { params } : {}) }),
+    })
+  }
+
   it('proxies public health without initializing auth', async () => {
     await env.DB.prepare(`DELETE FROM auth_settings WHERE id=1`).run()
     fetchMock.activate()
@@ -46,6 +60,33 @@ describe('control-plane trust boundaries', () => {
     expect(response.status).toBe(401)
   })
 
+  it('links only the bootstrap administrator to a signed business identity', async () => {
+    const now = Math.floor(Date.now() / 1000)
+    await env.DB.batch([
+      env.DB.prepare(`INSERT INTO user(id,name,email,emailVerified,createdAt,updatedAt,role) VALUES(?,?,?,1,?,?,'admin')`)
+        .bind('bootstrap-admin', 'Bootstrap Admin', 'bootstrap-admin@example.com', now, now),
+      env.DB.prepare(`INSERT INTO account(id,accountId,providerId,issuer,userId,password,createdAt,updatedAt) VALUES(?,?,'credential','local:credential',?,?,?,?)`)
+        .bind('bootstrap-admin-account', 'bootstrap-admin', 'bootstrap-admin', await hashPassword('password123'), now, now),
+      env.DB.prepare(`UPDATE bootstrap_state SET completed_at=?,admin_user_id=? WHERE id=1`).bind(now, 'bootstrap-admin'),
+    ])
+    fetchMock.activate()
+    fetchMock.disableNetConnect()
+    fetchMock.get('https://challenges.cloudflare.com').intercept({ path: '/turnstile/v0/siteverify', method: 'POST' }).reply(200, { success: true })
+    fetchMock.get('https://origin.example.com').intercept({ path: '/api/internal/bootstrap/platform-user', method: 'POST' }).reply(200, { appUserId: 'bootstrap-app-user' })
+    try {
+      const signIn = await SELF.fetch('https://admin.example.com/api/auth/sign-in/email', {
+        method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://admin.example.com', 'x-captcha-response': 'XXXX.DUMMY.TOKEN.XXXX' },
+        body: JSON.stringify({ email: 'bootstrap-admin@example.com', password: 'password123' }),
+      })
+      const response = await SELF.fetch('https://admin.example.com/api/control/bootstrap-business-identity', {
+        method: 'POST', headers: { cookie: signIn.headers.get('set-cookie') ?? '' },
+      })
+      expect(await response.json()).toEqual({ ok: true, appUserId: 'bootstrap-app-user' })
+      expect(await env.DB.prepare(`SELECT app_user_id FROM app_user_links WHERE auth_user_id='bootstrap-admin'`).first()).toEqual({ app_user_id: 'bootstrap-app-user' })
+      fetchMock.assertNoPendingInterceptors()
+    } finally { fetchMock.deactivate() }
+  })
+
   it('signs in after an OTP verifies a password account', async () => {
     const email = 'otp-signup@example.com'
     const now = Math.floor(Date.now() / 1000)
@@ -57,6 +98,13 @@ describe('control-plane trust boundaries', () => {
       env.DB.prepare(`INSERT INTO verification(id,identifier,value,expiresAt,createdAt,updatedAt) VALUES(?,?,?,?,?,?)`)
         .bind('otp-signup-verification', `email-verification-otp-${email}`, '123456:0', now + 300, now, now),
     ])
+    const encoder = new TextEncoder()
+    const material = await crypto.subtle.digest('SHA-256', encoder.encode(`registration-claim:${env.BETTER_AUTH_SECRET}`))
+    const key = await crypto.subtle.importKey('raw', material, 'AES-GCM', false, ['encrypt'])
+    const nonce = crypto.getRandomValues(new Uint8Array(12))
+    const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv: nonce }, key, encoder.encode('otp-invite')))
+    const sealed = btoa(String.fromCharCode(...nonce, ...ciphertext)).replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '')
+    await env.DB.prepare(`INSERT INTO registration_claims(auth_user_id,token_hash,invite_token,invite_kind,email,status,created_at,updated_at) VALUES('otp-signup-user','hash',?,'company',?,'pending',?,?)`).bind(sealed,email,now,now).run()
     fetchMock.activate()
     fetchMock.disableNetConnect()
     fetchMock.get('https://challenges.cloudflare.com').intercept({ path: '/turnstile/v0/siteverify', method: 'POST' }).reply(200, { success: true })
@@ -121,13 +169,7 @@ describe('control-plane trust boundaries', () => {
     fetchMock.disableNetConnect()
     fetchMock.get('https://challenges.cloudflare.com').intercept({ path: '/turnstile/v0/siteverify', method: 'POST' }).reply(200, { success: true })
     fetchMock.get('https://origin.example.com').intercept({ path: '/api/auth/ws-ticket', method: 'POST' }).reply(200, { ticket: 'ticket-1' })
-    let registrationAssertion: Record<string, unknown> | undefined
-    fetchMock.get('https://origin.example.com').intercept({ path: '/api/internal/registration/provision', method: 'POST' }).reply((request) => {
-      const header = new Headers(request.headers).get('x-lingxiloop-gateway')!
-      registrationAssertion = JSON.parse(atob(header.split('.')[0]!.replaceAll('-', '+').replaceAll('_', '/'))) as Record<string, unknown>
-      expect(JSON.parse(String(request.body))).toEqual({ authUserId: 'ws-user', email: 'ws@example.com', name: 'WebSocket User' })
-      return { statusCode: 200, data: { appUserId: 'app-ws-user' } }
-    })
+    await env.DB.prepare(`INSERT INTO app_user_links(auth_user_id,app_user_id,provisioned_at) VALUES('ws-user','app-ws-user',?)`).bind(now).run()
     try {
       const signIn = await SELF.fetch('https://admin.example.com/api/auth/sign-in/email', {
         method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://admin.example.com', 'x-captcha-response': 'XXXX.DUMMY.TOKEN.XXXX' },
@@ -137,8 +179,6 @@ describe('control-plane trust boundaries', () => {
         method: 'POST', headers: { cookie: signIn.headers.get('set-cookie') ?? '' },
       })
       expect({ status: response.status, body: await response.json() }).toEqual({ status: 200, body: { ticket: 'ticket-1' } })
-      expect(registrationAssertion).toMatchObject({ appUserId: null, authUserId: 'ws-user', method: 'POST', path: '/api/internal/registration/provision',
-        service: { audience: 'registration', capability: 'registration-provision', emailVerified: true, bodyHash: expect.any(String) } })
       for (const path of ['/api/internal/registration/provision', '/api/internal/registration/invitation']) {
         const denied = await SELF.fetch(`https://admin.example.com${path}`, {
           method: 'POST', headers: { cookie: signIn.headers.get('set-cookie') ?? '' },
@@ -150,6 +190,10 @@ describe('control-plane trust boundaries', () => {
   })
 
   it('rejects cross-site authentication writes and registration without CAPTCHA', async () => {
+    fetchMock.activate()
+    fetchMock.disableNetConnect()
+    fetchMock.get('https://challenges.cloudflare.com').intercept({ path: '/turnstile/v0/siteverify', method: 'POST' }).reply(200, { success: true })
+    try {
     const crossSite = await SELF.fetch('https://lingxiloop-control-plane.yangyangli0426.workers.dev/api/auth/sign-in/email', {
       method: 'POST',
       headers: { 'content-type': 'application/json', origin: 'https://attacker.example', 'x-captcha-response': 'XXXX.DUMMY.TOKEN.XXXX' },
@@ -162,7 +206,9 @@ describe('control-plane trust boundaries', () => {
       headers: { 'content-type': 'application/json', origin: 'https://lingxiloop-control-plane.yangyangli0426.workers.dev' },
       body: JSON.stringify({ email: 'user@example.com', name: 'User', password: 'password123' }),
     })
-    expect(noInvite.status).toBe(400)
+    expect(noInvite.status).toBe(403)
+    fetchMock.assertNoPendingInterceptors()
+    } finally { fetchMock.deactivate() }
   })
 
   it('proxies Kuma status for an authenticated administrator', async () => {
@@ -200,6 +246,55 @@ describe('control-plane trust boundaries', () => {
         latest: { 11: { status: 1, ping: 26 } },
         uptime: { '11_24': 1 },
       })
+      fetchMock.assertNoPendingInterceptors()
+    } finally { fetchMock.deactivate() }
+  })
+
+  it('authenticates MCP, exposes operations, and replays commands idempotently', async () => {
+    const now = Date.now()
+    await env.DB.batch([
+      env.DB.prepare(`INSERT OR REPLACE INTO user(id,name,email,emailVerified,createdAt,updatedAt,role,banned) VALUES('mcp-admin','MCP Admin','mcp@example.com',1,?,?, 'admin',0)`).bind(now, now),
+      env.DB.prepare(`INSERT OR REPLACE INTO app_user_links(auth_user_id,app_user_id,provisioned_at,suspended_at) VALUES('mcp-admin','app-mcp-admin',?,NULL)`).bind(now),
+    ])
+    expect((await SELF.fetch('https://admin.example.com/api/mcp', { method: 'POST' })).status).toBe(401)
+    expect((await SELF.fetch('https://admin.example.com/api/mcp', {
+      method: 'POST', headers: { authorization: 'Bearer test-mcp-service-token', origin: 'https://attacker.example' },
+    })).status).toBe(403)
+
+    const initialized = await mcp('initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'test', version: '1' } })
+    expect((await initialized.json() as { result: { serverInfo: { name: string } } }).result.serverInfo.name).toBe('lingxiloop-production-operations')
+    const listed = await mcp('tools/list')
+    const toolNames = ((await listed.json() as { result: { tools: Array<{ name: string }> } }).result.tools).map((tool) => tool.name)
+    expect(toolNames).toEqual(expect.arrayContaining(['lingxiloop_admin_resource_list', 'lingxiloop_agent_run_cancel', 'lingxiloop_arcane_logs']))
+    const targets = await mcp('tools/call', { name: 'lingxiloop_arcane_targets', arguments: {} }, 2)
+    const targetsBody = await targets.json() as { result: { content: Array<{ text: string }> } }
+    expect(Object.keys(JSON.parse(targetsBody.result.content[0]!.text))).toEqual([
+      'lingxiloop-core-state', 'lingxiloop-app-a', 'server-b-ingress', 'lingxiloop-app-b', 'lingxiloop-knowledge-agent', 'uptime',
+    ])
+
+    fetchMock.activate()
+    fetchMock.disableNetConnect()
+    fetchMock.get('https://origin.example.com').intercept({ path: '/api/admin/resources/users/user-1', method: 'GET' })
+      .reply(200, { name: 'visible', token: 'upstream-token', nested: { prompt: 'private prompt', environment: ['PASSWORD=private'] } })
+    fetchMock.get('https://origin.example.com').intercept({ path: '/api/admin/agent-runs/run-1/cancel', method: 'POST' }).reply(200, { cancelled: true })
+    fetchMock.get('https://ops.example.com').intercept({ path: '/api/environments/b/projects/app-b/runtime', method: 'GET' })
+      .reply(200, { data: { runtimeServices: [{ containerId: 'container-1', containerName: 'lingxiloop-app-b-server-1' }] } })
+    fetchMock.get('https://ops.example.com').intercept({ path: '/api/events/environment/b?search=lingxiloop-app-b&sort=createdAt&order=desc&limit=100', method: 'GET' })
+      .reply(200, { data: [{ resourceId: 'container-1', title: 'allowed' }, { resourceId: 'other-project', title: 'blocked' }] })
+    try {
+      const record = await mcp('tools/call', { name: 'lingxiloop_admin_resource_get', arguments: { resource: 'users', id: 'user-1' } }, 3)
+      const recordBody = await record.json() as { result: { content: Array<{ text: string }> } }
+      expect(JSON.parse(recordBody.result.content[0]!.text)).toEqual({ name: 'visible', token: '[REDACTED]', nested: { prompt: '[REDACTED]', environment: '[REDACTED]' } })
+      const events = await mcp('tools/call', { name: 'lingxiloop_arcane_events', arguments: { target: 'lingxiloop-app-b', limit: 10 } }, 6)
+      const eventsBody = await events.json() as { result: { content: Array<{ text: string }> } }
+      expect(JSON.parse(eventsBody.result.content[0]!.text)).toEqual({ data: [{ resourceId: 'container-1', title: 'allowed' }] })
+      const args = { requestId: '11111111-1111-4111-8111-111111111111', reason: 'test recovery', runId: 'run-1' }
+      const first = await mcp('tools/call', { name: 'lingxiloop_agent_run_cancel', arguments: args }, 4)
+      const firstBody = await first.json() as { result: { content: Array<{ text: string }> } }
+      expect(JSON.parse(firstBody.result.content[0]!.text)).toEqual({ cancelled: true })
+      const replay = await mcp('tools/call', { name: 'lingxiloop_agent_run_cancel', arguments: args }, 5)
+      const replayBody = await replay.json() as { result: { content: Array<{ text: string }> } }
+      expect(JSON.parse(replayBody.result.content[0]!.text)).toEqual({ replayed: true, status: 'succeeded' })
       fetchMock.assertNoPendingInterceptors()
     } finally { fetchMock.deactivate() }
   })

@@ -405,7 +405,7 @@ export async function loadLearningContext(
   const actorRole = learnerDecision?.allowed ? 'learner'
     : managerDecision?.allowed ? 'teacher' : undefined
   const allUnits = await listProjectLearningKnowledgeUnits(db, room.companyId, room.projectId)
-  const units = actorRole === 'teacher' || room.projectKind === 'PERSONAL_LEARNING'
+  const units = actorRole === 'teacher'
     ? allUnits
     : allUnits.filter((unit) => unit.status === 'PUBLISHED')
   const state = learnerId ? await learningStateContext(db, {

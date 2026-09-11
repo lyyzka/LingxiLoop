@@ -1,20 +1,6 @@
-# Cloudflare Worker fronting cdn.example.com — HMAC-gated R2 reads.
-#
-# Routes: every request to `cdn.example.com/*` flows through this worker
-# instead of going straight to R2's custom-domain handler. The worker
-# validates a server-signed query string before reading the bucket via
-# its R2 binding, then proxies the bytes back to the client (with CDN
-# caching on hits).
-#
-# Deploy:
-#   cd workers/r2-gate
-#   npx wrangler login          # one-time, browser auth
-#   npx wrangler deploy
-#   npx wrangler secret put R2_URL_SIGNING_SECRET   # paste the same value as the server's .env
-#
-# Anything under `avatars/` is served unsigned (portraits are not private).
-# Anything under `attachments/` requires a valid `?exp&sig` pair signed by
-# the LingxiLoop server with the same `R2_URL_SIGNING_SECRET`.
+# Public avatar delivery only. Private object reads go through /api/files,
+# where the application checks the current company and course authorization.
+# Replace the example account, bucket, and route with the owned deployment values.
 
 name = "lingxiloop-r2-gate"
 main = "src/index.ts"

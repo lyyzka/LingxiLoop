@@ -71,9 +71,7 @@ export function DesktopApp() {
   const workspaces = useWorkspace((state) => state.list)
   const selectedWorkspaceId = useWorkspace((state) => state.selectedId)
   const activeWorkspace = workspaces.find((project) => project.id === selectedWorkspaceId)
-  const activeProjectName = activeWorkspace?.kind === 'PERSONAL_LEARNING' && activeWorkspace.isDefault
-    ? '个人学习区'
-    : activeWorkspace?.name ?? '个人学习区'
+  const activeProjectName = activeWorkspace?.name ?? '课程'
   const view = useApp((state) => state.view)
   const surface = useSurface((state) => state.surface)
   const infoParticipantId = surface?.kind === 'member' ? surface.participantId : null

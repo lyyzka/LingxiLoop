@@ -23,6 +23,7 @@
   "vars": {
     "ORIGIN_BASE_URL": "https://loop.lingxilearn.cn",
     "UPTIME_BASE_URL": "https://uptime.lingxilearn.cn",
+    "ARCANE_BASE_URL": "https://ops.christmas1314.xyz",
     "AUTH_ALLOWED_HOSTS": "loop.lingxilearn.cn,admin.lingxilearn.cn",
     "APP_VERSION": "0.1.0-beta"
   }

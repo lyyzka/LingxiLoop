@@ -1,8 +1,6 @@
 import { companyOnboardingApplication } from './onboarding-facade.js'
 import type { Queryable } from '../../db/queryable.js'
 import type { CompanyLifecycleCommand, CompanyStatus, CompanyType } from '../../domain/public.js'
-export { provisionPersonalWorkspace } from './personal-workspace.js'
-export type { PersonalWorkspaceProvisioningResult } from './personal-workspace.js'
 
 export { STARTER_ROOMS, STARTER_TEAM } from './onboarding-repository.js'
 

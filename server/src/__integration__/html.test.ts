@@ -54,7 +54,7 @@ async function seedEmailWithHtml(html: string | null): Promise<{ messageId: stri
   await seedUserMembership(ME_USER_ID, companyId)
   await pool.query(
     `INSERT INTO project_memberships(company_id,project_id,user_id,role)
-     VALUES ($1,$2,$3,'OWNER')`,
+     VALUES ($1,$2,$3,'TEACHER')`,
     [companyId, projectId, ME_USER_ID],
   )
   const conv = await findOrCreateEmailConversation({

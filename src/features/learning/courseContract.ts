@@ -9,7 +9,7 @@ export function normalizeCourseContract(value: unknown): ApiCourse {
   for (const key of requiredStrings) {
     if (typeof course[key] !== 'string') throw new Error(`invalid course response: ${key} is required`)
   }
-  if (!['PERSONAL_LEARNING', 'TEACHING', 'INSTITUTIONAL_COURSE'].includes(String(course.projectKind))) {
+  if (!['TEACHING', 'INSTITUTIONAL_COURSE'].includes(String(course.projectKind))) {
     throw new Error('invalid course response: projectKind')
   }
   if (![

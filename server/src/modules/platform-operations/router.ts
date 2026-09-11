@@ -1,3 +1,4 @@
+import { educationRouter } from '../education/router.js'
 import { Router } from 'express'
 import { z } from 'zod'
 import { lingxiOSControl } from '../../agent-runtime/runtime.js'
@@ -22,10 +23,24 @@ import {
 } from './resources.js'
 import { observabilityDashboard } from './observability-dashboard.js'
 import { changeUserLifecycle } from './user-lifecycle.js'
+import {
+  cancelPlatformAgentRun,
+  continuePlatformAgentRun,
+  decidePlatformAgentApproval,
+  inspectPlatformAgentRun,
+  platformAgentApproval,
+  reconcilePlatformAgentAction,
+  retryPlatformAgentDelivery,
+  revisePlatformAgentRun,
+} from './agent-operations.js'
 
 export const adminRouter = Router()
 
 const reasonSchema = z.object({ reason: z.string().trim().min(1).max(280) }).strict()
+const commandSchema = z.object({ requestId: z.string().uuid(), reason: z.string().trim().min(1).max(280) }).strict()
+const revisionSchema = commandSchema.extend({ text: z.string().trim().min(1).max(8000) }).strict()
+const continuationSchema = commandSchema.extend({ inputId: z.string().trim().min(1).max(2000),
+  requestVersion: z.number().int().positive(), text: z.string().trim().min(1).max(8000) }).strict()
 const INLINE_CONTENT_LIMIT = 100_000
 const runQuerySchema = z.object({
   companyId: z.string().trim().min(1).max(200).optional(),
@@ -81,6 +96,8 @@ adminRouter.use((request, response, next) => {
 function identity(response: { locals: Record<string, unknown> }): PlatformAdminIdentity {
   return response.locals.platformAdmin as PlatformAdminIdentity
 }
+
+adminRouter.use(educationRouter)
 
 adminRouter.get('/session', (request, response) => {
   response.json({
@@ -192,11 +209,57 @@ adminRouter.get('/runtime-metrics', safe(async (_request,response) => {
 adminRouter.post('/agent-runs/:id/delivery/:channel/retry', safe(async (request, response) => {
   const channel = z.enum(['message','events','usage']).parse(request.params.channel)
   const { reason } = reasonSchema.parse(request.body)
-  const runtime = await lingxiOSControl(), run = (await runtime.listRuns({ id: String(request.params.id),limit: 1 })).items[0]
-  if (!run) throw new HttpError(404, 'run not found')
+  const runtime = await lingxiOSControl()
+  const result = await retryPlatformAgentDelivery(runtime, String(request.params.id), channel)
+  const run = result.run
   await audit({ kind: 'platform_admin.delivery_retry', userId: identity(response).id, companyId: run.identity.tenantId,
     ...requestMetadata(request), detail: { runId: run.id, channel, reason } })
-  response.json({ retried: await runtime.retryDelivery(run.identity,channel) })
+  response.json({ retried: result.retried })
+}))
+
+adminRouter.get('/agent-runs/:id/operations', safe(async (request, response) => {
+  const afterSeq = z.coerce.number().int().nonnegative().safe().default(0).parse(request.query.afterSeq)
+  response.json(await inspectPlatformAgentRun(await lingxiOSControl(), String(request.params.id), afterSeq))
+}))
+
+adminRouter.post('/agent-runs/:id/revise', safe(async (request, response) => {
+  const { text } = revisionSchema.parse(request.body)
+  const { revised } = await revisePlatformAgentRun(await lingxiOSControl(), String(request.params.id), text)
+  response.json({ revised })
+}))
+
+adminRouter.post('/agent-runs/:id/continue', safe(async (request, response) => {
+  const { inputId, requestVersion, text } = continuationSchema.parse(request.body)
+  const { result } = await continuePlatformAgentRun(await lingxiOSControl(), String(request.params.id), { inputId, requestVersion, text })
+  response.json(result)
+}))
+
+adminRouter.post('/agent-runs/:id/cancel', safe(async (request, response) => {
+  commandSchema.parse(request.body)
+  const { cancelled } = await cancelPlatformAgentRun(await lingxiOSControl(), String(request.params.id))
+  response.json({ cancelled })
+}))
+
+adminRouter.get('/agent-runs/:id/approvals/:approvalId', safe(async (request, response) => {
+  const { approval } = await platformAgentApproval(await lingxiOSControl(), String(request.params.id), String(request.params.approvalId))
+  response.json(approval)
+}))
+
+adminRouter.post('/agent-runs/:id/approvals/:approvalId/resolve', safe(async (request, response) => {
+  const input = commandSchema.extend({ approved: z.boolean() }).strict().parse(request.body)
+  const { result } = await decidePlatformAgentApproval(await lingxiOSControl(), String(request.params.id), String(request.params.approvalId), input.approved)
+  response.json(result)
+}))
+
+adminRouter.post('/agent-runs/:id/actions/:actionKey/reconcile', safe(async (request, response) => {
+  commandSchema.parse(request.body)
+  const { result } = await reconcilePlatformAgentAction(await lingxiOSControl(), String(request.params.id), String(request.params.actionKey))
+  response.json(result)
+}))
+
+adminRouter.post('/agent-runtime/maintenance', safe(async (request, response) => {
+  commandSchema.parse(request.body)
+  response.json(await (await lingxiOSControl()).maintenance())
 }))
 
 adminRouter.post('/agent-deliveries/:id/retry', safe(async (request, response) => {
@@ -325,6 +388,13 @@ function userLifecycle(action: 'suspend' | 'restore' | 'delete') {
       reason: parsed.data.reason,
       ...requestMetadata(request),
     }))
+    if (action !== 'restore') {
+      const { disconnectUserFromCompany } = await import('../../ws.js')
+      const { rows } = await pool.query<{ company_id: string }>(
+        `SELECT company_id FROM company_memberships WHERE user_id=$1`, [targetId],
+      )
+      for (const membership of rows) disconnectUserFromCompany(targetId, membership.company_id)
+    }
     response.json(result)
   })
 }

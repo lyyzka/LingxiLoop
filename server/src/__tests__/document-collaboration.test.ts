@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { test } from 'node:test'
+import { afterEach, beforeEach, mock, test } from 'node:test'
+import { ContextScopedPermissionService } from '../modules/access/application.js'
 import * as Y from 'yjs'
 import type { Queryable } from '../db/queryable.js'
 import {
@@ -8,11 +9,15 @@ import {
 import type { DocumentAwarenessEvent, DocumentUpdateEvent } from '../modules/documents/contracts.js'
 import { listProjectDocumentIds } from '../modules/documents/collaboration-repository.js'
 
+afterEach(() => mock.restoreAll())
+beforeEach(() => { mock.method(ContextScopedPermissionService.prototype, 'can', async () => ({ allowed: true })) })
+
 function emptyDocumentDb() {
   const calls: Array<{ text: string; params: readonly unknown[] }> = []
   const db: Queryable = {
     query: async (text, params = []) => {
       calls.push({ text, params })
+      if (text.includes('AS authorization')) return { rows: [{ authorization: '' }], rowCount: 1 } as never
       if (/SELECT id FROM documents[\s\S]*FOR UPDATE/.test(text)) {
         return { rows: [{ id: params[0] }], rowCount: 1 } as never
       }
@@ -78,7 +83,7 @@ test('document collaboration persists and publishes one local Yjs update with it
 
   assert.equal(originEchoes, 0)
   assert.equal(peerUpdates, 1)
-  assert.equal(transactions, 2)
+  assert.equal(transactions, 3)
   assert.deepEqual(events.map((event) => ({ type: event.type, originId: event.originId })), [
     { type: 'doc.update', originId: 'socket-1' },
   ])
@@ -172,6 +177,7 @@ test('failed persistence is retained, retries include dependent deltas, and dura
   let publishes = 0
   const db: Queryable = {
     query: async (sql, params = []) => {
+      if (sql.includes('AS authorization')) return { rows: [{ authorization: '' }], rowCount: 1 } as never
       if (sql.includes('LEFT JOIN document_snapshots')) return { rows: [{ state_bytes: snapshot, snapshot_at_update_id: String(snapshotId) }] } as never
       if (sql.includes('SELECT update_log.id,')) return { rows: stored.map((bytes, index) => ({ id: String(index + 1), update_bytes: bytes })).filter((row) => BigInt(row.id) > BigInt(String(params[2]))) } as never
       if (sql.includes('INSERT INTO document_updates')) {

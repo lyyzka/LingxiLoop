@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { seedMembershipPeriod } from './_helpers.js'
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { after, before, beforeEach, test } from 'node:test'
@@ -51,14 +52,15 @@ async function seedTeacherCourse():Promise<Fixture>{
   for(const [id,name] of [[teacherId,'周老师'],[learnerId,'陈同学'],[adminId,'公司管理员']] as const){
     await pool.query(`INSERT INTO users(id,email,display_name) VALUES($1,$2,$3)`,[id,`${id}@test.local`,name])
   }
-  await pool.query(`INSERT INTO companies(id,name,slug,type,plan_id) VALUES($1,'Pulse 测试公司',$1,'EDUCATION','plan-personal-free')`,[companyId])
-  for(const [id,role] of [[teacherId,'MEMBER'],[learnerId,'MEMBER'],[adminId,'OWNER']] as const){
-    await pool.query(`INSERT INTO company_memberships(company_id,user_id,role) VALUES($1,$2,$3)`,[companyId,id,role])
+  await pool.query(`INSERT INTO companies(id,name,slug,type,plan_id) VALUES($1,'Pulse 测试公司',$1,'EDUCATION','plan-education')`,[companyId])
+  for(const [id,role] of [[teacherId,'TEACHER'],[learnerId,'STUDENT'],[adminId,'TEACHER']] as const){
+    await pool.query(`INSERT INTO company_memberships(company_id,user_id,role,is_admin) VALUES($1,$2,$3,$4)`,[companyId,id,role,id===adminId])
+    await seedMembershipPeriod(pool,companyId,id)
   }
   const contractId=`contract-${suffix}`
   await pool.query(
     `INSERT INTO education_contracts(id,company_id,plan_id,status,starts_at,ends_at,seat_limit)
-     VALUES ($1,$2,'plan-personal-free','ACTIVE',NOW()-INTERVAL '1 day',NOW()+INTERVAL '30 days',3)`,
+     VALUES ($1,$2,'plan-education','ACTIVE',NOW()-INTERVAL '1 day',NOW()+INTERVAL '30 days',3)`,
     [contractId,companyId],
   )
   for(const id of [teacherId,learnerId,adminId]){
@@ -199,7 +201,7 @@ test('[integration] archive and restore retain the same Pulse identity and teach
   assert.equal(rows[0]?.conversation_id,first.roomId)
 })
 
-test('[integration] only a current course teacher can discover Pulse or open its teacher endpoint',async()=>{
+test('[integration] current course teachers and company administrators can discover Pulse and open its teacher endpoint',async()=>{
   const fixture=await seedTeacherCourse()
   const pulse=await ensureTeacherAgentForCourse(fixture.companyId,fixture.courseId,pool,teacherTransaction)
   const path=`/api/courses/${encodeURIComponent(fixture.courseId)}/teacher-agent`
@@ -207,16 +209,17 @@ test('[integration] only a current course teacher can discover Pulse or open its
   assert.equal(teacherSummary.status,200)
   assert.equal((await teacherSummary.json() as {agentId:string}).agentId,pulse.agentId)
   assert.equal((await apiRequest(fixture.learnerId,fixture.companyId,path)).status,403)
-  assert.equal((await apiRequest(fixture.adminId,fixture.companyId,path)).status,404)
+  assert.equal((await apiRequest(fixture.adminId,fixture.companyId,path)).status,200)
 
   const teacherParticipants=await apiRequest(fixture.teacherId,fixture.companyId,'/api/participants',fixture.projectId)
   const learnerParticipants=await apiRequest(fixture.learnerId,fixture.companyId,'/api/participants',fixture.projectId)
   const adminParticipants=await apiRequest(fixture.adminId,fixture.companyId,'/api/participants',fixture.projectId)
   assert.equal(teacherParticipants.status,200)
   assert.equal(learnerParticipants.status,200)
-  assert.equal(adminParticipants.status,404)
+  assert.equal(adminParticipants.status,200)
   const ids=async(response:Response)=>(await response.json() as Array<{id:string}>).map((item)=>item.id)
   assert.ok((await ids(teacherParticipants)).includes(pulse.agentId))
+  assert.ok((await ids(adminParticipants)).includes(pulse.agentId))
   assert.equal((await ids(learnerParticipants)).includes(pulse.agentId),false)
 
   const learnerRoom=await apiRequest(

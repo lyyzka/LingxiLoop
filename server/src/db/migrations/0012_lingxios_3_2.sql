@@ -1,0 +1,1 @@
+-- migrateDatabase applies the installed package's public migration010 asset here.

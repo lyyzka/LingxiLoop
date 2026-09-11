@@ -23,6 +23,7 @@ test('upload boundaries reject unsafe or cross-workspace storage paths', async (
 
   let presignOptions: unknown
   const application = new PlatformApplication({
+    db: { query: async () => ({ rowCount: 1 }) },
     storage: {
       mode: 'r2',
       async presignPut(key: string, _mime: string, options?: number | { ttlSeconds?: number; contentLength?: number }) {
@@ -32,7 +33,7 @@ test('upload boundaries reject unsafe or cross-workspace storage paths', async (
       async publicUrl(key: string) { return `https://cdn.invalid/${key}` },
     },
   } as unknown as PlatformInfrastructure)
-  await application.presignUpload('company', { name: 'notes.pdf', mime: 'application/pdf', size: MAX_UPLOAD_BYTES })
+  await application.presignUpload('company', 'user', { name: 'notes.pdf', mime: 'application/pdf', size: MAX_UPLOAD_BYTES })
   assert.deepEqual(presignOptions, { contentLength: MAX_UPLOAD_BYTES })
   assert.equal(presignUploadRequestSchema.safeParse({ name: '../notes.pdf', mime: 'application/pdf', size: 1 }).success, false)
   assert.deepEqual(

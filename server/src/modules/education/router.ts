@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import { Router } from 'express'
 import { HttpError } from '../../http/errors.js'
 import { safe } from '../../http/async-handler.js'
@@ -16,4 +17,9 @@ educationRouter.post('/education-companies', safe(async (req, res) => {
     if (error instanceof Error && /required|idempotency|duplicate|unique/i.test(error.message)) throw new HttpError(409, error.message)
     throw error
   }
+}))
+
+educationRouter.post('/companies/:id/administrator-invitations', safe(async (req, res) => {
+  const input = z.object({ email: z.string().trim().email() }).strict().parse(req.body)
+  res.status(201).json(await educationApplication.inviteAdministrator(requireAuth(req), String(req.params.id), input.email))
 }))

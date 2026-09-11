@@ -31,7 +31,6 @@ export const ADMIN_RESOURCES = {
   'governance-policies': { label: '治理策略', group: 'identity', table: 'governance_policies', idColumn: 'id', companyColumn: 'company_id', statusColumn: 'kind', searchColumns: ['id', 'kind', 'policy_version'], orderColumn: 'created_at', total: true },
   'education-contracts': { label: '教育合同', group: 'identity', table: 'education_contracts', idColumn: 'id', companyColumn: 'company_id', statusColumn: 'status', searchColumns: ['id', 'plan_id'], orderColumn: 'created_at', total: true },
   'organization-seats': { label: '组织席位', group: 'identity', table: 'organization_seats', idColumn: 'id', companyColumn: 'company_id', statusColumn: 'status', searchColumns: ['id', 'user_id', 'contract_id'], orderColumn: 'assigned_at', total: true },
-  subscriptions: { label: '订阅', group: 'identity', table: 'subscriptions', idColumn: 'id', companyColumn: 'company_id', statusColumn: 'status', searchColumns: ['id', 'subscriber_user_id', 'plan_id'], orderColumn: 'created_at', total: true },
 
   projects: { label: '项目', group: 'learning', table: 'projects', idColumn: 'id', companyColumn: 'company_id', projectColumn: 'id', statusColumn: 'status', searchColumns: ['id', 'name', 'description'], orderColumn: 'created_at', total: true },
   'project-memberships': { label: '项目成员', group: 'learning', table: 'project_memberships', idColumn: 'id', companyColumn: 'company_id', projectColumn: 'project_id', statusColumn: 'status', searchColumns: ['id', 'user_id', 'role'], orderColumn: 'created_at', total: true },

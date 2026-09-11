@@ -481,7 +481,7 @@ export class ConversationsApplication {
   }
 
   private assertAgentWorkspaceWritable(projectStatus: string | null): void {
-    if (projectStatus && projectStatus !== 'ACTIVE' && projectStatus !== 'TRANSFER_PENDING') {
+    if (projectStatus && projectStatus !== 'ACTIVE') {
       throw new ConversationApplicationError('workspace_read_only', 'archived courses are read-only')
     }
   }

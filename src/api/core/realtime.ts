@@ -1,3 +1,4 @@
+import { useAuth } from '@/stores/auth'
 import type { WsEvent } from '@/api/contracts'
 import { getServerOrigin } from '@/api/core/http'
 import { lingxiApiFetch } from '@/api/transport'
@@ -51,7 +52,8 @@ class RealtimeClient {
         console.error('[realtime] rejected malformed server frame', error)
       }
     }
-    socket.onclose = () => {
+    socket.onclose = (event) => {
+      if (event.code === 4403) { useAuth.getState().clear(); return }
       if (this.socket !== socket) return
       this.socket = null
       if (!this.intentionalClose) this.scheduleReconnect()

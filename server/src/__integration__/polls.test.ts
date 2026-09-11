@@ -63,7 +63,7 @@ after(async () => {
 
 async function seedWorld(): Promise<void> {
   await pool.query(
-    `INSERT INTO companies (id, name, slug, type, plan_id) VALUES ($1, 'Polls Co', 'polls-co', 'EDUCATION', 'plan-personal-free')`,
+    `INSERT INTO companies (id, name, slug, type, plan_id) VALUES ($1, 'Polls Co', 'polls-co', 'EDUCATION', 'plan-education')`,
     [COMPANY],
   )
   await pool.query(
@@ -72,7 +72,7 @@ async function seedWorld(): Promise<void> {
     [CONVO, COMPANY, JSON.stringify({ channelId: CONVO, channelType: 2, title: 'Polls Group', members: [ME, PEER, AGENT] })],
   )
   await seedUserMembership(ME, COMPANY)
-  await seedUserMembership(PEER, COMPANY, { displayName: 'Peer', email: 'peer@test.local' })
+  await seedUserMembership(PEER, COMPANY, { role: 'STUDENT', displayName: 'Peer', email: 'peer@test.local' })
   await pool.query(
     `INSERT INTO projects(id,company_id,kind,name,status,created_by)
      VALUES ($1,$2,'INSTITUTIONAL_COURSE','Polls Project','ACTIVE',$3)`,
@@ -80,7 +80,7 @@ async function seedWorld(): Promise<void> {
   )
   await pool.query(
     `INSERT INTO project_memberships(company_id,project_id,user_id,role,status) VALUES
-       ($1,$2,$3,'OWNER','ACTIVE'),
+       ($1,$2,$3,'TEACHER','ACTIVE'),
        ($1,$2,$4,'STUDENT','ACTIVE')`,
     [COMPANY, PROJECT, ME, PEER],
   )
@@ -173,10 +173,11 @@ test('[integration] poll identities and reads stay tenant-scoped', async () => {
   const otherConversation = 'co-polls-other'
   await pool.query(
     `INSERT INTO companies (id,name,slug,type,plan_id)
-     VALUES ($1,'Other Polls Co','other-polls-co','EDUCATION','plan-personal-free')`,
+     VALUES ($1,'Other Polls Co','other-polls-co','EDUCATION','plan-education')`,
     [otherCompany],
   )
-  await seedUserMembership(ME, otherCompany)
+  const otherUser = 'u-polls-other'
+  await seedUserMembership(otherUser, otherCompany)
   await pool.query(
     `INSERT INTO im_channel_bindings (channel_id,company_id,profile)
      VALUES ($1,$2,$3::jsonb)`,
@@ -184,7 +185,7 @@ test('[integration] poll identities and reads stay tenant-scoped', async () => {
       channelId: otherConversation,
       channelType: 2,
       title: 'Other Polls Group',
-      members: [ME],
+      members: [otherUser],
     })],
   )
   const idempotencyKey = randomUUID()
@@ -199,7 +200,7 @@ test('[integration] poll identities and reads stay tenant-scoped', async () => {
   })
   const second = await pollApplication.create({
     companyId: otherCompany,
-    actorId: ME,
+    actorId: otherUser,
     conversationId: otherConversation,
     question: 'Tenant B?',
     mode: 'single',
@@ -371,7 +372,7 @@ test('[integration] archived course conversations reject poll create, vote, and 
   )
   await pool.query(
     `INSERT INTO project_memberships(company_id,project_id,user_id,role,status)
-     VALUES ($1,'poll-course-project',$2,'OWNER','ACTIVE')`,
+     VALUES ($1,'poll-course-project',$2,'TEACHER','ACTIVE')`,
     [COMPANY, ME],
   )
   await pool.query(`UPDATE conversations SET project_id='poll-course-project' WHERE id=$1`, [CONVO])

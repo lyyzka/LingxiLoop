@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import type { Queryable } from '../../db/queryable.js'
 import { pool } from '../../db/pool.js'
-import { consumeWsTicketByHash, insertAuditEvent, insertWsTicket } from './session-repository.js'
+import { isGatewaySessionActive, consumeWsTicketByHash, insertAuditEvent, insertWsTicket } from './session-repository.js'
 
 export interface AuditInput {
   kind: string
@@ -32,3 +32,5 @@ export async function createWsTicket(userId: string): Promise<{ ticket: string; 
 }
 
 export const consumeWsTicket = (ticket: string) => consumeWsTicketByHash(pool, hash(ticket))
+
+export const gatewaySessionActive = (userId: string, issuedAt?: number) => isGatewaySessionActive(pool, userId, issuedAt)

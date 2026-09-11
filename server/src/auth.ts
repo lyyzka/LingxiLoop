@@ -1,8 +1,11 @@
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto'
 import { env } from './env.js'
+import { gatewaySessionActive } from './modules/identity/public.js'
 import { redis } from './redis.js'
 
 export interface GatewayAssertion {
+  authSessionIssuedAt?: number
+  platformAdmin?: boolean
   appUserId: string | null
   authUserId: string | null
   method: string
@@ -11,7 +14,7 @@ export interface GatewayAssertion {
   nonce: string
   service?: {
     audience: 'registration'
-    capability: 'registration-provision' | 'registration-invitation'
+    capability: 'registration-provision' | 'registration-invitation' | 'bootstrap-platform-user'
     bodyHash: string
     emailVerified?: boolean
   }
@@ -19,6 +22,7 @@ export interface GatewayAssertion {
 
 export interface AuthedRequest {
   authUserId?: string
+  gatewayPlatformAdmin?: boolean
   gatewayAuthenticated?: boolean
   gatewayAuthUserId?: string
   gatewayService?: GatewayAssertion['service']
@@ -67,7 +71,10 @@ export async function authMiddleware(
     if (fresh) {
       request.gatewayAuthenticated = true
       request.gatewayAuthUserId = assertion.authUserId ?? undefined
-      request.authUserId = assertion.appUserId ?? undefined
+      request.gatewayPlatformAdmin = assertion.platformAdmin === true
+      if (assertion.appUserId) {
+        if (await gatewaySessionActive(assertion.appUserId, assertion.authSessionIssuedAt)) request.authUserId = assertion.appUserId
+      }
       request.gatewayService = assertion.service
     }
   }
@@ -81,6 +88,11 @@ export function validRegistrationService(assertion: GatewayAssertion, body: unkn
     || service.bodyHash !== createHash('sha256').update(JSON.stringify(body)).digest('base64url')) return false
   if (service.capability === 'registration-invitation') {
     return assertion.path === '/api/internal/registration/invitation'
+  }
+  if (service.capability === 'bootstrap-platform-user') {
+    return assertion.path === '/api/internal/bootstrap/platform-user'
+      && service.emailVerified === true && Boolean(assertion.authUserId)
+      && (body as { authUserId?: unknown }).authUserId === assertion.authUserId
   }
   return service.capability === 'registration-provision'
     && assertion.path === '/api/internal/registration/provision'

@@ -71,7 +71,6 @@ companiesRouter.patch('/companies/:id', safe(async (req, res) => {
 }))
 
 companiesRouter.post('/companies/:id/activate', executeLifecycle('ACTIVATE'))
-companiesRouter.post('/companies/:id/request-user-deletion', executeLifecycle('REQUEST_USER_DELETION'))
 companiesRouter.post('/companies/:id/enter-grace-period', executeLifecycle('ENTER_GRACE_PERIOD'))
 companiesRouter.post('/companies/:id/enter-read-only', executeLifecycle('ENTER_READ_ONLY'))
 companiesRouter.post('/companies/:id/offboard', executeLifecycle('OFFBOARD'))
@@ -89,7 +88,7 @@ companiesRouter.patch('/companies/:id/members/:userId', safe(async (req, res) =>
   try {
     res.json(await companyApplication.changeMemberRole({
       companyId: String(req.params.id), userId: requireAuth(req), targetId: String(req.params.userId),
-      role: input.role, audit: auditContext(req),
+      isAdmin: input.isAdmin, audit: auditContext(req),
     }))
   } catch (error) { mapCompanyError(error) }
 }))
@@ -100,6 +99,13 @@ companiesRouter.delete('/companies/:id/members/:userId', safe(async (req, res) =
       companyId: String(req.params.id), userId: requireAuth(req), targetId: String(req.params.userId),
       audit: auditContext(req),
     }))
+  } catch (error) { mapCompanyError(error) }
+}))
+
+companiesRouter.post('/companies/:id/leave', safe(async (req, res) => {
+  const userId = requireAuth(req)
+  try {
+    res.json(await companyApplication.removeMember({ companyId: String(req.params.id), userId, targetId: userId, audit: auditContext(req) }))
   } catch (error) { mapCompanyError(error) }
 }))
 

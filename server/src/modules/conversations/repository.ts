@@ -346,7 +346,7 @@ export async function searchWorkspaceDirectory(
             JOIN projects course_project ON course_project.id=course.project_id AND course_project.company_id=course.company_id
             JOIN project_memberships teacher ON teacher.project_id=course.project_id AND teacher.company_id=course.company_id
               AND teacher.user_id=$2 AND teacher.status='ACTIVE'
-              AND teacher.role IN ('OWNER','TEACHER')
+              AND teacher.role = 'TEACHER'
             WHERE room.conversation_id=conversation.id AND room.company_id=conversation.company_id
               AND room.status='active' AND course_project.status='ACTIVE'))
         AND (conversation.title ILIKE $3 ESCAPE '\\' OR conversation.topic ILIKE $3 ESCAPE '\\')

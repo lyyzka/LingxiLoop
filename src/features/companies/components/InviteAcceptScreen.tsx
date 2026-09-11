@@ -2,7 +2,7 @@ import { Button } from '@/components/ui/button'
 import { companiesApi } from '@/features/companies/api'
 import { learningApi } from '@/features/learning/api'
 import { authApi } from '@/auth/api'
-import type { ApiProjectInvitationAccept, ApiProjectInvitationPreview } from '@/features/learning/contracts'
+import type { ApiProjectInvitationPreview } from '@/features/learning/contracts'
 import type { ApiInvitationPreview } from '@/features/companies/contracts'
 /**
  * InviteAcceptScreen — the "you've been invited to <workspace>" landing
@@ -39,9 +39,8 @@ import { WindowDragStrip } from '@/components/WindowDragStrip'
 function inviteRoleLabel(role: string): string {
   switch (role.toLowerCase()) {
     case 'learner': return '学习者'
-    case 'teacher': return '课程创建者'
-    case 'owner': return '所有者'
-    case 'admin': return '管理员'
+    case 'teacher': return '教师'
+    case 'student': return '学生'
     default: return '成员'
   }
 }
@@ -120,27 +119,11 @@ export function InviteAcceptScreen({ token, onDone }: Props) {
   const accept = useCallback(async () => {
     setBusy(true); setAcceptErr(null)
     try {
-      const r = projectInvite ? await learningApi.acceptProjectInvitation(rawToken) : await companiesApi.acceptInvitation(rawToken)
-      const auth = useAuth.getState()
-      if (auth.user) {
-        const companies = auth.companies.some((company) => company.id === r.company.id)
-          ? auth.companies
-          : [...auth.companies, r.company]
-        setMe(auth.user, companies, auth.personalCompanyId ?? auth.activeCompanyId ?? r.company.id)
-      } else {
-        setActive(r.company.id)
-      }
-      if (projectInvite && 'course' in r) {
-        const accepted = r as ApiProjectInvitationAccept
-        await selectLearningSpace({ companyId: accepted.company.id, projectId: accepted.course.projectId })
-        useApp.getState().selectConversation(accepted.course.studyRoomId)
-      } else {
-        setActive(r.company.id)
-      }
-      void authApi.me().then((me) => {
-        setMe(me.user, me.companies, me.activeCompanyId)
-        setServerCapabilities(me.serverCapabilities)
-      }).catch(() => undefined)
+      await authApi.acceptInvitation(rawToken, projectInvite ? 'project' : 'company')
+      const me = await authApi.me()
+      useAuth.getState().setAuthenticated(me.user, me.activeCompanyId)
+      setMe(me.user, me.companies, me.activeCompanyId)
+      setServerCapabilities(me.serverCapabilities)
       // Both supported surfaces enter the workspace immediately. The Web app
       // is a complete product surface, not a Desktop-download handoff.
       onDone()
@@ -157,9 +140,9 @@ export function InviteAcceptScreen({ token, onDone }: Props) {
   useEffect(() => {
     if (!tokenStr) return
     if (preview?.status !== 'valid') return
-    if (busy) return
+    if (busy || acceptErr) return
     void accept()
-  }, [tokenStr, preview, busy, accept])
+  }, [tokenStr, preview, busy, acceptErr, accept])
 
   const inv = preview?.invitation
   const companyName = inv?.company.name ?? 'LingxiLoop'
@@ -203,7 +186,7 @@ export function InviteAcceptScreen({ token, onDone }: Props) {
         {preview && preview.status === 'revoked' && (
           <ErrorBlock
             title="该邀请已被撤销"
-            body={`${companyName} 的所有者已取消此邀请。请让他们发送新的邀请。`}
+            body={`${companyName} 的邀请人已取消此邀请。请让他们发送新的邀请。`}
             onDismiss={onDone}
           />
         )}
@@ -217,11 +200,11 @@ export function InviteAcceptScreen({ token, onDone }: Props) {
         )}
 
         {preview && preview.status === 'consumed' && (
-          <ErrorBlock
-            title="该邀请已被使用"
-            body={`前往 ${companyName} 的链接只能使用一次，已被其他人使用。`}
-            onDismiss={onDone}
-          />
+          <div className="space-y-3 text-center">
+            <p>该邀请名额已用完。如果此前已接受，可登录重试完成开户。</p>
+            {signedIn ? <Button onClick={() => void accept()} disabled={busy}>重试完成加入</Button> : <SignInToAccept token={token_} />}
+            {acceptErr && <p role="alert">{acceptErr}</p>}
+          </div>
         )}
 
         {preview && preview.status === 'archived' && (

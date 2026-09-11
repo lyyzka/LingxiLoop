@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Queryable } from '../../db/queryable.js'
+import { createPermissionService } from '../access/public.js'
 import type { KnowledgeCreatedVia, KnowledgeVisibilityScope } from './contracts.js'
 
 export type KnowledgeSourceStatus = 'upload_pending' | 'queued' | 'processing' | 'ready' | 'failed'
@@ -199,6 +200,10 @@ export async function claimIngestionJob(
 export async function renewIngestionLease(db: Queryable, args: {
   sourceId: string; leaseToken: string; leaseMs: number
 }): Promise<boolean> {
+  const source = await findIngestionSource(db, args.sourceId)
+  if (!source || !(await createPermissionService(db).can({ actorUserId: source.owner_user_id,
+    companyId: source.company_id, action: 'knowledge:read', resource: { type: 'knowledge_source', id: source.id },
+  })).allowed) return false
   const { rows } = await db.query<{ source_id: string }>(
     `UPDATE knowledge_source_jobs
         SET leased_until=NOW()+($3::int * INTERVAL '1 millisecond'), updated_at=NOW()
@@ -362,7 +367,7 @@ export async function findVisibleSourceExternalId(db: Queryable, args: {
             SELECT 1 FROM project_memberships membership
              WHERE membership.company_id=source.company_id AND membership.project_id=source.project_id
                AND membership.user_id=$4 AND membership.status='ACTIVE'
-               AND membership.role IN ('OWNER','TEACHER')
+               AND membership.role = 'TEACHER'
           ))`,
     [args.sourceId, args.companyId, args.projectId, args.userId],
   )

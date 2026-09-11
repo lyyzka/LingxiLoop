@@ -233,7 +233,7 @@ export async function listCourseTeacherIds(
     `SELECT member.user_id FROM project_memberships member
        JOIN courses course ON course.project_id=member.project_id AND course.company_id=member.company_id
       WHERE member.company_id=$1 AND course.id=$2 AND member.status='ACTIVE'
-        AND member.role IN ('OWNER','TEACHER')
+        AND member.role = 'TEACHER'
       ORDER BY member.user_id`,
     [companyId, courseId],
   )

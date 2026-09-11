@@ -43,11 +43,9 @@ export async function listLearningSpaceRows(
      SELECT project.company_id AS "companyId",project.id AS "projectId",
             project.kind AS "projectKind",course.id AS "courseId",project.name AS title,
             project.description,project.color,project.status,
-            CASE WHEN project.kind<>'PERSONAL_LEARNING'
-                   AND authorized_scope."projectRole" IN ('OWNER','TEACHER')
+            CASE WHEN authorized_scope."projectRole" = 'TEACHER'
                  THEN 'teacher' ELSE 'learner' END AS perspective,
-            (project.kind<>'PERSONAL_LEARNING'
-              AND authorized_scope."projectRole" IN ('OWNER','TEACHER')) AS "roleCanManage",
+            (authorized_scope."projectRole" = 'TEACHER') AS "roleCanManage",
             course.study_room_conversation_id AS "studyRoomId",project.is_default AS "isDefault",
             authorized_scope."lastVisitedAt" AS "lastVisitedAt",
             authorized_scope."sortAt" AS "sortAt"
@@ -333,8 +331,7 @@ export function learningPerspective(
   projectKind: ProjectKind,
   projectRole: ProjectRole,
 ): 'learner' | 'teacher' {
-  if (projectKind === 'PERSONAL_LEARNING') return 'learner'
-  return projectRole === 'OWNER' || projectRole === 'TEACHER' ? 'teacher' : 'learner'
+  return projectRole === 'TEACHER' ? 'teacher' : 'learner'
 }
 
 export function learningLifecycleAction(
@@ -343,9 +340,9 @@ export function learningLifecycleAction(
 ): LearningLifecycleAction | null {
   switch (projectStatus) {
     case 'ACTIVE':
-      return projectKind === 'PERSONAL_LEARNING' ? null : 'END'
+      return 'END'
     case 'COURSE_ENDED':
-      return projectKind === 'PERSONAL_LEARNING' ? null : 'ENTER_READ_ONLY'
+      return 'ENTER_READ_ONLY'
     case 'READ_ONLY':
       if (projectKind === 'TEACHING') return 'ARCHIVE'
       return projectKind === 'INSTITUTIONAL_COURSE' ? 'ENTER_RETENTION' : null
@@ -353,7 +350,6 @@ export function learningLifecycleAction(
       return projectKind === 'INSTITUTIONAL_COURSE' ? 'ARCHIVE' : null
     case 'CREATED':
     case 'DRAFT':
-    case 'TRANSFER_PENDING':
     case 'ARCHIVED':
     case 'DELETED':
       return null

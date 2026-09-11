@@ -23,12 +23,6 @@ export interface LearningDashboardMenuItem {
   icon: typeof DashboardSquare01Icon
 }
 
-const PERSONAL_MENU: LearningDashboardMenuItem[] = [
-  { section: 'overview', label: '概览', icon: DashboardSquare01Icon },
-  { section: 'calendar', label: '日历', icon: Calendar03Icon },
-  { section: 'resources', label: '资料', icon: Folder01Icon },
-]
-
 const LEARNER_MENU: LearningDashboardMenuItem[] = [
   { section: 'overview', label: '概览', icon: DashboardSquare01Icon },
   { section: 'calendar', label: '日历', icon: Calendar03Icon },
@@ -43,15 +37,12 @@ const TEACHER_MENU: LearningDashboardMenuItem[] = [
 ]
 
 export function getLearningDashboardMenu(input: {
-  personal: boolean
   perspective: LearningRole
 }): LearningDashboardMenuItem[] {
-  if (input.personal) return PERSONAL_MENU
   return input.perspective === 'teacher' ? TEACHER_MENU : LEARNER_MENU
 }
 
 export function getLearningDashboardDefaultSection(input: {
-  personal: boolean
   perspective: LearningRole
 }): LearningDashboardSection {
   return getLearningDashboardMenu(input)[0].section
@@ -59,7 +50,7 @@ export function getLearningDashboardDefaultSection(input: {
 
 export function isLearningDashboardSectionAvailable(
   section: LearningDashboardSection,
-  input: { personal: boolean; perspective: LearningRole },
+  input: { perspective: LearningRole },
 ): boolean {
   return getLearningDashboardMenu(input).some((item) => item.section === section)
 }

@@ -24,7 +24,7 @@ import { CourseAvatar } from '@/features/learning/components/CourseAvatar'
 import { notifyAction, toastAction } from '@/lib/actionToast'
 import { userFacingError } from '@/lib/userFacingError'
 import { cn } from '@/lib/utils'
-import { useAuth, useMe } from '@/stores/auth'
+import { useAuth } from '@/stores/auth'
 import type { WorkspaceSummary } from '@/types'
 
 export function workspaceInitials(name: string): string {
@@ -37,7 +37,6 @@ export function workspaceInitials(name: string): string {
 }
 
 function workspaceKindLabel(workspace: WorkspaceSummary): string {
-  if (workspace.kind === 'PERSONAL_LEARNING') return '个人工作区'
   if (workspace.kind === 'TEACHING') return '教学工作区'
   return '课程工作区'
 }
@@ -126,28 +125,14 @@ export function WorkspaceRail({ dashboardActive, onOpenDashboard, onOpenWorkspac
   const workspaces = useWorkspace((state) => state.list)
   const activeId = useWorkspace((state) => state.selectedId)
   const select = useWorkspace((state) => state.select)
-  const meId = useMe()
-  const personalCompanyId = useAuth((state) => state.personalCompanyId)
+  const companyId = useAuth((state) => state.activeCompanyId)
   const [pendingId, setPendingId] = useState<string | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const brandAvatar = useBrandAvatarInteraction()
   const visible = workspaces.filter((workspace) => workspace.status !== 'ARCHIVED' && workspace.status !== 'DELETED')
-  const enterprise = visible.filter((workspace) => workspace.kind === 'INSTITUTIONAL_COURSE')
-  const personal = visible
-    .filter((workspace) => workspace.kind !== 'INSTITUTIONAL_COURSE')
-    .map((workspace, index) => ({ workspace, index }))
-    .sort((left, right) => {
-      const rank = ({ workspace }: { workspace: WorkspaceSummary }) => {
-        if (workspace.kind === 'PERSONAL_LEARNING' && workspace.isDefault) return 0
-        if (workspace.kind === 'TEACHING' && workspace.createdBy === meId) return 1
-        if (workspace.kind === 'PERSONAL_LEARNING' && workspace.createdBy !== meId) return 2
-        return 3
-      }
-      return rank(left) - rank(right) || left.index - right.index
-    })
-    .map(({ workspace }) => workspace)
+  const canCreate = useAuth((state) => state.companies[0]?.role === 'teacher')
 
   const handleSelect = async (id: string) => {
     if (pendingId) return
@@ -176,16 +161,16 @@ export function WorkspaceRail({ dashboardActive, onOpenDashboard, onOpenWorkspac
     setCreating(true)
     setCreateError(null)
     try {
-      if (!personalCompanyId) throw new Error('暂时无法确认你的个人学习区，请重新登录后再试。')
+      if (!companyId) throw new Error('暂时无法确认你的公司，请重新登录后再试。')
       const course = await toastAction(learningApi.createCourse({
         name,
         description: String(data.get('description') ?? '').trim(),
-      }, personalCompanyId), {
+      }, companyId), {
         loading: '正在创建课程与课程对话',
         success: '课程已创建',
         error: '创建课程失败',
       })
-      await selectLearningSpace({ companyId: personalCompanyId, projectId: course.projectId })
+      await selectLearningSpace({ companyId: companyId, projectId: course.projectId })
       form.reset()
       setCreateOpen(false)
       onOpenDashboard()
@@ -225,9 +210,8 @@ export function WorkspaceRail({ dashboardActive, onOpenDashboard, onOpenWorkspac
           <TooltipContent side="right" sideOffset={10}>学习看板</TooltipContent>
         </Tooltip>
         <div className="server-rail-scroll flex min-h-0 w-full translate-x-px flex-1 flex-col items-center overflow-y-auto overflow-x-hidden pb-3 pt-0.5">
-          <WorkspaceRailGroup workspaces={enterprise} dashboardActive={dashboardActive} activeId={activeId} pendingId={pendingId} onSelect={(id) => void handleSelect(id)} />
-          <WorkspaceRailGroup workspaces={personal} dashboardActive={dashboardActive} activeId={activeId} pendingId={pendingId} onSelect={(id) => void handleSelect(id)} />
-          <Dialog open={createOpen} onOpenChange={(open) => {
+          <WorkspaceRailGroup workspaces={visible} dashboardActive={dashboardActive} activeId={activeId} pendingId={pendingId} onSelect={(id) => void handleSelect(id)} />
+          {canCreate && <Dialog open={createOpen} onOpenChange={(open) => {
             setCreateOpen(open)
             if (!open) setCreateError(null)
           }}>
@@ -280,7 +264,7 @@ export function WorkspaceRail({ dashboardActive, onOpenDashboard, onOpenWorkspac
                 </Button>
               </DialogFooter>
             </DialogContent>
-          </Dialog>
+          </Dialog>}
         </div>
       </nav>
     </TooltipProvider>

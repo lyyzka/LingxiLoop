@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { after, before, beforeEach, test } from 'node:test'
 import { pool } from '../db/pool.js'
 import { onboardCompanyStarterWorkspace } from '../modules/companies/public.js'
-import { ensureSchemaOnce, installFakeWukong, resetAllTables, teardownAll } from './_helpers.js'
+import { seedUserMembership, ensureSchemaOnce, installFakeWukong, resetAllTables, teardownAll } from './_helpers.js'
 
 before(async () => { await ensureSchemaOnce() })
 beforeEach(async () => { installFakeWukong(); await resetAllTables() })
@@ -17,30 +17,30 @@ async function seedEmptyWorkspace(): Promise<{ companyId: string; ownerId: strin
     [ownerId, `${ownerId}@test.local`],
   )
   await pool.query(
-    `INSERT INTO companies (id,name,slug,type,personal_owner_user_id,plan_id)
-     VALUES ($1,'Learning Co',$1,'PERSONAL',$2,'plan-personal-free')`,
-    [companyId, ownerId],
+    `INSERT INTO companies (id,name,slug,type,plan_id)
+     VALUES ($1,'Learning Co',$1,'EDUCATION','plan-education')`,
+    [companyId],
   )
-  await pool.query("INSERT INTO company_memberships (company_id, user_id, role) VALUES ($1, $2, 'OWNER')", [companyId, ownerId])
+  await seedUserMembership(ownerId,companyId)
   await pool.query(
     `INSERT INTO projects(id,company_id,kind,name,created_by,is_default)
-     VALUES($1,$2,'PERSONAL_LEARNING','我的学习',$3,TRUE)`,
+     VALUES($1,$2,'TEACHING','课程',$3,TRUE)`,
     [`project-${companyId}`, companyId, ownerId],
   )
   await pool.query(
     `INSERT INTO project_memberships(project_id,company_id,user_id,role)
-     VALUES($1,$2,$3,'OWNER')`,
+     VALUES($1,$2,$3,'TEACHER')`,
     [`project-${companyId}`, companyId, ownerId],
   )
   await pool.query(
     `INSERT INTO participants (id, company_id, kind, name, role, initial, avatar_bg, status)
-     VALUES ($1, $2, 'human', 'Student', 'student', 'S', '#aaa', 'avail')`,
+     VALUES ($1, $2, 'human', 'Student', 'student', 'S', '#aaa', 'avail') ON CONFLICT DO NOTHING`,
     [ownerId, companyId],
   )
   return { companyId, ownerId }
 }
 
-test('[integration] canonical learning preset seeds a fresh workspace', async () => {
+test('[integration] company onboarding seeds agents without personal conversations', async () => {
   const { companyId } = await seedEmptyWorkspace()
   await onboardCompanyStarterWorkspace(companyId)
 
@@ -52,7 +52,7 @@ test('[integration] canonical learning preset seeds a fresh workspace', async ()
        (SELECT COUNT(*)::int FROM conversations WHERE company_id=$1 AND title='Everyone') AS all_hands`,
     [companyId],
   )
-  assert.deepEqual(counts.rows[0], { agents: 6, dms: 6, rooms: 2, all_hands: 0 })
+  assert.deepEqual(counts.rows[0], { agents: 6, dms: 0, rooms: 0, all_hands: 0 })
 
   const agents = await pool.query<{ preset_key: string; tools: string[]; capabilities: string[] }>(
     `SELECT preset_key, tools, capabilities FROM participants
@@ -98,7 +98,7 @@ test('[integration] canonical learning preset is idempotent', async () => {
   assert.deepEqual(countsAfter.rows[0], countsBefore.rows[0])
 })
 
-test('[integration] partial preset is rejected instead of repaired', async () => {
+test('[integration] partial company agent installation resumes without replacing existing agents', async () => {
   const { companyId } = await seedEmptyWorkspace()
   await pool.query(
     `INSERT INTO participants
@@ -107,15 +107,12 @@ test('[integration] partial preset is rejected instead of repaired', async () =>
     [`agent-${randomUUID()}`, companyId],
   )
 
-  await assert.rejects(
-    onboardCompanyStarterWorkspace(companyId),
-    /partial native learning preset/i,
-  )
+  await onboardCompanyStarterWorkspace(companyId)
 
   const agents = await pool.query<{ count: number }>(
     `SELECT COUNT(*)::int AS count FROM participants
       WHERE company_id=$1 AND kind='agent' AND preset_key IS NOT NULL`,
     [companyId],
   )
-  assert.equal(agents.rows[0]?.count, 1)
+  assert.equal(agents.rows[0]?.count, 6)
 })

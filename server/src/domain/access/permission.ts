@@ -7,7 +7,6 @@ export const PERMISSION_ACTIONS = [
   'company:read',
   'company:update',
   'company:activate',
-  'company:request_user_deletion',
   'company:enter_grace_period',
   'company:enter_read_only',
   'company:offboard',
@@ -22,13 +21,10 @@ export const PERMISSION_ACTIONS = [
   'company_invitation:revoke',
   'project:list',
   'project:read',
-  'project:create_personal_learning',
   'project:update',
   'project:activate',
   'project:end',
   'project:enter_read_only',
-  'project:request_transfer',
-  'project:cancel_transfer',
   'project:enter_retention',
   'project:archive',
   'project:delete',
@@ -159,7 +155,6 @@ export type ResourceAccessMode =
   | 'READ_WRITE'
   | 'CLOSE_OUT'
   | 'READ_ONLY'
-  | 'TRANSFER_PENDING'
   | 'RETENTION'
   | 'DENY'
 
@@ -173,6 +168,7 @@ export interface ResolvedAccessContext {
   }
   companyMembership: {
     role: CompanyRole
+    isAdmin: boolean
     status: MembershipStatus
   }
   project?: {

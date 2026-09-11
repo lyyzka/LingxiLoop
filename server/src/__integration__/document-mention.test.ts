@@ -20,7 +20,7 @@ before(ensureSchemaOnce)
 beforeEach(async () => {
   await resetAllTables()
   await pool.query(
-    `INSERT INTO companies (id,name,slug,type,plan_id) VALUES ($1,'Document mention',$1,'EDUCATION','plan-personal-free')`,
+    `INSERT INTO companies (id,name,slug,type,plan_id) VALUES ($1,'Document mention',$1,'EDUCATION','plan-education')`,
     [COMPANY],
   )
   await seedUserMembership(MENTIONER, COMPANY, { displayName: 'Lee' })
@@ -31,7 +31,7 @@ beforeEach(async () => {
   )
   await pool.query(
     `INSERT INTO project_memberships(company_id,project_id,user_id,role)
-     VALUES ($1,$2,$3,'OWNER')`,
+     VALUES ($1,$2,$3,'TEACHER')`,
     [COMPANY, PROJECT, MENTIONER],
   )
   await pool.query(

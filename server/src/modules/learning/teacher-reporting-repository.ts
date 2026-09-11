@@ -29,7 +29,7 @@ export async function loadTeacherOverviewRows(
         SELECT
           (SELECT COUNT(*) FROM project_memberships member
             WHERE member.company_id=$1 AND member.project_id=$2 AND member.status='ACTIVE'
-              AND member.role IN ('STUDENT','OBSERVER')) *
+              AND member.role = 'STUDENT') *
           (SELECT COUNT(*) FROM learning_knowledge_units
             WHERE company_id=$1 AND project_id=$2 AND status<>'ARCHIVED') AS possible
       ), levels AS (SELECT generate_series(0,4) AS level)
@@ -88,7 +88,7 @@ export async function loadTeacherOverviewRows(
       `SELECT
         (SELECT COUNT(*)::int FROM project_memberships member
           WHERE member.company_id=$1 AND member.project_id=$2 AND member.status='ACTIVE'
-            AND member.role IN ('STUDENT','OBSERVER')) AS learners,
+            AND member.role = 'STUDENT') AS learners,
         COUNT(DISTINCT attempt.learner_id)::int AS learners_with_evidence,
         COUNT(DISTINCT attempt.id)::int AS verified_attempts,
         COUNT(DISTINCT state.user_id||':'||state.knowledge_unit_id)
@@ -140,8 +140,12 @@ export async function listTeacherLearnerRows(
      AND (attention.status IN ('OPEN','ACKNOWLEDGED')
        OR (attention.status='DEFERRED' AND attention.deferred_until<=NOW()))
      AND ($4::text IS NULL OR attention.teacher_user_id=$4)
-    WHERE member.company_id=$1 AND member.project_id=$2 AND member.status='ACTIVE'
-      AND member.role IN ('STUDENT','OBSERVER')
+    WHERE member.company_id=$1 AND member.project_id=$2
+      AND (member.role = 'STUDENT'
+        OR EXISTS(SELECT 1 FROM learning_states history WHERE history.company_id=member.company_id
+          AND history.project_id=member.project_id AND history.user_id=member.user_id)
+        OR EXISTS(SELECT 1 FROM learning_attempts history WHERE history.company_id=member.company_id
+          AND history.project_id=member.project_id AND history.learner_id=member.user_id))
     GROUP BY member.user_id,user_account.display_name,user_account.email
     HAVING NOT $3::boolean OR COUNT(DISTINCT attention.id)>0
     ORDER BY needs_review DESC,due_reviews DESC,user_account.display_name
@@ -161,8 +165,8 @@ export async function findTeacherLearner(
        FROM project_memberships member
        JOIN users user_account ON user_account.id=member.user_id
       WHERE member.company_id=$1 AND member.project_id=$2
-        AND member.user_id=$3 AND member.status='ACTIVE'
-        AND member.role IN ('STUDENT','OBSERVER')`,
+        AND member.user_id=$3
+        AND member.role = 'STUDENT'`,
     [scope.companyId, scope.projectId, learnerId],
   )
   return rows[0]
@@ -261,7 +265,7 @@ export async function loadLearningDashboardTeacherOverviewRows(
       `SELECT
         (SELECT COUNT(*)::int FROM project_memberships member
           WHERE member.company_id=$1 AND member.project_id=$2 AND member.status='ACTIVE'
-            AND member.role IN ('STUDENT','OBSERVER')) AS "learnerCount",
+            AND member.role = 'STUDENT') AS "learnerCount",
         (SELECT COUNT(DISTINCT evaluation.id)::int FROM learning_evaluations evaluation
           WHERE evaluation.company_id=$1 AND evaluation.project_id=$2
             AND evaluation.status='PENDING') AS "pendingReviews",
@@ -272,14 +276,14 @@ export async function loadLearningDashboardTeacherOverviewRows(
            FROM learning_attempts attempt
            JOIN project_memberships learner ON learner.company_id=attempt.company_id
             AND learner.project_id=attempt.project_id AND learner.user_id=attempt.learner_id
-            AND learner.status='ACTIVE' AND learner.role IN ('STUDENT','OBSERVER')
+            AND learner.status='ACTIVE' AND learner.role = 'STUDENT'
           WHERE attempt.company_id=$1 AND attempt.project_id=$2
             AND attempt.submitted_at>=NOW()-($3::int*INTERVAL '1 day')) AS "learnersWithEvidence",
         (SELECT COUNT(DISTINCT (state.user_id,state.knowledge_unit_id))::int
            FROM learning_states state
            JOIN project_memberships learner ON learner.company_id=state.company_id
             AND learner.project_id=state.project_id AND learner.user_id=state.user_id
-            AND learner.status='ACTIVE' AND learner.role IN ('STUDENT','OBSERVER')
+            AND learner.status='ACTIVE' AND learner.role = 'STUDENT'
           WHERE state.company_id=$1 AND state.project_id=$2
             AND state.next_review_at<=NOW()) AS "dueReviews"`,
       windowParams,
@@ -289,7 +293,7 @@ export async function loadLearningDashboardTeacherOverviewRows(
         learners AS (
           SELECT user_id FROM project_memberships
            WHERE company_id=$1 AND project_id=$2 AND status='ACTIVE'
-             AND role IN ('STUDENT','OBSERVER')
+             AND role = 'STUDENT'
         ), units AS (
           SELECT id FROM learning_knowledge_units
            WHERE company_id=$1 AND project_id=$2 AND status<>'ARCHIVED'
@@ -319,7 +323,7 @@ export async function loadLearningDashboardTeacherOverviewRows(
             FROM learning_missions mission
             JOIN project_memberships learner ON learner.company_id=mission.company_id
              AND learner.project_id=mission.project_id AND learner.user_id=mission.learner_id
-             AND learner.status='ACTIVE' AND learner.role IN ('STUDENT','OBSERVER')
+             AND learner.status='ACTIVE' AND learner.role = 'STUDENT'
            WHERE mission.company_id=$1 AND mission.project_id=$2 GROUP BY mission.status
         )
        SELECT statuses.status,COALESCE(counts.count,0)::int AS count
@@ -348,7 +352,7 @@ export async function loadLearningDashboardTeacherOverviewRows(
          JOIN users user_account ON user_account.id=attention.learner_user_id
          JOIN project_memberships learner ON learner.company_id=attention.company_id
           AND learner.project_id=attention.project_id AND learner.user_id=attention.learner_user_id
-          AND learner.status='ACTIVE' AND learner.role IN ('STUDENT','OBSERVER')
+          AND learner.status='ACTIVE' AND learner.role = 'STUDENT'
         WHERE attention.company_id=$1 AND attention.project_id=$2 AND attention.teacher_user_id=$3
           AND (attention.status IN ('OPEN','ACKNOWLEDGED')
             OR (attention.status='DEFERRED' AND attention.deferred_until<=NOW()))
@@ -388,8 +392,12 @@ export async function listLearningDashboardLearnerRows(
     `WITH learners AS (
        SELECT member.user_id,member.created_at
          FROM project_memberships member
-        WHERE member.company_id=$1 AND member.project_id=$2 AND member.status='ACTIVE'
-          AND member.role IN ('STUDENT','OBSERVER')
+        WHERE member.company_id=$1 AND member.project_id=$2
+          AND (member.role = 'STUDENT'
+        OR EXISTS(SELECT 1 FROM learning_states history WHERE history.company_id=member.company_id
+          AND history.project_id=member.project_id AND history.user_id=member.user_id)
+        OR EXISTS(SELECT 1 FROM learning_attempts history WHERE history.company_id=member.company_id
+          AND history.project_id=member.project_id AND history.learner_id=member.user_id))
      ), state_summary AS (
        SELECT state.user_id,COALESCE(AVG(state.level),0)::float8 AS average_level,
               COUNT(DISTINCT state.knowledge_unit_id) FILTER(WHERE state.level>=3)::int AS verified_objectives,
@@ -457,7 +465,11 @@ export async function findLearningDashboardLearner(
             user_account.email,member.created_at AS "joinedAt"
        FROM project_memberships member JOIN users user_account ON user_account.id=member.user_id
       WHERE member.company_id=$1 AND member.project_id=$2 AND member.user_id=$3
-        AND member.status='ACTIVE' AND member.role IN ('STUDENT','OBSERVER')`,
+        AND (member.role = 'STUDENT'
+        OR EXISTS(SELECT 1 FROM learning_states history WHERE history.company_id=member.company_id
+          AND history.project_id=member.project_id AND history.user_id=member.user_id)
+        OR EXISTS(SELECT 1 FROM learning_attempts history WHERE history.company_id=member.company_id
+          AND history.project_id=member.project_id AND history.learner_id=member.user_id))`,
     [args.companyId, args.projectId, args.learnerId],
   )
   return rows[0] ?? null

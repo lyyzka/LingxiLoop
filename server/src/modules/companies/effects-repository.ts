@@ -5,6 +5,8 @@ export interface CompanyOnboardingEffect {
   id: string
   companyId: string
   memberId: string
+  kind: 'member_directs.seed' | 'access.revoke'
+  revokedAt: Date | null
   attempts: number
   leaseToken: string
 }
@@ -17,7 +19,8 @@ export async function enqueueMemberOnboardingEffect(
   await db.query(
     `INSERT INTO company_onboarding_effects(id,company_id,member_id)
      VALUES($1,$2,$3)
-     ON CONFLICT(company_id,member_id,kind) DO NOTHING`,
+     ON CONFLICT(company_id,member_id,kind) DO UPDATE SET id=EXCLUDED.id,status='pending',attempts=0,available_at=NOW(),
+       lease_token=NULL,lease_expires_at=NULL,error=NULL,completed_at=NULL,updated_at=NOW()`,
     [randomUUID(), companyId, memberId],
   )
 }
@@ -31,6 +34,8 @@ export async function claimCompanyOnboardingEffect(
     company_id: string
     member_id: string
     attempts: number
+    kind: 'member_directs.seed' | 'access.revoke'
+    revoked_at: Date | null
   }>(
     `WITH candidate AS (
        SELECT id FROM company_onboarding_effects
@@ -43,7 +48,7 @@ export async function claimCompanyOnboardingEffect(
         SET status='processing',attempts=effect.attempts+1,lease_token=$1,
             lease_expires_at=NOW()+INTERVAL '2 minutes',updated_at=NOW()
        FROM candidate WHERE effect.id=candidate.id
-     RETURNING effect.id,effect.company_id,effect.member_id,effect.attempts`,
+     RETURNING effect.id,effect.company_id,effect.member_id,effect.attempts,effect.kind,effect.revoked_at`,
     [leaseToken],
   )
   const row = rows[0]
@@ -52,6 +57,8 @@ export async function claimCompanyOnboardingEffect(
     companyId: row.company_id,
     memberId: row.member_id,
     attempts: row.attempts,
+    kind: row.kind,
+    revokedAt: row.revoked_at,
     leaseToken,
   } : null
 }

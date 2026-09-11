@@ -106,6 +106,6 @@ export async function requireWorkspace(
     isDefault: row.is_default,
     projectStatus: row.status,
     courseId: row.course_id,
-    courseRole: projectRole === 'STUDENT' || projectRole === 'OBSERVER' ? 'learner' : 'teacher',
+    courseRole: projectRole === 'STUDENT' ? 'learner' : 'teacher',
   }
 }

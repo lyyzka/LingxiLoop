@@ -43,7 +43,7 @@ export async function findTeacherScopeBinding(
             EXISTS(
               SELECT 1 FROM project_memberships member
                WHERE member.company_id=course.company_id AND member.project_id=course.project_id
-                 AND member.status='ACTIVE' AND member.role IN ('OWNER','TEACHER')
+                 AND member.status='ACTIVE' AND member.role = 'TEACHER'
             ) AS has_teacher
        FROM learning_project_teacher_agents project_agent
        JOIN projects project
@@ -105,7 +105,7 @@ export async function findTeacherTurnCounts(
     `SELECT
       (SELECT COUNT(*)::int FROM project_memberships member
         WHERE member.company_id=$1 AND member.project_id=$2 AND member.status='ACTIVE'
-          AND member.role IN ('STUDENT','OBSERVER')) AS learners,
+          AND member.role = 'STUDENT') AS learners,
       (SELECT COUNT(*)::int FROM learning_knowledge_units objective
         WHERE objective.company_id=$1 AND objective.project_id=$2 AND objective.status<>'ARCHIVED') AS objectives,
       (SELECT COUNT(*)::int FROM learning_activities activity

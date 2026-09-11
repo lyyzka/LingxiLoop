@@ -38,6 +38,7 @@ export interface ProjectRecord {
 
 export interface MembershipRecord<Role> {
   role: Role
+  isAdmin?: boolean
   status: MembershipStatus
 }
 
@@ -58,6 +59,7 @@ export interface ResourceRecord {
   createdBy: string | null
   visibilityScope?: 'PRIVATE' | 'PROJECT' | null
   ownerUserId?: string | null
+  conversationKind?: string | null
   conversationMembers: string[] | null
   leaderId: string | null
   status: string | null
@@ -95,6 +97,7 @@ interface ProjectRow {
 
 interface MembershipRow<Role> {
   role: Role
+  isAdmin?: boolean
   status: MembershipStatus
 }
 
@@ -119,6 +122,7 @@ interface ResourceRow {
   created_by: string | null
   visibility_scope?: 'PRIVATE' | 'PROJECT' | null
   owner_user_id?: string | null
+  conversation_kind?: string | null
   conversation_members: string[] | null
   leader_id: string | null
   resource_status: string | null
@@ -158,7 +162,7 @@ export class AccessRepository {
     const { rows } = await this.db.query<{ user_id: string }>(
       `SELECT user_id FROM project_memberships
         WHERE company_id=$1 AND project_id=$2 AND status='ACTIVE'
-          AND role IN ('OWNER','TEACHER')
+          AND role = 'TEACHER'
         ORDER BY user_id${this.lockClause}`,
       [companyId, projectId],
     )
@@ -169,7 +173,7 @@ export class AccessRepository {
     const { rows } = await this.db.query<{ count: number }>(
       `SELECT COUNT(*)::int AS count FROM project_memberships
         WHERE company_id=$1 AND project_id=$2 AND status='ACTIVE'
-          AND role IN ('STUDENT','OBSERVER')`,
+          AND role = 'STUDENT'`,
       [companyId, projectId],
     )
     return rows[0]?.count ?? 0
@@ -182,19 +186,16 @@ export class AccessRepository {
     limit: number,
   ): Promise<ActorProjectScopeRecord[]> {
     const { rows } = await this.db.query<ActorProjectScopeRecord>(
-      `SELECT member.company_id AS "companyId",member.project_id AS "projectId",
-              visit.meaningful_visited_at AS "lastVisitedAt",
-              COALESCE(visit.meaningful_visited_at,project.updated_at) AS "sortAt"
-         FROM project_memberships member
-         JOIN projects project ON project.id=member.project_id AND project.company_id=member.company_id
-         LEFT JOIN project_visits visit ON visit.company_id=member.company_id
-          AND visit.project_id=member.project_id AND visit.user_id=member.user_id
-        WHERE member.user_id=$1 AND member.status='ACTIVE'
-          AND ($2::timestamptz IS NULL
-            OR (COALESCE(visit.meaningful_visited_at,project.updated_at),member.project_id)
-              <($2::timestamptz,$3::text))
-        ORDER BY COALESCE(visit.meaningful_visited_at,project.updated_at) DESC,member.project_id DESC
-        LIMIT $4`,
+      `SELECT project.company_id AS "companyId",project.id AS "projectId",
+              visit.meaningful_visited_at AS "lastVisitedAt",COALESCE(visit.meaningful_visited_at,project.updated_at) AS "sortAt"
+         FROM projects project
+         JOIN company_memberships cm ON cm.company_id=project.company_id AND cm.user_id=$1 AND cm.ended_at IS NULL AND cm.status='ACTIVE'
+         LEFT JOIN project_memberships member ON member.project_id=project.id AND member.user_id=$1
+           AND member.company_period_id=cm.period_id AND member.status='ACTIVE'
+         LEFT JOIN project_visits visit ON visit.company_id=project.company_id AND visit.project_id=project.id AND visit.user_id=$1
+        WHERE (cm.is_admin OR member.user_id IS NOT NULL)
+          AND ($2::timestamptz IS NULL OR (COALESCE(visit.meaningful_visited_at,project.updated_at),project.id)<($2::timestamptz,$3::text))
+        ORDER BY COALESCE(visit.meaningful_visited_at,project.updated_at) DESC,project.id DESC LIMIT $4`,
       [actorUserId, afterSortAt, afterProjectId, limit],
     )
     return rows
@@ -202,7 +203,7 @@ export class AccessRepository {
 
   async actor(id: string): Promise<ActorRecord | null> {
     const { rows } = await this.db.query<ActorRow>(
-      `SELECT id,email,email_verified_at,deleted_at,suspended_at FROM users WHERE id=$1${this.lockClause}`,
+      `SELECT id,email,email_verified_at,deleted_at,COALESCE(suspended_at,departed_at) AS suspended_at FROM users WHERE id=$1${this.lockClause}`,
       [id],
     )
     const row = rows[0]
@@ -241,7 +242,7 @@ export class AccessRepository {
 
   async companyMembership(companyId: string, userId: string): Promise<MembershipRecord<CompanyRole> | null> {
     const { rows } = await this.db.query<MembershipRow<CompanyRole>>(
-      `SELECT role,status FROM company_memberships WHERE company_id=$1 AND user_id=$2${this.lockClause}`,
+      `SELECT role,status,is_admin AS "isAdmin" FROM company_memberships WHERE company_id=$1 AND user_id=$2 AND ended_at IS NULL${this.lockClause}`,
       [companyId, userId],
     )
     return rows[0] ?? null
@@ -275,8 +276,10 @@ export class AccessRepository {
     userId: string,
   ): Promise<MembershipRecord<ProjectRole> | null> {
     const { rows } = await this.db.query<MembershipRow<ProjectRole>>(
-      `SELECT role,status FROM project_memberships
-        WHERE company_id=$1 AND project_id=$2 AND user_id=$3${this.lockClause}`,
+      `SELECT p.role,p.status FROM project_memberships p JOIN company_memberships m
+        ON m.company_id=p.company_id AND m.user_id=p.user_id AND m.period_id=p.company_period_id
+        WHERE p.company_id=$1 AND p.project_id=$2 AND p.user_id=$3 AND m.ended_at IS NULL
+        ${this.lockDependencies ? 'FOR UPDATE OF p,m' : ''}`,
       [companyId, projectId, userId],
     )
     return rows[0] ?? null
@@ -312,6 +315,7 @@ export class AccessRepository {
       createdBy: row.created_by,
       visibilityScope: row.visibility_scope ?? null,
       ownerUserId: row.owner_user_id ?? null,
+      conversationKind: row.conversation_kind ?? null,
       conversationMembers: row.conversation_members,
       leaderId: row.leader_id,
       status: row.resource_status,
@@ -349,7 +353,7 @@ function resourceQuery(resource: PermissionResource): {
       }
     case 'conversation':
       return {
-        sql: `SELECT company_id,project_id,NULL::text AS created_by,members AS conversation_members,
+        sql: `SELECT company_id,project_id,NULL::text AS created_by,members AS conversation_members,kind AS conversation_kind,
                      leader_id,NULL::text AS resource_status FROM conversations WHERE id=$1`,
         params: [resource.id],
         lockTarget: 'conversations',
@@ -357,7 +361,7 @@ function resourceQuery(resource: PermissionResource): {
     case 'message':
       return {
         sql: `SELECT message.company_id,conversation.project_id,message.author_id AS created_by,
-                     conversation.members AS conversation_members,conversation.leader_id,
+                     conversation.members AS conversation_members,conversation.kind AS conversation_kind,conversation.leader_id,
                      NULL::text AS resource_status
                 FROM email_messages message
                 JOIN conversations conversation ON conversation.id=message.conversation_id
@@ -369,7 +373,7 @@ function resourceQuery(resource: PermissionResource): {
     case 'poll':
       return {
         sql: `SELECT poll.company_id,conversation.project_id,poll.author_id AS created_by,
-                     conversation.members AS conversation_members,conversation.leader_id,
+                     conversation.members AS conversation_members,conversation.kind AS conversation_kind,conversation.leader_id,
                      NULL::text AS resource_status
                 FROM im_polls poll
                 JOIN conversations conversation ON conversation.id=poll.channel_id
@@ -390,7 +394,7 @@ function resourceQuery(resource: PermissionResource): {
     case 'document':
       return {
         sql: `SELECT document.company_id,document.project_id,document.created_by,
-                     conversation.members AS conversation_members,conversation.leader_id,
+                     conversation.members AS conversation_members,conversation.kind AS conversation_kind,conversation.leader_id,
                      NULL::text AS resource_status
                 FROM documents document
                 LEFT JOIN conversations conversation ON conversation.id=document.conversation_id
@@ -409,7 +413,7 @@ function resourceQuery(resource: PermissionResource): {
     case 'canvas':
       return {
         sql: `SELECT canvas.company_id,canvas.project_id,canvas.created_by,
-                     conversation.members AS conversation_members,conversation.leader_id,canvas.status AS resource_status
+                     conversation.members AS conversation_members,conversation.kind AS conversation_kind,conversation.leader_id,canvas.status AS resource_status
                 FROM canvases canvas
                 LEFT JOIN conversations conversation ON conversation.id=canvas.conversation_id
                  AND conversation.company_id=canvas.company_id AND conversation.project_id=canvas.project_id
@@ -420,7 +424,7 @@ function resourceQuery(resource: PermissionResource): {
     case 'canvas_frame':
       return {
         sql: `SELECT canvas.company_id,canvas.project_id,frame.created_by,
-                     conversation.members AS conversation_members,conversation.leader_id,canvas.status AS resource_status
+                     conversation.members AS conversation_members,conversation.kind AS conversation_kind,conversation.leader_id,canvas.status AS resource_status
                 FROM canvas_frames frame
                 JOIN canvases canvas ON canvas.id=frame.canvas_id
                 LEFT JOIN conversations conversation ON conversation.id=canvas.conversation_id
@@ -440,7 +444,7 @@ function resourceQuery(resource: PermissionResource): {
     case 'routine':
       return {
         sql: `SELECT routine.company_id,conversation.project_id,routine.created_by,
-                     conversation.members AS conversation_members,conversation.leader_id,routine.status AS resource_status
+                     conversation.members AS conversation_members,conversation.kind AS conversation_kind,conversation.leader_id,routine.status AS resource_status
                 FROM agent_routines routine
                 LEFT JOIN conversations conversation ON conversation.id=routine.channel_id
                  AND conversation.company_id=routine.company_id

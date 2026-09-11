@@ -1,33 +1,9 @@
-/**
- * LingxiLoop R2 gate — Cloudflare Worker that fronts `cdn.example.com` and
- * gates access to the `lingxiloop-attachments` bucket.
- *
- * Access model:
- *   - GET /avatars/<key>           → unsigned, public. Portraits aren't
- *                                    sensitive and benefit from full CDN
- *                                    caching.
- *   - GET /attachments/<key>       → must carry `?exp=<unix>&sig=<hex>`,
- *                                    where `sig` = HMAC-SHA256(secret,
- *                                    `<key>:<exp>`). Both `exp` (not in
- *                                    the past) and `sig` (constant-time
- *                                    equal) checked before reading R2.
- *   - HEAD                         → same auth as GET; useful for size
- *                                    probes from clients.
- *   - everything else              → 405.
- *
- * Secret rotation: rotate `R2_URL_SIGNING_SECRET` on both the LingxiLoop
- * server and `wrangler secret put` here in lockstep. URLs already signed
- * with the old secret stop working at rotation time — fine, every read
- * path re-signs from the stored `attachment.key`.
- */
 export interface Env {
   BUCKET: R2Bucket
-  R2_URL_SIGNING_SECRET: string
 }
 
-/** Prefixes that demand a valid `?exp&sig` pair. Anything outside this
- *  list is treated as publicly cacheable. */
-const SIGNED_PREFIXES = ['attachments/']
+// Only public profile pictures may be fetched without application authorization.
+const PUBLIC_PREFIXES = ['avatars/']
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
@@ -35,13 +11,14 @@ export default {
       return new Response('method not allowed', { status: 405 })
     }
     const url = new URL(req.url)
-    const key = decodeURIComponent(url.pathname.replace(/^\/+/, ''))
+    let key: string
+    try { key = decodeURIComponent(url.pathname.replace(/^\/+/, '')) } catch {
+      return new Response('invalid path', { status: 400 })
+    }
     if (!key) return new Response('not found', { status: 404 })
 
-    const needsSig = SIGNED_PREFIXES.some((p) => key.startsWith(p))
-    if (needsSig) {
-      const gate = await verifySignature(key, url.searchParams, env.R2_URL_SIGNING_SECRET)
-      if (!gate.ok) return new Response(gate.reason, { status: 403 })
+    if (!PUBLIC_PREFIXES.some(prefix => key.startsWith(prefix))) {
+      return new Response('authenticated application read required', { status: 403, headers: { 'cache-control': 'no-store' } })
     }
 
     // Honor If-None-Match for cache revalidation. R2's get() accepts the
@@ -61,11 +38,9 @@ export default {
     if (meta?.contentDisposition) headers.set('content-disposition', meta.contentDisposition)
     if (meta?.contentEncoding) headers.set('content-encoding', meta.contentEncoding)
     headers.set('etag', obj.httpEtag)
-    // Signed objects: short cache so a revoked attachment doesn't linger
-    // at the edge for hours. Public objects: long cache, immutable.
     headers.set(
       'cache-control',
-      needsSig ? 'private, max-age=300' : 'public, max-age=86400, immutable',
+      'public, max-age=86400, immutable',
     )
 
     // The GET path can produce an `R2ObjectBody` (full read) or just an
@@ -75,48 +50,4 @@ export default {
     const status = req.method === 'GET' && ifNoneMatch && !body ? 304 : 200
     return new Response(req.method === 'HEAD' ? null : body, { status, headers })
   },
-}
-
-interface GateResult { ok: true } interface GateFail { ok: false; reason: string }
-async function verifySignature(
-  key: string,
-  q: URLSearchParams,
-  secret: string,
-): Promise<GateResult | GateFail> {
-  if (!secret) return { ok: false, reason: 'gate not configured' }
-  const exp = q.get('exp')
-  const sig = q.get('sig')
-  if (!exp || !sig) return { ok: false, reason: 'missing exp/sig' }
-  const expNum = Number(exp)
-  if (!Number.isFinite(expNum)) return { ok: false, reason: 'bad exp' }
-  const now = Math.floor(Date.now() / 1000)
-  if (expNum < now) return { ok: false, reason: 'expired' }
-  // 24h ceiling — refuse far-future signatures so a leaked URL can't
-  // become a permanent backdoor by setting a giant exp.
-  if (expNum - now > 86400) return { ok: false, reason: 'exp too far' }
-  const expected = await hmacHex(secret, `${key}:${exp}`)
-  if (!timingSafeEq(expected, sig)) return { ok: false, reason: 'bad sig' }
-  return { ok: true }
-}
-
-async function hmacHex(secret: string, data: string): Promise<string> {
-  const enc = new TextEncoder()
-  const k = await crypto.subtle.importKey(
-    'raw', enc.encode(secret),
-    { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
-  )
-  const bytes = new Uint8Array(await crypto.subtle.sign('HMAC', k, enc.encode(data)))
-  let out = ''
-  for (const b of bytes) out += b.toString(16).padStart(2, '0')
-  return out
-}
-
-/** Length-aware constant-time hex compare. Worker runtime has no
- *  `timingSafeEqual`, so we roll our own — short circuit only on length
- *  mismatch (which is observable anyway via the URL shape). */
-function timingSafeEq(a: string, b: string): boolean {
-  if (a.length !== b.length) return false
-  let diff = 0
-  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)
-  return diff === 0
 }

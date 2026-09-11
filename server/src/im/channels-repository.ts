@@ -45,7 +45,7 @@ export async function workspaceChannels(
           JOIN project_memberships course_member
             ON course_member.project_id=course.project_id AND course_member.company_id=course.company_id
             AND course_member.user_id=$2 AND course_member.status='ACTIVE'
-            AND course_member.role IN ('OWNER','TEACHER')
+            AND course_member.role = 'TEACHER'
           WHERE room.conversation_id=binding.channel_id AND room.company_id=binding.company_id
             AND room.status='active' AND project.status='ACTIVE'
         ))

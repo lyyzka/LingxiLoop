@@ -6,6 +6,13 @@ import { listNativeDeliveryFailures, retryNativeDelivery } from '../agents/deliv
 import { observabilityDashboard } from '../modules/platform-operations/observability-dashboard.js'
 import { listAdminResources } from '../modules/platform-operations/resources.js'
 import { changeUserLifecycle } from '../modules/platform-operations/user-lifecycle.js'
+import {
+  cancelPlatformAgentRun,
+  decidePlatformAgentApproval,
+  inspectPlatformAgentRun,
+  revisePlatformAgentRun,
+  type PlatformAgentRuntime,
+} from '../modules/platform-operations/agent-operations.js'
 
 test('admin resource lists enforce bounds and return an opaque next cursor', async () => {
   const calls: Array<{ sql: string; params: readonly unknown[] }> = []
@@ -130,4 +137,34 @@ test('observability dashboard returns validated OpenPlait frames with collapsed 
       { name: 'error', type: 'string', values: [null] },
     ],
   })
+})
+
+test('platform Agent operations resolve the authoritative run identity', async () => {
+  const identity = { runId: 'run-1', tenantId: 'company-1', agentId: 'agent-1', sessionId: 'room-1', principalId: 'user-1' }
+  const calls: Array<[string, unknown]> = []
+  const run = { id: 'run-1', identity, status: 'waiting', fence: 1, resultId: null, resultFence: null, requestVersion: 2,
+    kind: 'turn', attempts: 1, createdAt: '2026-09-08T00:00:00.000Z', availableAt: '2026-09-08T00:00:00.000Z',
+    heartbeatAt: null, lastProgressAt: null, goalOutcome: null, error: null, executionMs: 0, model: null, tokens: 0, costMicros: 0,
+    unmeasuredCalls: 0 }
+  const runtime = {
+    listRuns: async (query: unknown) => { calls.push(['listRuns', query]); return { items: [run], nextCursor: null } },
+    readRunState: async (value: unknown) => { calls.push(['readRunState', value]); return { run, message: { private: true }, delivery: 'pending' } },
+    readDiagnostics: async (value: unknown) => { calls.push(['readDiagnostics', value]); return { ok: true } },
+    readEvents: async (value: unknown, afterSeq: number) => { calls.push(['readEvents', [value, afterSeq]]); return { events: [], nextSeq: 4 } },
+    readUsage: async (value: unknown) => { calls.push(['readUsage', value]); return { calls: 1 } },
+    revise: async (value: unknown, text: string) => { calls.push(['revise', [value, text]]); return true },
+    cancel: async (value: unknown) => { calls.push(['cancel', value]); return true },
+    readApproval: async (value: unknown) => { calls.push(['readApproval', value]); return { ...identity, approvalId: 'approval-1' } },
+    decideApproval: async (value: unknown) => { calls.push(['decideApproval', value]); return { approvalId: 'approval-1', runId: 'run-1', approved: true } },
+  } as unknown as PlatformAgentRuntime
+
+  const inspected = await inspectPlatformAgentRun(runtime, 'run-1', 3)
+  assert.equal('message' in (inspected.state ?? {}), false)
+  assert.deepEqual(inspected.state, { run, delivery: 'pending' })
+  assert.equal((await revisePlatformAgentRun(runtime, 'run-1', 'new direction')).revised, true)
+  assert.equal((await cancelPlatformAgentRun(runtime, 'run-1')).cancelled, true)
+  assert.deepEqual((await decidePlatformAgentApproval(runtime, 'run-1', 'approval-1', true)).result,
+    { approvalId: 'approval-1', runId: 'run-1', approved: true })
+  assert.deepEqual(calls.find(([name]) => name === 'revise')?.[1], [identity, 'new direction'])
+  assert.deepEqual(calls.find(([name]) => name === 'readApproval')?.[1], { approvalId: 'approval-1', tenantId: 'company-1', principalId: 'user-1' })
 })

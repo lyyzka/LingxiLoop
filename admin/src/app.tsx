@@ -1,3 +1,4 @@
+import { EducationPage } from './education-page'
 import { Authenticated, Refine } from '@refinedev/core'
 import routerProvider, { CatchAllNavigate, NavigateToResource } from '@refinedev/react-router'
 import { lazy, type ReactNode, Suspense } from 'react'
@@ -32,6 +33,7 @@ export function AdminApp() {
       <Route element={<AdminLayout />}>
         <Route index element={deferredPage(<DashboardPage />)} />
         <Route path="search" element={<SearchPage />} />
+        <Route path="education" element={<EducationPage />} />
         <Route path="authentication" element={<AuthSettingsPage />} />
         <Route path="status" element={deferredPage(<ServiceStatusPage />)} />
         <Route path="observability" element={deferredPage(<ObservabilityPage />)} />

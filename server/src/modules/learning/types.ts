@@ -13,13 +13,7 @@ export type LearningStepType = 'LEARN' | 'PRACTICE' | 'CHECK' | 'REFLECT'
 export type LearningStepStatus = 'OPEN' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED'
 export type LearningAssistance = 'NONE' | 'HINT' | 'GUIDED'
 export type LearningStateStatus = 'LEARNING' | 'VERIFIED' | 'NEEDS_REVIEW'
-export type CourseMemberChangeOutcome =
-  | 'updated'
-  | 'not_found'
-  | 'last_teacher'
-  | 'last_owner'
-  | 'protected_owner'
-  | 'protected_creator'
+export type CourseMemberChangeOutcome = 'updated' | 'not_found'
 
 export interface LearningCourseSummary {
   id: string

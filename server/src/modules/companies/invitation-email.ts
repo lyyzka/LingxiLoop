@@ -26,7 +26,7 @@ export interface InvitationEmailArgs {
   /** Inviter's own email for Reply-To. */
   inviterEmail: string
   companyName: string
-  role: 'member' | 'admin'
+  role: string
   /** Optional free-text note the inviter attached. */
   note: string | null
   /** Full https URL the recipient should open (loop.lingxilearn.cn/invite/<token>). */
@@ -46,7 +46,7 @@ function escapeHtml(s: string): string {
 function buildInvitationEmailHtml(args: {
   inviterName: string
   companyName: string
-  role: 'member' | 'admin'
+  role: string
   note: string | null
   inviteUrl: string
 }): string {
@@ -55,7 +55,7 @@ function buildInvitationEmailHtml(args: {
   const fontStack = `'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif`
   const inviter = escapeHtml(args.inviterName)
   const company = escapeHtml(args.companyName)
-  const roleLabel = args.role === 'admin' ? 'an admin' : 'a member'
+  const roleLabel = args.role === 'teacher administrator' ? 'a teacher administrator' : 'a teacher'
   const noteBlock = args.note ? `
                 <tr>
                   <td style="padding:0 0 24px;">
@@ -186,7 +186,7 @@ export async function sendInvitationEmail(args: InvitationEmailArgs): Promise<In
   const text = [
     `Hi,`,
     ``,
-    `${args.inviterName} invited you to ${args.companyName} on LingxiLoop — you'll join as ${args.role === 'admin' ? 'an admin' : 'a member'}.`,
+    `${args.inviterName} invited you to ${args.companyName} on LingxiLoop — you'll join as ${args.role === 'teacher administrator' ? 'a teacher administrator' : 'a teacher'}.`,
     ``,
     args.note ? `Note from ${args.inviterName}: "${args.note}"` : null,
     args.note ? `` : null,

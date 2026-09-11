@@ -55,11 +55,7 @@ export function DashboardSectionFrame({
     conversations.find((conversation) => conversation.id === selectedConversationId)?.id ??
     conversations[0]?.id ??
     null
-  const spaceKindLabel = space.projectKind === 'PERSONAL_LEARNING'
-    ? '个人学习区'
-    : space.perspective === 'teacher'
-      ? '课程创建者'
-      : '学习者'
+  const spaceKindLabel = space.perspective === 'teacher' ? '教师' : '学生'
   const conversationAction = section === 'overview' && space.perspective === 'learner' && (
     <Button
       type="button"

@@ -34,9 +34,7 @@ export type {
   OrganizationSeatStatus,
   SchoolMembership,
 } from './education/public.js'
-export { PERSONAL_FREE_PLAN, PERSONAL_PLUS_PLAN, TEACHER_FREE_PLAN, TEACHER_PRO_PLAN } from './entitlement/public.js'
-export { SUBSCRIPTION_STATUSES, transitionSubscription } from './subscription/public.js'
-export type { SubscriptionCommand, SubscriptionStatus } from './subscription/public.js'
+export { EDUCATION_PLAN } from './entitlement/public.js'
 export type { User } from './identity/user.js'
 export {
   LEARNING_CASE_ACTION_KINDS,

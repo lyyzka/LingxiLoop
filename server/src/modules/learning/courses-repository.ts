@@ -1,3 +1,4 @@
+import { HttpError } from '../../http/errors.js'
 import type { Queryable } from '../../db/queryable.js'
 import { type ProjectRole, projectRoleFromLearningWire } from '../../domain/access/public.js'
 import type { ProjectKind } from '../../domain/public.js'
@@ -12,19 +13,20 @@ export async function listCourses(db: Queryable, companyId: string, userId: stri
             project.name,project.description,project.color,project.status,
             project.created_at AS "projectCreatedAt",project.updated_at AS "updatedAt",
             LOWER(company_member.role) AS "companyRole",
-            CASE WHEN course_member.role IS NULL THEN NULL
-                 WHEN course_member.role IN ('STUDENT','OBSERVER') THEN 'learner' ELSE 'teacher' END AS "courseRole",
+            CASE WHEN company_member.is_admin THEN 'teacher'
+                 WHEN course_member.role IS NULL THEN NULL
+                 WHEN course_member.role = 'STUDENT' THEN 'learner' ELSE 'teacher' END AS "courseRole",
             (SELECT COUNT(*)::int FROM project_memberships member
               WHERE member.project_id=course.project_id AND member.company_id=course.company_id
                 AND member.status='ACTIVE') AS "memberCount",
-            (course_member.role IN ('OWNER','TEACHER')) AS "canManage"
+            (company_member.is_admin OR course_member.role = 'TEACHER') AS "canManage"
        FROM courses course JOIN projects project ON project.id=course.project_id AND project.company_id=course.company_id
        JOIN company_memberships company_member ON company_member.company_id=course.company_id AND company_member.user_id=$2
         AND company_member.status='ACTIVE'
-       JOIN project_memberships course_member
+       LEFT JOIN project_memberships course_member
          ON course_member.project_id=course.project_id AND course_member.company_id=course.company_id
         AND course_member.user_id=$2 AND course_member.status='ACTIVE'
-      WHERE course.company_id=$1
+      WHERE course.company_id=$1 AND (company_member.is_admin OR course_member.user_id IS NOT NULL)
       ORDER BY project.status,project.updated_at DESC`,
     [companyId, userId],
   )
@@ -47,7 +49,7 @@ export async function insertCourse(db: Queryable, args: {
     [args.courseId, args.companyId, args.projectId, args.userId],
   )
   await db.query(
-    `INSERT INTO project_memberships (project_id,company_id,user_id,role) VALUES ($1,$2,$3,'OWNER')`,
+    `INSERT INTO project_memberships (project_id,company_id,user_id,role) VALUES ($1,$2,$3,'TEACHER')`,
     [args.projectId, args.companyId, args.userId],
   )
   const { rows: agents } = await db.query<{ id: string; preset_key: string }>(
@@ -74,7 +76,7 @@ export async function addInstitutionalCourseMember(db: Queryable, args: {
   companyId: string
   courseId: string
   userId: string
-  role: Exclude<ProjectRole, 'OWNER'>
+  role: 'TEACHER'
 }): Promise<{ projectId: string; role: ProjectRole; added: boolean } | null> {
   const { rows } = await db.query<{ project_id: string }>(
     `INSERT INTO project_memberships(project_id,company_id,user_id,role,status)
@@ -84,8 +86,8 @@ export async function addInstitutionalCourseMember(db: Queryable, args: {
        JOIN company_memberships membership ON membership.company_id=course.company_id
         AND membership.user_id=$3 AND membership.status='ACTIVE'
       WHERE course.id=$2 AND course.company_id=$1
-        AND project.kind='INSTITUTIONAL_COURSE' AND project.status IN ('DRAFT','ACTIVE')
-     ON CONFLICT (project_id,user_id) DO NOTHING
+        AND membership.role='TEACHER' AND project.status IN ('DRAFT','ACTIVE')
+     ON CONFLICT (project_id,user_id) DO UPDATE SET status='ACTIVE',role='TEACHER',company_period_id=EXCLUDED.company_period_id,updated_at=NOW()
      RETURNING project_id`,
     [args.companyId, args.courseId, args.userId, args.role],
   )
@@ -99,7 +101,7 @@ export async function addInstitutionalCourseMember(db: Queryable, args: {
        JOIN project_memberships project_member ON project_member.project_id=course.project_id
         AND project_member.company_id=course.company_id AND project_member.user_id=membership.user_id
         AND project_member.status='ACTIVE'
-      WHERE course.id=$2 AND course.company_id=$1 AND project.kind='INSTITUTIONAL_COURSE'`,
+      WHERE course.id=$2 AND course.company_id=$1 AND membership.role='TEACHER'`,
     [args.companyId, args.courseId, args.userId],
   )
   return existing[0]
@@ -123,19 +125,20 @@ export async function findCourse(db: Queryable, courseId: string, companyId: str
             project.name,project.description,project.color,project.status,
             project.kind AS "projectKind",
             LOWER(company_member.role) AS "companyRole",
-            CASE WHEN course_member.role IS NULL THEN NULL
-                 WHEN course_member.role IN ('STUDENT','OBSERVER') THEN 'learner' ELSE 'teacher' END AS "courseRole",
+            CASE WHEN company_member.is_admin THEN 'teacher'
+                 WHEN course_member.role IS NULL THEN NULL
+                 WHEN course_member.role = 'STUDENT' THEN 'learner' ELSE 'teacher' END AS "courseRole",
             (SELECT COUNT(*)::int FROM project_memberships member
               WHERE member.project_id=course.project_id AND member.company_id=course.company_id
                 AND member.status='ACTIVE') AS "memberCount",
-            (course_member.role IN ('OWNER','TEACHER')) AS "canManage"
+            (company_member.is_admin OR course_member.role = 'TEACHER') AS "canManage"
        FROM courses course JOIN projects project ON project.id=course.project_id AND project.company_id=course.company_id
        JOIN company_memberships company_member ON company_member.company_id=course.company_id AND company_member.user_id=$3
         AND company_member.status='ACTIVE'
-       JOIN project_memberships course_member
+       LEFT JOIN project_memberships course_member
          ON course_member.project_id=course.project_id AND course_member.company_id=course.company_id
         AND course_member.user_id=$3 AND course_member.status='ACTIVE'
-      WHERE course.id=$1 AND course.company_id=$2`,
+      WHERE course.id=$1 AND course.company_id=$2 AND (company_member.is_admin OR course_member.user_id IS NOT NULL)`,
     [courseId, companyId, userId],
   )
   return rows[0] ?? null
@@ -151,16 +154,17 @@ export async function courseManager(
     company_id: string; company_role: string; course_role: string | null; project_id: string; status: string
   }>(
     `SELECT course.company_id,LOWER(company_member.role) AS company_role,
-            CASE WHEN course_member.role IS NULL THEN NULL
-                 WHEN course_member.role IN ('STUDENT','OBSERVER') THEN 'learner' ELSE 'teacher' END AS course_role,
+            CASE WHEN company_member.is_admin THEN 'teacher'
+                 WHEN course_member.role IS NULL THEN NULL
+                 WHEN course_member.role = 'STUDENT' THEN 'learner' ELSE 'teacher' END AS course_role,
             course.project_id,project.status
        FROM courses course JOIN projects project ON project.id=course.project_id AND project.company_id=course.company_id
        JOIN company_memberships company_member ON company_member.company_id=course.company_id AND company_member.user_id=$2
         AND company_member.status='ACTIVE'
-       JOIN project_memberships course_member
+       LEFT JOIN project_memberships course_member
          ON course_member.project_id=course.project_id AND course_member.company_id=course.company_id
         AND course_member.user_id=$2 AND course_member.status='ACTIVE'
-      WHERE course.id=$1${lock ? ' FOR UPDATE OF course,project,company_member,course_member' : ''}`,
+      WHERE course.id=$1 AND (company_member.is_admin OR course_member.user_id IS NOT NULL)${lock ? ' FOR UPDATE OF course,project,company_member' : ''}`,
     [courseId, userId],
   )
   const row = rows[0]
@@ -207,13 +211,13 @@ export async function updateCourseMetadata(db: Queryable, args: {
 export async function listCourseMembers(db: Queryable, courseId: string, companyId: string) {
   const { rows } = await db.query(
     `SELECT user_account.id,user_account.display_name AS name,user_account.email,
-            CASE WHEN course_member.role IN ('STUDENT','OBSERVER') THEN 'learner' ELSE 'teacher' END AS role,
+            CASE WHEN course_member.role = 'STUDENT' THEN 'learner' ELSE 'teacher' END AS role,
             course_member.role AS "projectRole",
             course_member.created_at AS "joinedAt"
        FROM project_memberships course_member JOIN users user_account ON user_account.id=course_member.user_id
        JOIN courses course ON course.project_id=course_member.project_id AND course.company_id=course_member.company_id
       WHERE course.id=$1 AND course_member.company_id=$2 AND course_member.status='ACTIVE'
-      ORDER BY CASE WHEN course_member.role IN ('OWNER','TEACHER') THEN 0 ELSE 1 END,course_member.created_at`,
+      ORDER BY CASE WHEN course_member.role = 'TEACHER' THEN 0 ELSE 1 END,course_member.created_at`,
     [courseId, companyId],
   )
   return rows
@@ -245,38 +249,10 @@ export async function changeCourseMember(db: Queryable, args: {
   const current = rows[0]?.role
   if (!current) return 'not_found'
   const next = args.role === null ? null : projectRoleFromLearningWire(args.role)
-  if (current === 'OWNER') {
-    const { rows: owners } = await db.query<{ count: number }>(
-      `SELECT COUNT(*)::int AS count FROM project_memberships
-        WHERE project_id=$1 AND company_id=$2 AND status='ACTIVE' AND role='OWNER'`,
-      [projectId, args.companyId],
-    )
-    return Number(owners[0]?.count ?? 0) <= 1 ? 'last_owner' : 'protected_owner'
-  }
-  const creator = args.userId === locked[0].course_created_by
-    || args.userId === locked[0].project_created_by
-  if (creator && (next === null || (current === 'TEACHER' && next === 'STUDENT'))) {
-    return 'protected_creator'
-  }
-  if (current === 'TEACHER' && next !== 'TEACHER') {
-    const { rows: counts } = await db.query<{ count: number }>(
-      `SELECT COUNT(*)::int AS count FROM project_memberships
-        WHERE project_id=$1 AND company_id=$2 AND status='ACTIVE' AND role IN ('OWNER','TEACHER')`,
-      [projectId, args.companyId],
-    )
-    if ((counts[0]?.count ?? 0) <= 1) return 'last_teacher'
-  }
-  if (args.role) {
-    await db.query(
-      `UPDATE project_memberships SET role=$4,updated_at=NOW()
-        WHERE project_id=$1 AND company_id=$2 AND user_id=$3 AND status='ACTIVE'`,
-      [projectId, args.companyId, args.userId, next],
-    )
-  } else {
-    await db.query(
-      `DELETE FROM project_memberships WHERE project_id=$1 AND company_id=$2 AND user_id=$3`,
-      [projectId, args.companyId, args.userId],
-    )
+  if (next && next !== current) throw new HttpError(409, 'company identity cannot be changed through a course')
+  if (!next) {
+    await db.query(`UPDATE project_memberships SET status='SUSPENDED',updated_at=NOW()
+      WHERE project_id=$1 AND company_id=$2 AND user_id=$3`, [projectId,args.companyId,args.userId])
   }
   return 'updated'
 }

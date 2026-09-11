@@ -10,8 +10,6 @@ interface AuthState {
   user: AuthUser | null
   companies: AuthCompany[]
   activeCompanyId: string | null
-  /** Server-owned Personal Company used for user-created learning spaces. */
-  personalCompanyId: string | null
   ready: boolean   // false until the initial /auth/me probe finishes
   /** Server-driven feature flags. Null until the first /auth/me probe
    *  populates them; consumers should treat null as "don't know yet" and
@@ -32,51 +30,29 @@ export const useAuth = create<AuthState>((set) => ({
   user: null,
   companies: [],
   activeCompanyId: localStorage.getItem(COMPANY_KEY),
-  personalCompanyId: null,
   ready: false,
   serverCapabilities: null,
   setAuthenticated(user, companyId) {
     const previousUserId = useAuth.getState().user?.id
     if (previousUserId && previousUserId !== user.id) runAuthTeardown()
     if (companyId) localStorage.setItem(COMPANY_KEY, companyId)
-    set({ authenticated: true, user, activeCompanyId: companyId, personalCompanyId: companyId, ready: true })
+    set({ authenticated: true, user, activeCompanyId: companyId, ready: true })
     // Fresh auth → rebind the WS connection so it carries the new
     // session's ticket instead of staying on whatever it had before.
     void import('@/api/core/realtime').then(({ ws }) => ws.reconnect())
   },
   setMe(user, companies, activeCompanyId) {
-    // Honour a previously-chosen company if it's still in the user's set.
-    // Without this, every /auth/me probe would yank the active company back
-    // to the server-default one, defeating the manual switcher.
-    const stored = localStorage.getItem(COMPANY_KEY)
-    const memberIds = new Set(companies.map((c) => c.id))
-    const resolved = stored && memberIds.has(stored)
-      ? stored
-      : (activeCompanyId && memberIds.has(activeCompanyId) ? activeCompanyId : (companies[0]?.id ?? null))
+    const resolved = companies.length === 1 && companies[0].id === activeCompanyId ? activeCompanyId : null
+    if (!resolved) { useAuth.getState().clear(); return }
     if (resolved) localStorage.setItem(COMPANY_KEY, resolved)
-    set({ user, companies, activeCompanyId: resolved, personalCompanyId: activeCompanyId })
+    set({ user, companies, activeCompanyId: resolved })
   },
   setServerCapabilities(caps) {
     set({ serverCapabilities: caps })
   },
   setActiveCompany(id) {
-    if (useAuth.getState().activeCompanyId === id) return
-    localStorage.setItem(COMPANY_KEY, id)
+    if (useAuth.getState().companies[0]?.id !== id) throw new Error('仅可使用当前公司')
     set({ activeCompanyId: id })
-    // Force the WS connection to re-handshake. The bridge filters events
-    // by company-membership which is the same regardless of "active"
-    // company, but logging in / switching identities should still rebind
-    // — and this is the natural place to handle it.
-    void import('@/api/core/realtime').then(({ ws }) => ws.reconnect())
-    // Wipe library stores so the Library tab doesn't briefly render the
-    // previous workspace's documents or calendar before the
-    // next listXXX() lands. These stores are global singletons that
-    // outlive the AuthedApp remount, so a key-change alone doesn't
-    // clear them.
-    void Promise.all([
-      import('@/features/documents/state').then(({ useDocuments }) => useDocuments.getState().reset()),
-      import('../features/calendar/state').then(({ useCalendar }) => useCalendar.getState().reset()),
-    ])
   },
   clear() {
     runAuthTeardown()
@@ -86,8 +62,7 @@ export const useAuth = create<AuthState>((set) => ({
       user: null,
       companies: [],
       activeCompanyId: null,
-      personalCompanyId: null,
-      ready: true,
+          ready: true,
       serverCapabilities: null,
     })
     // Stale object-URLs from the previous user's avatars would otherwise

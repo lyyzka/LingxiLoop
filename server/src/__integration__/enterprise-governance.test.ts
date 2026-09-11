@@ -3,9 +3,10 @@ import { after, before, beforeEach, test } from 'node:test'
 import { pool } from '../db/pool.js'
 import { EnterpriseApplicationError } from '../modules/enterprise/application.js'
 import { enterpriseApplication } from '../modules/enterprise/facade.js'
-import { ensureSchemaOnce, resetAllTables, teardownAll } from './_helpers.js'
+import { seedMembershipPeriod, ensureSchemaOnce, resetAllTables, teardownAll } from './_helpers.js'
 
 const ADMIN = 'u-enterprise-admin'
+const OTHER_ADMIN = 'u-enterprise-other-admin'
 const COMPANY = 'co-enterprise'
 const OTHER_COMPANY = 'co-enterprise-other'
 
@@ -13,37 +14,39 @@ before(async () => { await ensureSchemaOnce() })
 beforeEach(async () => {
   await resetAllTables()
   await pool.query(
-    `INSERT INTO users(id,email,display_name) VALUES ($1,'enterprise-admin@test.local','Enterprise Admin')`,
-    [ADMIN],
+    `INSERT INTO users(id,email,display_name) VALUES ($1,'enterprise-admin@test.local','Enterprise Admin'),($2,'enterprise-other@test.local','Other Admin')`,
+    [ADMIN,OTHER_ADMIN],
   )
   await pool.query(
     `INSERT INTO companies(id,name,slug,type,status,plan_id) VALUES
-       ($1,'Enterprise School','enterprise-school','EDUCATION','ACTIVE','plan-personal-free'),
-       ($2,'Other School','other-school','EDUCATION','ACTIVE','plan-personal-free')`,
+       ($1,'Enterprise School','enterprise-school','EDUCATION','ACTIVE','plan-education'),
+       ($2,'Other School','other-school','EDUCATION','ACTIVE','plan-education')`,
     [COMPANY,OTHER_COMPANY],
   )
   await pool.query(
-    `INSERT INTO company_memberships(company_id,user_id,role,status) VALUES
-       ($1,$3,'ADMIN','ACTIVE'),($2,$3,'ADMIN','ACTIVE')`,
-    [COMPANY,OTHER_COMPANY,ADMIN],
+    `INSERT INTO company_memberships(company_id,user_id,role,status,is_admin) VALUES
+       ($1,$3,'TEACHER','ACTIVE',TRUE),($2,$4,'TEACHER','ACTIVE',TRUE)`,
+    [COMPANY,OTHER_COMPANY,ADMIN,OTHER_ADMIN],
   )
+  await seedMembershipPeriod(pool,COMPANY,ADMIN)
+  await seedMembershipPeriod(pool,OTHER_COMPANY,OTHER_ADMIN)
   await pool.query(
     `INSERT INTO participants(id,company_id,kind,name,initial,avatar_bg,status) VALUES
        ($3,$1,'human','Enterprise Admin','E','#667085','avail'),
-       ($3,$2,'human','Enterprise Admin','E','#667085','avail')`,
-    [COMPANY, OTHER_COMPANY, ADMIN],
+       ($4,$2,'human','Enterprise Admin','E','#667085','avail')`,
+    [COMPANY, OTHER_COMPANY, ADMIN,OTHER_ADMIN],
   )
   await pool.query(
     `INSERT INTO education_contracts(id,company_id,plan_id,status,starts_at,ends_at,seat_limit) VALUES
-       ('contract-enterprise',$1,'plan-personal-free','ACTIVE',NOW()-INTERVAL '1 day',NOW()+INTERVAL '30 days',1),
-       ('contract-enterprise-other',$2,'plan-personal-free','ACTIVE',NOW()-INTERVAL '1 day',NOW()+INTERVAL '30 days',1)`,
+       ('contract-enterprise',$1,'plan-education','ACTIVE',NOW()-INTERVAL '1 day',NOW()+INTERVAL '30 days',1),
+       ('contract-enterprise-other',$2,'plan-education','ACTIVE',NOW()-INTERVAL '1 day',NOW()+INTERVAL '30 days',1)`,
     [COMPANY, OTHER_COMPANY],
   )
   await pool.query(
     `INSERT INTO organization_seats(id,company_id,contract_id,user_id,status) VALUES
        ('seat-enterprise',$1,'contract-enterprise',$3,'ACTIVE'),
-       ('seat-enterprise-other',$2,'contract-enterprise-other',$3,'ACTIVE')`,
-    [COMPANY, OTHER_COMPANY, ADMIN],
+       ('seat-enterprise-other',$2,'contract-enterprise-other',$4,'ACTIVE')`,
+    [COMPANY, OTHER_COMPANY, ADMIN,OTHER_ADMIN],
   )
 })
 after(async () => { await teardownAll() })
@@ -60,7 +63,7 @@ test('[integration] Organization hierarchy is tenant-scoped and idempotent', asy
     name: 'Science', parentUnitId: root.id, idempotencyKey: 'science-unit',
   })).created, false)
 
-  const foreign = await enterpriseApplication.createUnit(ADMIN,OTHER_COMPANY,{
+  const foreign = await enterpriseApplication.createUnit(OTHER_ADMIN,OTHER_COMPANY,{
     name: 'Foreign', parentUnitId: null, idempotencyKey: 'foreign-unit',
   })
   await assert.rejects(

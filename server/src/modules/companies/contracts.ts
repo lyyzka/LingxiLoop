@@ -7,15 +7,13 @@ export const updateCompanyRequestSchema = z.object({
 }).strict().refine((value) => Object.keys(value).length > 0, 'nothing to update')
 
 export const updateMemberRoleRequestSchema = z.object({
-  role: z.enum(['admin', 'member']),
+  isAdmin: z.boolean(),
 }).strict()
 
 export const createInvitationRequestSchema = z.object({
-  email: z.string().trim().email('invalid email').nullable().optional(),
-  role: z.enum(['member', 'admin']).default('member'),
+  email: z.string().trim().email('invalid email'),
+  isAdmin: z.boolean().default(false),
   note: z.string().trim().max(280).nullable().optional(),
-  multiUse: z.boolean().optional(),
-  maxUses: z.coerce.number().int().positive().optional(),
   sendEmail: z.boolean().optional(),
 }).strict()
 
@@ -33,6 +31,7 @@ export interface InvitationRow {
   invited_by: string
   email: string | null
   role: CompanyRole
+  is_admin: boolean
   note: string | null
   max_uses: number
   use_count: number
@@ -47,6 +46,7 @@ export interface InvitationPreview {
   status: 'valid' | 'revoked' | 'expired' | 'consumed' | 'wrong_email' | 'already_member' | 'not_found'
   invitation?: {
     role: CompanyRoleWire
+    isAdmin: boolean
     email: string | null
     note: string | null
     expiresAt: string

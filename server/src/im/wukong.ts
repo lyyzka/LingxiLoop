@@ -56,6 +56,10 @@ export class WukongClient {
     return (text ? JSON.parse(text) : {}) as T
   }
 
+  async revokeUser(uid: string): Promise<void> {
+    await this.request('/user/device_quit', { method: 'POST', body: JSON.stringify({ uid, device_flag: -1 }) })
+  }
+
   async bootstrap(uid: string, token: string): Promise<ImBootstrap> {
     await this.request('/user/token', { method: 'POST', body: JSON.stringify({ uid, token }) })
     return { uid, token, wsUrl: this.config.wsUrl, apiVersion: 3, sdkVersion: '1.3.5' }

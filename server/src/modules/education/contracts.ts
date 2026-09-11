@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 export const createEducationCompanyRequestSchema = z.object({
+  initialAdminEmail: z.string().trim().email().transform((email) => email.toLowerCase()),
   name: z.string().trim().min(1).max(100),
   slug: z.string().trim().min(3).max(80).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
   planId: z.string().trim().min(1).max(200),

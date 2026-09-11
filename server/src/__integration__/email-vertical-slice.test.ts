@@ -37,7 +37,7 @@ beforeEach(async () => {
   await resetAllTables()
   await pool.query(
     `INSERT INTO companies (id, name, slug, type, plan_id)
-     VALUES ($1, 'Email Slice', 'email-slice', 'EDUCATION', 'plan-personal-free')`,
+     VALUES ($1, 'Email Slice', 'email-slice', 'EDUCATION', 'plan-education')`,
     [COMPANY_ID],
   )
   await seedUserMembership(USER_ID, COMPANY_ID)
@@ -107,7 +107,7 @@ test('[integration] email persistence rejects cross-tenant conversations and pro
   const otherCompanyId = 'co-email-slice-other'
   await pool.query(
     `INSERT INTO companies (id, name, slug, type, plan_id)
-     VALUES ($1, 'Other Email Slice', 'other-email-slice', 'EDUCATION', 'plan-personal-free')`,
+     VALUES ($1, 'Other Email Slice', 'other-email-slice', 'EDUCATION', 'plan-education')`,
     [otherCompanyId],
   )
   const conversation = await findOrCreateEmailConversation({

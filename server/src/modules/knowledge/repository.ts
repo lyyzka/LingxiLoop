@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto'
 import type { Queryable } from '../../db/queryable.js'
-import type { ProjectKind } from '../../domain/public.js'
 import type { KnowledgeCreatedVia, KnowledgeVisibilityScope, ProjectPatch } from './contracts.js'
 
 const SOURCE_LIST_SELECT = `source.id,source.kind,source.title,source.mime_type AS "mimeType",
@@ -48,67 +47,25 @@ export async function listProjects(db: Queryable, companyId: string, userId: str
             (SELECT COUNT(*)::int FROM documents WHERE project_id=project.id AND company_id=project.company_id) AS "documentCount",
             (SELECT COUNT(*)::int FROM calendar_events WHERE project_id=project.id AND company_id=project.company_id) AS "calendarEventCount",
             (SELECT COUNT(*)::int FROM canvases WHERE project_id=project.id AND company_id=project.company_id) AS "canvasCount",
-            (course_member.role IN ('OWNER','TEACHER')) AS "canManage",
+            (membership.is_admin OR course_member.role = 'TEACHER') AS "canManage",
             course.id AS "courseId",
-            CASE WHEN course.id IS NULL OR course_member.role IS NULL THEN NULL
-                 WHEN course_member.role IN ('STUDENT','OBSERVER') THEN 'learner' ELSE 'teacher' END AS "courseRole",
+            CASE WHEN membership.is_admin THEN 'teacher' WHEN course.id IS NULL OR course_member.role IS NULL THEN NULL
+                 WHEN course_member.role = 'STUDENT' THEN 'learner' ELSE 'teacher' END AS "courseRole",
             course.study_room_conversation_id AS "studyRoomId"
        FROM projects project
        JOIN company_memberships membership ON membership.company_id=project.company_id AND membership.user_id=$2
         AND membership.status='ACTIVE'
        LEFT JOIN courses course ON course.project_id=project.id AND course.company_id=project.company_id
-       JOIN project_memberships course_member
+       LEFT JOIN project_memberships course_member
          ON course_member.project_id=project.id AND course_member.company_id=project.company_id
-        AND course_member.user_id=$2 AND course_member.status='ACTIVE'
+        AND course_member.user_id=$2 AND course_member.status='ACTIVE' AND course_member.company_period_id=membership.period_id
        LEFT JOIN project_visits visit ON visit.project_id=project.id
         AND visit.company_id=project.company_id AND visit.user_id=$2
-      WHERE project.company_id=$1
+      WHERE project.company_id=$1 AND (membership.is_admin OR course_member.user_id IS NOT NULL)
       ORDER BY project.status,visit.visited_at DESC NULLS LAST,project.updated_at DESC`,
     [companyId, userId],
   )
   return rows
-}
-
-export async function lockProjectCompanyType(db: Queryable, companyId: string): Promise<'PERSONAL' | 'EDUCATION' | null> {
-  const { rows } = await db.query<{ type: 'PERSONAL' | 'EDUCATION' }>(
-    `SELECT type FROM companies WHERE id=$1 AND status='ACTIVE' FOR UPDATE`,
-    [companyId],
-  )
-  return rows[0]?.type ?? null
-}
-
-interface CreatedProjectRow extends Record<string, unknown> {
-  id: string
-  companyId: string
-  kind: ProjectKind
-  planId: string | null
-  name: string
-  description: string
-  color: string | null
-  status: 'ACTIVE'
-  createdBy: string
-  isDefault: boolean
-  createdAt: string
-  updatedAt: string
-  archivedAt: null
-}
-
-export async function insertPersonalLearningProject(db: Queryable, args: {
-  id: string; companyId: string; userId: string; name: string; description: string; color: string | null
-}) {
-  const { rows } = await db.query<CreatedProjectRow>(
-    `INSERT INTO projects (id,company_id,kind,name,description,color,status,created_by,is_default)
-     VALUES ($1,$2,'PERSONAL_LEARNING',$3,$4,$5,'ACTIVE',$6,FALSE)
-     RETURNING id,company_id AS "companyId",kind,plan_id AS "planId",name,description,color,status,
-               created_by AS "createdBy",is_default AS "isDefault",created_at AS "createdAt",
-               updated_at AS "updatedAt",archived_at AS "archivedAt"`,
-    [args.id, args.companyId, args.name, args.description, args.color, args.userId],
-  )
-  await db.query(
-    `INSERT INTO project_memberships (project_id,company_id,user_id,role) VALUES ($1,$2,$3,'OWNER')`,
-    [args.id, args.companyId, args.userId],
-  )
-  return rows[0]!
 }
 
 export async function updateProject(
