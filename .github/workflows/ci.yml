@@ -21,7 +21,6 @@ permissions:
   contents: read
   packages: read
   pull-requests: read
-  packages: read
 
 env:
   NODE_VERSION: "22"
