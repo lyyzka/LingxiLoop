@@ -19,11 +19,11 @@ import { resolveUserAvatarUrl } from '@/lib/userAvatar'
 import { useAuth } from '@/stores/auth'
 
 export function NavUser({ user }: {
-  user: { name: string; email: string; avatar?: string | null }
+  user: { id: string; name: string; email: string; avatar?: string | null }
 }) {
   const isMobile = useIsMobile()
   const fallback = user.name.trim().slice(0, 2).toLocaleUpperCase() || '我'
-  const avatarUrl = resolveUserAvatarUrl(user.avatar, user.email)
+  const avatarUrl = resolveUserAvatarUrl(user.avatar, user.id)
   const signOut = () => {
     useAuth.getState().clear()
     void authApi.signOut().catch(() => undefined)

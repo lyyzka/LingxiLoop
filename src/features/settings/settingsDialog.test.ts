@@ -81,3 +81,38 @@ test('invitation landing stays reachable on both sides of the session gate and c
   assert.match(gate, /authApi.session\(\)/)
   assert.match(gate, /unauthFallback \?\? <AuthScreen \/>/)
 })
+
+
+test('course settings uses a left-hand breadcrumb with an accessible category menu and no duplicate page heading', () => {
+  const settings = read('../learning/dashboard/CourseSettingsSection.tsx')
+  const profile = read('../learning/dashboard/CourseProfileSettings.tsx')
+  const account = read('./AccountSettingsPanel.tsx')
+  assert.match(settings, /breadcrumb=\{\{ root: '课程设置', onBack: \(\) => setSection\('profile'\)/)
+  assert.match(settings, /DropdownMenuRadioGroup value=\{section\} onValueChange=\{setSection\}/)
+  assert.match(settings, /description=\{current.description\}/)
+  assert.doesNotMatch(settings, /TabsList|TabsTrigger/)
+  assert.doesNotMatch(profile, /<CardTitle>基本资料|<CardDescription>/)
+  assert.doesNotMatch(account, /title="账号资料"|仅供查看/)
+})
+
+
+test('avatar changes live in a dialog opened by the current avatar', () => {
+  const editor = read('./AvatarEditor.tsx')
+  const account = read('./AccountSettingsPanel.tsx')
+  const profile = read('../learning/dashboard/CourseProfileSettings.tsx')
+  assert.match(editor, /<DialogTrigger asChild>[\s\S]*?<Button[^>]*aria-label=\{title\}[\s\S]*?<AvatarImage src=\{currentUrl\}/)
+  assert.match(editor, /<DialogContent[\s\S]*?<DialogTitle>[\s\S]*?随机换一个[\s\S]*?type="file"[\s\S]*?<DialogFooter>/)
+  assert.doesNotMatch(account, /随机换一个|上传图片|保存头像/)
+  assert.match(account, /onSave=\{save\}/)
+  assert.match(profile, /onSave=\{saveAvatar\}/)
+  assert.match(profile, /updateCourse\(course.id, \{ avatar \}\)/)
+})
+
+
+test('account identity groups the editable avatar with name and email without repeating either field', () => {
+  const account = read('./AccountSettingsPanel.tsx')
+  assert.match(account, /flex items-center gap-4[\s\S]*?<AvatarEditor[\s\S]*?<h3[^>]*>\{user.name\}<\/h3>[\s\S]*?\{user.email\}/)
+  assert.equal(account.match(/\{user.name\}/g)?.length, 1)
+  assert.equal(account.match(/\{user.email\}/g)?.length, 1)
+  assert.match(account, /<dl[\s\S]*?<dt[^>]*>登录方式[\s\S]*?<dt[^>]*>邮箱状态/)
+})
