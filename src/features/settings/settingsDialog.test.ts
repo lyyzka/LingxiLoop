@@ -53,6 +53,19 @@ test('settings provides Chinese loading and account menu affordances', () => {
   assert.doesNotMatch(navUser, /lucide-react/)
 })
 
+test('company controls move out of settings while account exit and both avatar menus remain', () => {
+  const dialog = read('./SettingsDialog.tsx'), account = read('./AccountSettingsPanel.tsx'), menu = read('../../components/nav-user.tsx')
+  assert.doesNotMatch(dialog, /CompanySettingsPanel|公司与成员|case 'company'/)
+  assert.doesNotMatch(read('./store.ts'), /\| 'company'/)
+  assert.match(account, /companiesApi.leaveCompany\(company.id\)/)
+  assert.match(account, /最后一位管理员须先交接/)
+  assert.match(account, /useAuth.getState\(\).clear\(\)/)
+  assert.match(menu, /isCompanyAdmin && <DropdownMenuItem/)
+  assert.match(menu, /https:\/\/admin.lingxilearn.cn/)
+  assert.match(menu, /target="_blank" rel="noopener noreferrer"/)
+  assert.doesNotMatch(menu, /if \(isMobile\) return|onClick=\{isMobile/)
+})
+
 test('mobile conversation routing and Better Auth entry points stay wired', () => {
   const mobile = read('../../desktop/DesktopApp.tsx')
   const mobileHook = read('../../hooks/use-mobile.ts')
